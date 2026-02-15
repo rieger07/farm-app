@@ -1,17 +1,9 @@
 # Use a slim version of Python to keep the image size small
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 # Set the working directory inside the container
 WORKDIR /app
 
-# Install necessary system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the requirements file and install dependencies
 # Since we only use streamlit, we can install it directly
 RUN pip3 install streamlit
 
