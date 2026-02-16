@@ -5,7 +5,7 @@ FROM python:3.11-alpine
 WORKDIR /app
 
 # Since we only use streamlit, we can install it directly
-RUN pip3 install streamlit
+RUN pip3 install streamlit streamlit-vis-timeline setuptools
 
 # Copy your local code into the container
 COPY . .
