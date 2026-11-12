@@ -10,6 +10,11 @@ RUN pip3 install streamlit streamlit-vis-timeline setuptools
 # Copy your local code into the container
 COPY . .
 
+# Create persistent data directory for SQLite database
+RUN mkdir -p /app/data
+ENV FARM_DB_PATH=/app/data/homestead.db
+VOLUME ["/app/data"]
+
 # Expose the default Streamlit port
 EXPOSE 8501
 
