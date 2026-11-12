@@ -1,3 +1,5 @@
 venv
 .github
 .git
+data/
+*.db
