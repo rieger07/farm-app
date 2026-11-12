@@ -4,11 +4,14 @@ FROM python:3.11-alpine
 # Set the working directory inside the container
 WORKDIR /app
 
-# 1. Upgrade all Alpine OS packages (OpenSSL, musl, zlib, sqlite, xz, krb5, etc.) to patch OS CVEs
-# 2. Remove bundled ensurepip wheels (pip-24.0 / setuptools) that scanners flag for known CVEs
-# 3. Upgrade pip, setuptools, wheel, and install latest patched Python dependencies
-# 4. Create a non-root user and persistent data directory
+# 1. Upgrade all Alpine OS packages and pull patched musl (1.2.6-r6) & sqlite-libs (3.54.1-r0) from edge
+# 2. Remove bundled ensurepip wheels
+# 3. Install latest patched application dependencies
+# 4. Uninstall pip, setuptools, and wheel (removes build tools and pip's vendored setuptools@70.3.0 SBOM)
+# 5. Create a non-root user and persistent data directory
 RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
+    && (apk upgrade --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main musl musl-utils sqlite-libs \
+        || apk upgrade --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main musl musl-utils sqlite-libs) \
     && rm -rf /usr/local/lib/python*/ensurepip \
     && pip3 install --no-cache-dir --upgrade \
         pip \
@@ -16,6 +19,7 @@ RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
         wheel \
         streamlit \
         streamlit-vis-timeline \
+    && pip3 uninstall -y pip setuptools wheel \
     && addgroup -S appgroup && adduser -S appuser -G appgroup \
     && mkdir -p /app/data \
     && chown -R appuser:appgroup /app
