@@ -4,15 +4,14 @@ A Streamlit application for planning, comparing, and persisting multiple livesto
 
 ## Features
 
-- **Top-Level Workspace Navigation & Master-Detail UX**:
-  - **🗓️ Dashboard & Timeline**: 4 bordered KPI cards (Active Herd, Feed & Barrel Storage, Reconciled Cost vs. Est. Revenue, Net Profit & Home Freezer Meat), an **🔔 Upcoming Milestones & Action Items** strip with relative day badges and one-click Google Calendar links, and an interactive **Shared Herd Lifecycle Timeline** with quick action buttons (`🐾 Open in Batch Manager`, `✏️ Edit Batch`).
-  - **🐾 Manage Batches & Logs (Master-Detail Workspace)**: Select any batch from the top selector bar (with `🟢 Active` / `🥩 Harvested` / `⚪ Excluded` status badges and action toolbar) to view 4 focused batch detail cards and 3 spacious tabs (`📉 Batch Losses`, `🔪 Harvest Log & Actual Feed Override`, `💵 Sales & Home Freezer Log`).
-  - **🌾 Feed & Storage Schedule**: Side-by-side Weekly Feed Burn (Starter vs. Grower) and Concurrent Barrel Storage Demand charts with formatted Monthly & Weekly tables.
-  - **💰 Financials & Reconciliation**: Dedicated sub-tabs for `🥩 Harvest, Freezer & Sales Reconciliation`, `💰 Estimated Cost, Yield & $/lb ROI`, and `🛒 Purchasing & Cash-Flow Schedule` with formatted currency and weight columns.
-  - **⚙️ Settings & Backup**: Dedicated workspace for Barrel Size (lbs), Feed Bag Weight (lbs), and JSON Herd Backup & Restore.
-- **Minimal Sidebar + Spacious `@st.dialog` Add/Edit Batch Modal**:
-  - Minimal sidebar with a prominent `➕ Add Livestock Batch` button, Species & Status filters, and one-click `📅 Export Active Plan (.ics)`.
-  - Wide popup `@st.dialog` modal organized into `1. Basics & Dates`, `2. Phased Feed Rations`, and `3. Pricing & Meat Yield` tabs with a **Live Batch Preview** banner before saving.
+- **Streamlined 4-Tab Workflow Navigation**:
+  - **🗓️ Radar & Timeline (Operational Radar)**: 3 clean single-number vital cards (`🐾 Animals on Ground`, `🌾 Feed & Barrel Storage`, `⏳ Next Farm Milestone`), plus a side-by-side main view with the interactive **Shared Herd Lifecycle Timeline** (2/3 width, with quick action buttons to `🐾 Open Batch Logs` or `✏️ Edit Batch`) and a compact **🔔 Next Up Action Agenda** checklist (1/3 width, with relative day badges and Google Calendar links).
+  - **🐾 Batch Logs (Master-Detail Logging)**: Compact batch selector bar with primary `✏️ Edit Batch` button and a tucked-away `⋯ More & Calendar` popover menu (`📋 Duplicate Batch`, `⏸️ Exclude from Plan` / `▶️ Include in Plan`, `🗑️ Delete Batch`, and Google Calendar links), a single-line 4-metric vitals strip, and 3 action-first logging tabs (`📉 Batch Losses`, `🔪 Harvest & Butcher Log` with tucked-away Actual Feed Override, and `💵 Freezer & Sales Log`).
+  - **🌾 Feed & Shopping**: Side-by-side Weekly Feed Burn (Starter vs. Grower) and Barrel Storage Demand charts, a chronological **🛒 Feed & Livestock Shopping Schedule**, and raw weekly/monthly feed tables tucked inside an optional expander.
+  - **💰 Financials & Freezer (Unified Scorecard)**: 3 headline scorecard metrics (`💰 Total Outlay (Reconciled)`, `💵 Cash Sales & Net Cash`, `❄️ Home Freezer Meat`), a unified 8-column **🥩 Batch Economics & Freezer Summary** table, and granular 19-column cost/ration/ROI math tucked inside a `🔍 View Detailed Cost, Ration & Planned ROI Breakdown` expander.
+- **Minimal Sidebar + Quick-Add `@st.dialog` Batch Modal**:
+  - Minimal sidebar with a prominent `➕ Add Livestock Batch` button, Species & Status filters, one-click `📅 Export Active Plan (.ics)`, and a tucked-away `⚙️ Settings & Backup` expander (Barrel Size, Bag Weight, and JSON Herd Backup & Restore).
+  - Streamlined Quick-Add popup `@st.dialog` modal showing only the 4 essentials (`Select Livestock Type`, `Initial Quantity`, `Arrival/Breeding Date`, `Batch Name`) up front, an optional `⚙️ Customize Feed Rations, Pricing & Notes` expander, and a 1-line **Live Preview** summary before saving.
 - **Persistent Multi-Batch Herd Planning**: Stores batches, dated loss records, actual harvest records, sales/home freezer allocations, and storage/bag settings in a local SQLite database (`FARM_DB_PATH`, defaulting to `data/homestead.db`) with full JSON backup & restore.
 - **2-Phase Ration, Cost/Yield & Target Sale Price Modeling**:
   - Splits growing rations into **Starter** and **Grower/Finisher** phases (weeks, lbs/head, and bag prices pre-filled from species defaults and editable per batch).
