@@ -40,6 +40,7 @@ from streamlit_timeline import st_timeline
 # unit_cost: Default acquisition cost ($) per egg/chick/poult/piglet
 # processing_cost: Default butcher/processing cost ($) per harvested animal
 # expected_yield_lbs: Default dressed/packaged meat yield (lbs) per harvested animal
+# sale_price_per_lb: Default target sale price ($/lb) of dressed meat
 LIVESTOCK_DATA = {
     "chicken eggs": {
         "days_to_birth": 21,
@@ -52,6 +53,7 @@ LIVESTOCK_DATA = {
         "unit_cost": 2.50,
         "processing_cost": 5.00,
         "expected_yield_lbs": 4.5,
+        "sale_price_per_lb": 6.50,
         "weeks_to_proc": 8,
         "feed_total": 15.0,
     },
@@ -66,6 +68,7 @@ LIVESTOCK_DATA = {
         "unit_cost": 4.00,
         "processing_cost": 5.00,
         "expected_yield_lbs": 4.5,
+        "sale_price_per_lb": 6.50,
         "weeks_to_proc": 8,
         "feed_total": 15.0,
     },
@@ -80,6 +83,7 @@ LIVESTOCK_DATA = {
         "unit_cost": 12.00,
         "processing_cost": 15.00,
         "expected_yield_lbs": 16.0,
+        "sale_price_per_lb": 7.50,
         "weeks_to_proc": 18,
         "feed_total": 75.0,
     },
@@ -94,6 +98,7 @@ LIVESTOCK_DATA = {
         "unit_cost": 250.00,
         "processing_cost": 350.00,
         "expected_yield_lbs": 120.0,
+        "sale_price_per_lb": 9.00,
         "weeks_to_proc": 52,
         "feed_total": 650.0,
     },
@@ -150,6 +155,7 @@ def init_db() -> None:
                 unit_cost REAL,
                 processing_cost REAL,
                 expected_yield_lbs REAL,
+                sale_price_per_lb REAL,
                 active INTEGER NOT NULL DEFAULT 1,
                 notes TEXT DEFAULT '',
                 created_at TEXT NOT NULL
@@ -171,6 +177,7 @@ def init_db() -> None:
             ("unit_cost", "REAL"),
             ("processing_cost", "REAL"),
             ("expected_yield_lbs", "REAL"),
+            ("sale_price_per_lb", "REAL"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing_cols:
@@ -178,9 +185,9 @@ def init_db() -> None:
                     f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}"
                 )
 
-        # Backfill any rows that were created before phased-feed columns existed
+        # Backfill any rows that were created before phased-feed / sale_price columns existed
         legacy_rows = conn.execute(
-            "SELECT * FROM batches WHERE starter_weeks IS NULL OR starter_feed_lbs IS NULL"
+            "SELECT * FROM batches WHERE starter_weeks IS NULL OR starter_feed_lbs IS NULL OR sale_price_per_lb IS NULL"
         ).fetchall()
         for row in legacy_rows:
             d = get_species_defaults(row["species"])
@@ -208,7 +215,8 @@ def init_db() -> None:
                     grower_bag_price = COALESCE(grower_bag_price, ?),
                     unit_cost = COALESCE(unit_cost, ?),
                     processing_cost = COALESCE(processing_cost, ?),
-                    expected_yield_lbs = COALESCE(expected_yield_lbs, ?)
+                    expected_yield_lbs = COALESCE(expected_yield_lbs, ?),
+                    sale_price_per_lb = COALESCE(sale_price_per_lb, ?)
                 WHERE id = ?
                 """,
                 (
@@ -221,6 +229,7 @@ def init_db() -> None:
                     d["unit_cost"],
                     d["processing_cost"],
                     d["expected_yield_lbs"],
+                    d["sale_price_per_lb"],
                     row["id"],
                 ),
             )
@@ -450,6 +459,14 @@ def _normalize_batch_payload(batch_data: dict) -> dict:
                 )
             ),
         ),
+        "sale_price_per_lb": max(
+            0.0,
+            float(
+                batch_data.get(
+                    "sale_price_per_lb", defaults["sale_price_per_lb"]
+                )
+            ),
+        ),
         "active": 1 if batch_data.get("active", True) else 0,
         "notes": str(batch_data.get("notes", "")),
     }
@@ -466,7 +483,7 @@ def save_batch(batch_data: dict, batch_id: int | None = None) -> int:
                     days_to_birth = ?, weeks_to_proc = ?, feed_total = ?,
                     starter_weeks = ?, starter_feed_lbs = ?, grower_weeks = ?, grower_feed_lbs = ?,
                     starter_bag_price = ?, grower_bag_price = ?, unit_cost = ?,
-                    processing_cost = ?, expected_yield_lbs = ?, active = ?, notes = ?
+                    processing_cost = ?, expected_yield_lbs = ?, sale_price_per_lb = ?, active = ?, notes = ?
                 WHERE id = ?
                 """,
                 (
@@ -487,6 +504,7 @@ def save_batch(batch_data: dict, batch_id: int | None = None) -> int:
                     norm["unit_cost"],
                     norm["processing_cost"],
                     norm["expected_yield_lbs"],
+                    norm["sale_price_per_lb"],
                     norm["active"],
                     norm["notes"],
                     int(batch_id),
@@ -502,9 +520,9 @@ def save_batch(batch_data: dict, batch_id: int | None = None) -> int:
                     days_to_birth, weeks_to_proc, feed_total,
                     starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
                     starter_bag_price, grower_bag_price, unit_cost,
-                    processing_cost, expected_yield_lbs, active, notes, created_at
+                    processing_cost, expected_yield_lbs, sale_price_per_lb, active, notes, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     norm["name"],
@@ -524,6 +542,7 @@ def save_batch(batch_data: dict, batch_id: int | None = None) -> int:
                     norm["unit_cost"],
                     norm["processing_cost"],
                     norm["expected_yield_lbs"],
+                    norm["sale_price_per_lb"],
                     norm["active"],
                     norm["notes"],
                     datetime.utcnow().isoformat(timespec="seconds"),
@@ -605,9 +624,9 @@ def import_backup_json(raw_json: str, replace_existing: bool = False) -> int:
                     days_to_birth, weeks_to_proc, feed_total,
                     starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
                     starter_bag_price, grower_bag_price, unit_cost,
-                    processing_cost, expected_yield_lbs, active, notes, created_at
+                    processing_cost, expected_yield_lbs, sale_price_per_lb, active, notes, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     norm["name"],
@@ -627,6 +646,7 @@ def import_backup_json(raw_json: str, replace_existing: bool = False) -> int:
                     norm["unit_cost"],
                     norm["processing_cost"],
                     norm["expected_yield_lbs"],
+                    norm["sale_price_per_lb"],
                     norm["active"],
                     norm["notes"],
                     str(
@@ -744,6 +764,11 @@ def compute_batch_schedule(
         batch["expected_yield_lbs"]
         if batch.get("expected_yield_lbs") is not None
         else defaults["expected_yield_lbs"]
+    )
+    sale_price_per_lb = float(
+        batch["sale_price_per_lb"]
+        if batch.get("sale_price_per_lb") is not None
+        else defaults["sale_price_per_lb"]
     )
 
     batch_id = int(batch["id"])
@@ -923,6 +948,18 @@ def compute_batch_schedule(
         if expected_meat_lbs > 0
         else 0.0
     )
+    estimated_revenue = round(expected_meat_lbs * sale_price_per_lb, 2)
+    estimated_profit = round(estimated_revenue - total_budget_cost, 2)
+    profit_per_lb_meat = (
+        round(sale_price_per_lb - total_cost_per_lb_meat, 2)
+        if expected_meat_lbs > 0
+        else 0.0
+    )
+    roi_margin_pct = (
+        round((estimated_profit / total_budget_cost) * 100.0, 1)
+        if total_budget_cost > 0
+        else 0.0
+    )
 
     # Phase 3a: Starter Timeline Item
     if starter_weeks > 0:
@@ -1046,6 +1083,11 @@ def compute_batch_schedule(
         "expected_meat_lbs": expected_meat_lbs,
         "feed_cost_per_lb_meat": feed_cost_per_lb_meat,
         "total_cost_per_lb_meat": total_cost_per_lb_meat,
+        "sale_price_per_lb": sale_price_per_lb,
+        "estimated_revenue": estimated_revenue,
+        "estimated_profit": estimated_profit,
+        "profit_per_lb_meat": profit_per_lb_meat,
+        "roi_margin_pct": roi_margin_pct,
         "timeline_items": timeline_items,
     }
 
@@ -1347,6 +1389,11 @@ def compute_roi_summary_table(schedules: list[dict]) -> pd.DataFrame:
                 "Expected Meat (lbs)": round(s["expected_meat_lbs"], 1),
                 "Feed $/lb Meat": round(s["feed_cost_per_lb_meat"], 2),
                 "Total $/lb Meat": round(s["total_cost_per_lb_meat"], 2),
+                "Sale $/lb": round(s["sale_price_per_lb"], 2),
+                "Est. Revenue ($)": round(s["estimated_revenue"], 2),
+                "Est. Profit ($)": round(s["estimated_profit"], 2),
+                "Profit $/lb": round(s["profit_per_lb_meat"], 2),
+                "ROI (%)": f"{s['roi_margin_pct']:.1f}%",
             }
         )
     return pd.DataFrame(rows)
@@ -1448,6 +1495,9 @@ def on_species_change() -> None:
     st.session_state.form_expected_yield_lbs = float(
         defaults["expected_yield_lbs"]
     )
+    st.session_state.form_sale_price_per_lb = float(
+        defaults["sale_price_per_lb"]
+    )
 
 
 def apply_pending_editor_transitions() -> None:
@@ -1488,6 +1538,9 @@ def apply_pending_editor_transitions() -> None:
         )
         st.session_state.form_expected_yield_lbs = float(
             defaults["expected_yield_lbs"]
+        )
+        st.session_state.form_sale_price_per_lb = float(
+            defaults["sale_price_per_lb"]
         )
         st.session_state.form_active = True
         st.session_state.form_notes = ""
@@ -1557,6 +1610,11 @@ def apply_pending_editor_transitions() -> None:
             if pending_batch.get("expected_yield_lbs") is not None
             else defaults["expected_yield_lbs"]
         )
+        st.session_state.form_sale_price_per_lb = float(
+            pending_batch.get("sale_price_per_lb")
+            if pending_batch.get("sale_price_per_lb") is not None
+            else defaults["sale_price_per_lb"]
+        )
         st.session_state.form_active = bool(pending_batch["active"])
         st.session_state.form_notes = pending_batch.get("notes", "")
         st.session_state.pending_edit_batch = None
@@ -1576,6 +1634,7 @@ def apply_pending_editor_transitions() -> None:
         "form_unit_cost": float(defaults["unit_cost"]),
         "form_processing_cost": float(defaults["processing_cost"]),
         "form_expected_yield_lbs": float(defaults["expected_yield_lbs"]),
+        "form_sale_price_per_lb": float(defaults["sale_price_per_lb"]),
         "form_active": True,
         "form_notes": "",
     }
@@ -1723,11 +1782,19 @@ def render_app() -> None:
                     key="form_processing_cost",
                     step=1.0,
                 )
-                expected_yield_lbs = st.number_input(
-                    "Expected Dressed Meat Yield (lbs/head)",
+                y_c1, y_c2 = st.columns(2)
+                expected_yield_lbs = y_c1.number_input(
+                    "Meat Yield (lbs/head)",
                     min_value=0.0,
                     max_value=2000.0,
                     key="form_expected_yield_lbs",
+                    step=0.5,
+                )
+                sale_price_per_lb = y_c2.number_input(
+                    "Target Sale Price ($/lb)",
+                    min_value=0.0,
+                    max_value=500.0,
+                    key="form_sale_price_per_lb",
                     step=0.5,
                 )
 
@@ -1802,6 +1869,7 @@ def render_app() -> None:
                     "unit_cost": unit_cost,
                     "processing_cost": processing_cost,
                     "expected_yield_lbs": expected_yield_lbs,
+                    "sale_price_per_lb": sale_price_per_lb,
                     "active": active_flag,
                     "notes": notes.strip(),
                 },
@@ -1956,11 +2024,21 @@ def render_app() -> None:
     combined_meat_lbs = sum(
         s["expected_meat_lbs"] for s in filtered_active_schedules
     )
+    combined_revenue = sum(
+        s["estimated_revenue"] for s in filtered_active_schedules
+    )
+    combined_profit = sum(
+        s["estimated_profit"] for s in filtered_active_schedules
+    )
     blended_cost_per_lb = (
         combined_budget_cost / combined_meat_lbs
         if combined_meat_lbs > 0
         else 0.0
     )
+    blended_sale_per_lb = (
+        combined_revenue / combined_meat_lbs if combined_meat_lbs > 0 else 0.0
+    )
+    blended_profit_per_lb = blended_sale_per_lb - blended_cost_per_lb
     blended_feed_cost_per_lb = (
         combined_feed_cost / combined_meat_lbs if combined_meat_lbs > 0 else 0.0
     )
@@ -1977,39 +2055,34 @@ def render_app() -> None:
         delta_color="inverse" if total_lost_head > 0 else "off",
     )
     m2.metric(
-        "Combined Feed Needed",
+        "Combined Feed & Storage",
         f"{combined_feed_lbs:,.0f} lbs",
-        delta=(
-            f"-{combined_feed_saved:,.0f} lbs from losses"
-            if combined_feed_saved > 0
-            else f"{combined_bags} × {bag_weight}lb bags"
-        ),
+        delta=f"{combined_bags} bags · {combined_barrels} barrels (peak {feed_stats['peak_concurrent_barrels']})",
         delta_color="off",
     )
     m3.metric(
-        f"Storage ({barrel_capacity}lb Barrels)",
-        f"{combined_barrels} total",
-        delta=f"Peak {feed_stats['peak_concurrent_barrels']} concurrent",
-        delta_color="off",
-        help="Total barrels over lifetime vs. peak concurrent barrels needed at once.",
-    )
-    m4.metric(
-        "Estimated Total Budget",
+        "Estimated Total Cost",
         f"${combined_budget_cost:,.2f}",
         delta=f"${combined_feed_cost:,.2f} in feed",
         delta_color="off",
     )
-    m5.metric(
+    m4.metric(
         "Expected Meat Yield",
         f"{combined_meat_lbs:,.1f} lbs",
-        delta=f"Across {total_surviving_head:,} harvested head",
+        delta=f"Cost: ${blended_cost_per_lb:,.2f}/lb (Feed: ${blended_feed_cost_per_lb:,.2f}/lb)",
+        delta_color="off",
+    )
+    m5.metric(
+        "Estimated Revenue",
+        f"${combined_revenue:,.2f}",
+        delta=f"Avg Sale: ${blended_sale_per_lb:,.2f}/lb",
         delta_color="off",
     )
     m6.metric(
-        "Blended Cost / lb Meat",
-        f"${blended_cost_per_lb:,.2f}/lb",
-        delta=f"${blended_feed_cost_per_lb:,.2f}/lb feed only",
-        delta_color="off",
+        "Estimated Net Profit",
+        f"${combined_profit:,.2f}",
+        delta=f"{'+' if blended_profit_per_lb >= 0 else ''}${blended_profit_per_lb:,.2f}/lb net",
+        delta_color="normal",
     )
 
     if not filtered_active_schedules:
@@ -2152,7 +2225,8 @@ def render_app() -> None:
             f"{status_badge} | **{b['name']}** — "
             f"{s['surviving_quantity']}/{s['initial_quantity']}x {b['species'].title()}{loss_summary} | "
             f"Feed: {s['total_feed']:,.0f} lbs ({s['total_bags']} bags / {s['barrels_needed']} barrels) | "
-            f"Budget: ${s['total_budget_cost']:,.2f} (${s['total_cost_per_lb_meat']:,.2f}/lb meat)"
+            f"Cost: ${s['total_budget_cost']:,.2f} (${s['total_cost_per_lb_meat']:,.2f}/lb) → "
+            f"Est. Profit: ${s['estimated_profit']:,.2f} (@ ${s['sale_price_per_lb']:,.2f}/lb)"
         )
 
         with st.expander(header_label, expanded=False):
@@ -2257,6 +2331,14 @@ def render_app() -> None:
                 st.write(
                     f"- **Cost per lb of Meat:** **${s['total_cost_per_lb_meat']:,.2f}/lb** "
                     f"*(Feed only: ${s['feed_cost_per_lb_meat']:,.2f}/lb)*"
+                )
+                st.write(
+                    f"- **Target Sale Price:** **${s['sale_price_per_lb']:,.2f}/lb** "
+                    f"→ **Est. Revenue:** **${s['estimated_revenue']:,.2f}**"
+                )
+                st.write(
+                    f"- **Estimated Net Profit:** **${s['estimated_profit']:,.2f}** "
+                    f"*(${s['profit_per_lb_meat']:,.2f}/lb net · {s['roi_margin_pct']:.1f}% ROI)*"
                 )
                 if b.get("notes"):
                     st.markdown(f"**📝 Notes:** {b['notes']}")
@@ -2389,6 +2471,7 @@ def render_app() -> None:
                         "unit_cost": b.get("unit_cost"),
                         "processing_cost": b.get("processing_cost"),
                         "expected_yield_lbs": b.get("expected_yield_lbs"),
+                        "sale_price_per_lb": b.get("sale_price_per_lb"),
                         "active": b["active"],
                         "notes": b.get("notes", ""),
                     }
