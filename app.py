@@ -2006,11 +2006,10 @@ def generate_ics_calendar(schedules: list[dict]) -> str:
 # Streamlit UI Application & Workspace Helpers
 # ---------------------------------------------------------------------------
 WORKSPACES = [
-    "🗓️ Dashboard & Timeline",
-    "🐾 Manage Batches & Logs",
-    "🌾 Feed & Storage Schedule",
-    "💰 Financials & Reconciliation",
-    "⚙️ Settings & Backup",
+    "🗓️ Radar & Timeline",
+    "🐾 Batch Logs",
+    "🌾 Feed & Shopping",
+    "💰 Financials & Freezer",
 ]
 
 STATUS_OPTIONS = [
@@ -2027,6 +2026,41 @@ def get_batch_status_badge(schedule: dict) -> str:
     if schedule["is_fully_harvested"]:
         return "🥩 Harvested"
     return "🟢 Active"
+
+
+def compute_unified_financials_table(schedules: list[dict]) -> pd.DataFrame:
+    """Build a clean 8-column Batch Economics & Freezer table."""
+    if not schedules:
+        return pd.DataFrame()
+
+    rows = []
+    for s in schedules:
+        b = s["batch"]
+        if s["effective_freezer_cost_per_lb"] is None:
+            freezer_cost_str = "—"
+        elif s["effective_freezer_cost_per_lb"] == 0.0:
+            freezer_cost_str = "🎉 $0.00/lb (Free!)"
+        else:
+            freezer_cost_str = f"${s['effective_freezer_cost_per_lb']:,.2f}/lb"
+
+        meat_lbs = (
+            s["actual_dressed_lbs"]
+            if s["harvested_head"] > 0
+            else s["expected_meat_lbs"]
+        )
+        rows.append(
+            {
+                "Batch": f"{b['name']} (#{b['id']})",
+                "Head (Surviving / Harvested)": f"{s['surviving_quantity']} surviving ({s['harvested_head']} harvested)",
+                "Reconciled Cost ($)": round(s["reconciled_total_cost"], 2),
+                "Meat Yield (lbs)": round(meat_lbs, 1),
+                "Cost / lb ($)": round(s["reconciled_cost_per_lb_meat"], 2),
+                "Cash Sales ($)": round(s["actual_sales_revenue"], 2),
+                "Freezer (lbs)": round(s["freezer_lbs"], 1),
+                "Effective Freezer $/lb": freezer_cost_str,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _format_relative_days_badge(
@@ -2462,55 +2496,128 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
 
     is_editing = st.session_state.editing_batch_id is not None
     st.markdown(
-        f"### {'✏️ Edit Livestock Batch' if is_editing else '➕ Add Livestock Batch'}"
-    )
-    st.caption(
-        "Configure species defaults, phased Starter/Grower rations, and unit/meat pricing. "
-        "The live preview banner below updates automatically before you save."
-    )
-
-    tab_basics, tab_rations, tab_pricing = st.tabs(
-        [
-            "1. Basics & Dates",
-            "2. Phased Feed Rations",
-            "3. Pricing & Meat Yield",
-        ]
+        f"### {'✏️ Edit Livestock Batch' if is_editing else '➕ Quick-Add Livestock Batch'}"
     )
 
     today = date.today()
 
-    with tab_basics:
-        b_col1, b_col2 = st.columns(2)
-        with b_col1:
-            order_type = st.selectbox(
-                "Select Livestock Type:",
-                list(LIVESTOCK_DATA.keys()),
-                key="form_species",
-                on_change=on_species_change,
-                format_func=lambda s: s.title(),
-            )
-            batch_name = st.text_input(
-                "Batch Name (optional)",
-                key="form_name",
-                placeholder=f"e.g. Spring {order_type.title()}",
-            )
-            quantity = st.number_input(
-                "Initial Quantity (head / eggs)",
-                min_value=1,
-                key="form_quantity",
+    # 4 Core Essentials Up Front
+    b_col1, b_col2 = st.columns(2)
+    with b_col1:
+        order_type = st.selectbox(
+            "Select Livestock Type:",
+            list(LIVESTOCK_DATA.keys()),
+            key="form_species",
+            on_change=on_species_change,
+            format_func=lambda s: s.title(),
+        )
+        quantity = st.number_input(
+            "Initial Quantity (head / eggs)",
+            min_value=1,
+            key="form_quantity",
+            step=1,
+        )
+    with b_col2:
+        date_label = (
+            "Expected Breeding Date (or Range)"
+            if "pigs" in order_type
+            else "Arrival Date (or Range)"
+        )
+        selected_dates = st.date_input(
+            date_label,
+            key="form_dates",
+            help="Select either a single date (click same date twice) or a start and end date range.",
+        )
+        batch_name = st.text_input(
+            "Batch Name (optional)",
+            key="form_name",
+            placeholder=f"e.g. Spring {order_type.title()}",
+        )
+
+    # Optional Expander for Ration, Pricing & Notes Overrides
+    with st.expander(
+        "⚙️ Customize Feed Rations, Pricing & Notes (Optional)", expanded=False
+    ):
+        ov_c1, ov_c2, ov_c3 = st.columns(3)
+        with ov_c1:
+            st.markdown("**🌱 Starter Ration**")
+            starter_weeks = st.number_input(
+                "Starter Phase (wks)",
+                min_value=0,
+                max_value=104,
+                key="form_starter_weeks",
                 step=1,
             )
-        with b_col2:
-            date_label = (
-                "Expected Breeding Date (or Range)"
-                if "pigs" in order_type
-                else "Arrival Date (or Range)"
+            starter_feed_lbs = st.number_input(
+                "Starter Feed/Head (lbs)",
+                min_value=0.0,
+                max_value=5000.0,
+                key="form_starter_feed_lbs",
+                step=1.0,
             )
-            selected_dates = st.date_input(
-                date_label,
-                key="form_dates",
-                help="Select either a single date (click same date twice) or a start and end date range. Past and future dates are supported.",
+            starter_bag_price = st.number_input(
+                f"Starter Bag (${bag_weight}lb)",
+                min_value=0.0,
+                max_value=500.0,
+                key="form_starter_bag_price",
+                step=1.0,
             )
+        with ov_c2:
+            st.markdown("**🌾 Grower Ration**")
+            grower_weeks = st.number_input(
+                "Grower/Finisher (wks)",
+                min_value=0,
+                max_value=260,
+                key="form_grower_weeks",
+                step=1,
+            )
+            grower_feed_lbs = st.number_input(
+                "Grower Feed/Head (lbs)",
+                min_value=0.0,
+                max_value=10000.0,
+                key="form_grower_feed_lbs",
+                step=5.0,
+            )
+            grower_bag_price = st.number_input(
+                f"Grower Bag (${bag_weight}lb)",
+                min_value=0.0,
+                max_value=500.0,
+                key="form_grower_bag_price",
+                step=1.0,
+            )
+        with ov_c3:
+            st.markdown("**🥩 Costs & Yield**")
+            unit_cost = st.number_input(
+                "Acquisition $/Unit",
+                min_value=0.0,
+                max_value=5000.0,
+                key="form_unit_cost",
+                step=1.0,
+            )
+            processing_cost = st.number_input(
+                "Processing $/Head",
+                min_value=0.0,
+                max_value=5000.0,
+                key="form_processing_cost",
+                step=1.0,
+            )
+            expected_yield_lbs = st.number_input(
+                "Meat Yield (lbs/head)",
+                min_value=0.0,
+                max_value=2000.0,
+                key="form_expected_yield_lbs",
+                step=0.5,
+            )
+            sale_price_per_lb = st.number_input(
+                "Target Sale Price ($/lb)",
+                min_value=0.0,
+                max_value=500.0,
+                key="form_sale_price_per_lb",
+                step=0.5,
+            )
+
+        meta_c1, meta_c2 = st.columns([1, 2])
+        with meta_c1:
             days_to_birth = st.number_input(
                 "Gestation / Incubation (days)",
                 min_value=0,
@@ -2519,113 +2626,18 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
                 step=1,
             )
             active_flag = st.checkbox(
-                "Include in active herd plan & timeline",
+                "Include in active herd plan",
                 key="form_active",
             )
-
-        notes = st.text_area(
-            "Batch Notes (optional)",
-            key="form_notes",
-            placeholder="Breeder/hatchery source, pasture paddock, butcher info...",
-            height=68,
-        )
-
-    with tab_rations:
-        r_col1, r_col2 = st.columns(2)
-        with r_col1:
-            with st.container(border=True):
-                st.markdown("**🌱 Starter Phase Ration**")
-                starter_weeks = st.number_input(
-                    "Starter Phase (wks)",
-                    min_value=0,
-                    max_value=104,
-                    key="form_starter_weeks",
-                    step=1,
-                )
-                starter_feed_lbs = st.number_input(
-                    "Starter Feed/Head (lbs)",
-                    min_value=0.0,
-                    max_value=5000.0,
-                    key="form_starter_feed_lbs",
-                    step=1.0,
-                )
-        with r_col2:
-            with st.container(border=True):
-                st.markdown("**🌾 Grower / Finisher Phase Ration**")
-                grower_weeks = st.number_input(
-                    "Grower/Finisher (wks)",
-                    min_value=0,
-                    max_value=260,
-                    key="form_grower_weeks",
-                    step=1,
-                )
-                grower_feed_lbs = st.number_input(
-                    "Grower Feed/Head (lbs)",
-                    min_value=0.0,
-                    max_value=10000.0,
-                    key="form_grower_feed_lbs",
-                    step=5.0,
-                )
-        if "pigs" in order_type:
-            st.caption(
-                "*Note: Kunekune pig feed demand varies significantly based on pasture quality and seasonal forage.*"
+        with meta_c2:
+            notes = st.text_area(
+                "Batch Notes (optional)",
+                key="form_notes",
+                placeholder="Breeder/hatchery source, pasture paddock, butcher info...",
+                height=68,
             )
 
-    with tab_pricing:
-        p_col1, p_col2, p_col3 = st.columns(3)
-        with p_col1:
-            with st.container(border=True):
-                st.markdown("**🌾 Feed Bag Pricing**")
-                starter_bag_price = st.number_input(
-                    f"Starter Bag (${bag_weight}lb)",
-                    min_value=0.0,
-                    max_value=500.0,
-                    key="form_starter_bag_price",
-                    step=1.0,
-                )
-                grower_bag_price = st.number_input(
-                    f"Grower Bag (${bag_weight}lb)",
-                    min_value=0.0,
-                    max_value=500.0,
-                    key="form_grower_bag_price",
-                    step=1.0,
-                )
-        with p_col2:
-            with st.container(border=True):
-                st.markdown("**🐣 Acquisition & Butcher**")
-                unit_cost = st.number_input(
-                    "Acquisition $/Unit",
-                    min_value=0.0,
-                    max_value=5000.0,
-                    key="form_unit_cost",
-                    step=1.0,
-                )
-                processing_cost = st.number_input(
-                    "Processing $/Head",
-                    min_value=0.0,
-                    max_value=5000.0,
-                    key="form_processing_cost",
-                    step=1.0,
-                )
-        with p_col3:
-            with st.container(border=True):
-                st.markdown("**🥩 Meat Yield & Pricing**")
-                expected_yield_lbs = st.number_input(
-                    "Meat Yield (lbs/head)",
-                    min_value=0.0,
-                    max_value=2000.0,
-                    key="form_expected_yield_lbs",
-                    step=0.5,
-                )
-                sale_price_per_lb = st.number_input(
-                    "Target Sale Price ($/lb)",
-                    min_value=0.0,
-                    max_value=500.0,
-                    key="form_sale_price_per_lb",
-                    step=0.5,
-                )
-
-    # Resolve dates & compute live preview
+    # Resolve dates & compute 1-line live summary preview
     if isinstance(selected_dates, (list, tuple)):
         if len(selected_dates) == 2:
             start_d, end_d = selected_dates[0], selected_dates[1]
@@ -2676,50 +2688,19 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
         sales=[],
     )
 
-    with st.container(border=True):
-        st.markdown("##### 📊 Live Batch Preview (Before Saving)")
-        pv1, pv2, pv3, pv4 = st.columns(4)
-        if preview_sched["birth_start"] and preview_sched["birth_end"]:
-            hatch_str = f"{preview_sched['birth_label']}: {preview_sched['birth_start']} → {preview_sched['birth_end']}"
-        else:
-            hatch_str = f"{preview_sched['initial_label']}: {preview_sched['start_date']}"
-        pv1.metric(
-            "🔪 Butcher Date",
-            f"{preview_sched['proc_date']}",
-            delta=f"Switch: {preview_sched['transition_date']}",
-            delta_color="off",
-        )
-        pv1.caption(hatch_str)
-
-        pv2.metric(
-            "🌾 Total Feed & Bags",
-            f"{preview_sched['total_feed']:,.0f} lbs ({preview_sched['total_bags']} bags)",
-            delta=f"{preview_sched['starter_bags']} Starter · {preview_sched['grower_bags']} Grower",
-            delta_color="off",
-        )
-        pv2.caption(
-            f"Storage: {preview_sched['barrels_needed']} × {barrel_capacity}lb barrel(s)"
-        )
-
-        pv3.metric(
-            "💰 Est. Total Cost",
-            f"${preview_sched['total_budget_cost']:,.2f}",
-            delta=f"${preview_sched['total_cost_per_lb_meat']:,.2f}/lb dressed meat",
-            delta_color="off",
-        )
-        pv3.caption(
-            f"Meat Yield: {preview_sched['expected_meat_lbs']:,.1f} lbs ({quantity} head)"
-        )
-
-        pv4.metric(
-            "💵 Est. Net Profit",
-            f"${preview_sched['estimated_profit']:,.2f}",
-            delta=f"Rev: ${preview_sched['estimated_revenue']:,.2f} ({preview_sched['roi_margin_pct']:.1f}% ROI)",
-            delta_color="normal",
-        )
-        pv4.caption(
-            f"Net Margin: ${preview_sched['profit_per_lb_meat']:+.2f}/lb @ ${preview_sched['sale_price_per_lb']:,.2f}/lb"
-        )
+    hatch_part = (
+        f"🐣 **{preview_sched['birth_label']}:** {preview_sched['birth_start']} → "
+        if preview_sched["birth_start"]
+        else ""
+    )
+    st.info(
+        f"📊 **Live Preview:** {hatch_part}"
+        f"🌾 **Switch:** {preview_sched['transition_date']} → "
+        f"🔪 **Butcher:** {preview_sched['proc_date']}  \n"
+        f"**Feed:** {preview_sched['total_feed']:,.0f} lbs (**{preview_sched['total_bags']} bags** / {preview_sched['barrels_needed']} barrel(s)) · "
+        f"**Est. Cost:** ${preview_sched['total_budget_cost']:,.2f} (${preview_sched['total_cost_per_lb_meat']:,.2f}/lb) · "
+        f"**Expected Yield:** {preview_sched['expected_meat_lbs']:,.1f} lbs"
+    )
 
     btn_c1, btn_c2 = st.columns([2, 1])
     save_label = "💾 Update Batch" if is_editing else "➕ Save Batch"
@@ -2780,11 +2761,11 @@ def render_app() -> None:
     ]
 
     # -----------------------------------------------------------------------
-    # Minimal Sidebar: Prominent Add Batch Button, Filters & .ics Export
+    # Minimal Sidebar: Add Batch Button, Filters, .ics Export & Settings
     # -----------------------------------------------------------------------
     with st.sidebar:
         st.markdown("## 🚜 Homestead Planner")
-        st.caption("Poultry & Pigs Lifecycle, Feed & ROI")
+        st.caption("Poultry & Pigs Operations, Feed & Freezer")
 
         if st.button(
             "➕ Add Livestock Batch",
@@ -2825,8 +2806,6 @@ def render_app() -> None:
             s for s in filtered_schedules if s["batch"]["active"]
         ]
 
-        st.divider()
-        st.markdown("##### 📅 Calendar Export")
         if filtered_active_schedules:
             ics_content = generate_ics_calendar(filtered_active_schedules)
             st.download_button(
@@ -2835,35 +2814,87 @@ def render_app() -> None:
                 file_name="homestead_schedule.ics",
                 mime="text/calendar",
                 use_container_width=True,
-                help="Download an iCalendar (.ics) file with Arrival/Breeding, Birth/Hatch, Ration Transition, and Processing dates for all active batches.",
+                help="Download an iCalendar (.ics) file with all active batch milestones.",
             )
-        else:
-            st.caption("Enable an active batch to export `.ics` calendar events.")
 
         st.divider()
-        st.caption(
-            f"🛢️ **Barrel Size:** {barrel_capacity} lbs · **Feed Bag:** {bag_weight} lbs\n\n"
-            f"*(Configure in ⚙️ Settings & Backup)*"
-        )
+        with st.expander("⚙️ Settings & Backup", expanded=False):
+            st.caption("Storage barrel capacity & feed bag size")
+            s_col1, s_col2 = st.columns(2)
+            new_barrel_cap = s_col1.number_input(
+                "Barrel (lbs)",
+                min_value=10,
+                max_value=5000,
+                value=barrel_capacity,
+                step=25,
+            )
+            new_bag_weight = s_col2.number_input(
+                "Bag (lbs)",
+                min_value=5,
+                max_value=2000,
+                value=bag_weight,
+                step=5,
+            )
+            if int(new_barrel_cap) != barrel_capacity:
+                set_barrel_capacity(int(new_barrel_cap))
+                st.rerun()
+            if int(new_bag_weight) != bag_weight:
+                set_bag_weight(int(new_bag_weight))
+                st.rerun()
+
+            st.markdown("---")
+            backup_str = export_backup_json()
+            st.download_button(
+                "⬇️ Download Backup (.json)",
+                data=backup_str,
+                file_name=f"homestead_plan_{date.today().isoformat()}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            uploaded_file = st.file_uploader(
+                "Restore from JSON", type=["json"]
+            )
+            import_mode = st.radio(
+                "Import Mode",
+                ["Merge with existing batches", "Replace existing batches"],
+                index=0,
+            )
+            if uploaded_file is not None and st.button(
+                "📥 Import JSON Backup",
+                type="primary",
+                use_container_width=True,
+            ):
+                try:
+                    raw_content = uploaded_file.read().decode("utf-8")
+                    imported_n = import_backup_json(
+                        raw_content,
+                        replace_existing=(
+                            import_mode == "Replace existing batches"
+                        ),
+                    )
+                    st.success(f"Imported {imported_n} batch(es)!")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to import backup: {exc}")
 
     # Render Add/Edit Batch Modal if open
     if st.session_state.get("show_batch_modal", False):
         render_batch_editor_modal(barrel_capacity, bag_weight)
 
     # -----------------------------------------------------------------------
-    # Main Header & Top-Level Workspace Navigation
+    # Main Header & 4 Core Top-Level Workflow Tabs
     # -----------------------------------------------------------------------
-    st.title("🚜 Homestead Planner: Poultry & Pigs")
-    st.caption(
-        "Plan, track, and reconcile livestock batches across lifecycle timelines, phased rations, storage barrels, and freezer/sales ROI."
-    )
+    st.title("🚜 Homestead Planner")
 
-    if "workspace_nav" not in st.session_state:
+    if (
+        "workspace_nav" not in st.session_state
+        or st.session_state.workspace_nav not in WORKSPACES
+    ):
         st.session_state.workspace_nav = WORKSPACES[0]
     if st.session_state.get("jump_to_workspace"):
-        st.session_state.workspace_nav = st.session_state.pop(
-            "jump_to_workspace"
-        )
+        target_ws = st.session_state.pop("jump_to_workspace")
+        if target_ws in WORKSPACES:
+            st.session_state.workspace_nav = target_ws
 
     active_workspace = st.segmented_control(
         "Workspace Navigation",
@@ -2876,6 +2907,22 @@ def render_app() -> None:
     if not active_workspace:
         active_workspace = WORKSPACES[0]
 
+    # Empty state if no batches exist
+    if not all_batches:
+        with st.container(border=True):
+            st.info(
+                "👋 **No livestock batches saved yet.** Click **➕ Add Livestock Batch** below (or in the sidebar) to add your first batch, or restore a JSON backup under **⚙️ Settings & Backup** in the sidebar."
+            )
+            if st.button(
+                "➕ Add Your First Livestock Batch",
+                key="empty_add_batch_btn",
+                type="primary",
+            ):
+                st.session_state.pending_reset = True
+                st.session_state.show_batch_modal = True
+                st.rerun()
+        return
+
     # Precompute aggregated tables & metrics for active plan
     weekly_df, monthly_df, feed_stats = compute_combined_feed_schedule(
         filtered_active_schedules, barrel_capacity
@@ -2885,57 +2932,34 @@ def render_app() -> None:
     )
     roi_df = compute_roi_summary_table(filtered_active_schedules)
     reconciliation_df = compute_reconciliation_table(filtered_active_schedules)
+    unified_fin_df = compute_unified_financials_table(filtered_active_schedules)
+    upcoming_milestones = compute_upcoming_milestones(filtered_active_schedules)
 
     total_active_batches = len(filtered_active_schedules)
-    total_initial_head = sum(
-        s["initial_quantity"] for s in filtered_active_schedules
-    )
     total_surviving_head = sum(
         s["surviving_quantity"] for s in filtered_active_schedules
     )
     total_lost_head = sum(s["total_lost"] for s in filtered_active_schedules)
+    tot_harvested_head = sum(
+        s["harvested_head"] for s in filtered_active_schedules
+    )
+    animals_on_ground = max(0, total_surviving_head - tot_harvested_head)
 
     combined_feed_lbs = sum(s["total_feed"] for s in filtered_active_schedules)
-    combined_feed_saved = sum(
-        s["feed_saved_by_losses"] for s in filtered_active_schedules
-    )
-    combined_barrels = math.ceil(combined_feed_lbs / max(1, barrel_capacity))
     combined_bags = sum(s["total_bags"] for s in filtered_active_schedules)
 
     combined_budget_cost = sum(
         s["total_budget_cost"] for s in filtered_active_schedules
     )
-    combined_feed_cost = sum(
-        s["total_feed_cost_bags"] for s in filtered_active_schedules
-    )
     combined_meat_lbs = sum(
         s["expected_meat_lbs"] for s in filtered_active_schedules
-    )
-    combined_revenue = sum(
-        s["estimated_revenue"] for s in filtered_active_schedules
-    )
-    combined_profit = sum(
-        s["estimated_profit"] for s in filtered_active_schedules
     )
     blended_cost_per_lb = (
         combined_budget_cost / combined_meat_lbs
         if combined_meat_lbs > 0
         else 0.0
     )
-    blended_sale_per_lb = (
-        combined_revenue / combined_meat_lbs if combined_meat_lbs > 0 else 0.0
-    )
-    blended_profit_per_lb = blended_sale_per_lb - blended_cost_per_lb
-    blended_feed_cost_per_lb = (
-        combined_feed_cost / combined_meat_lbs if combined_meat_lbs > 0 else 0.0
-    )
 
-    tot_harvested_head = sum(
-        s["harvested_head"] for s in filtered_active_schedules
-    )
-    tot_actual_dressed = sum(
-        s["actual_dressed_lbs"] for s in filtered_active_schedules
-    )
     tot_reconciled_cost = sum(
         s["reconciled_total_cost"] for s in filtered_active_schedules
     )
@@ -2952,253 +2976,181 @@ def render_app() -> None:
         else None
     )
 
-    # Empty state if no batches exist and user is not in Settings & Backup
-    if not all_batches and active_workspace != "⚙️ Settings & Backup":
-        with st.container(border=True):
-            st.info(
-                "👋 **No livestock batches saved yet.** Click **➕ Add Livestock Batch** in the sidebar (or below) to create your first batch, or restore a saved herd plan in **⚙️ Settings & Backup**."
-            )
-            e_c1, e_c2 = st.columns(2)
-            if e_c1.button(
-                "➕ Add Your First Livestock Batch",
-                key="empty_add_batch_btn",
-                type="primary",
-                use_container_width=True,
-            ):
-                st.session_state.pending_reset = True
-                st.session_state.show_batch_modal = True
-                st.rerun()
-            if e_c2.button(
-                "⚙️ Open Settings & Restore Backup",
-                key="empty_open_settings_btn",
-                use_container_width=True,
-            ):
-                st.session_state.jump_to_workspace = "⚙️ Settings & Backup"
-                st.rerun()
-        return
-
     # =======================================================================
-    # WORKSPACE 1: 🗓️ Dashboard & Timeline
+    # WORKSPACE 1: 🗓️ Radar & Timeline (Operational Radar)
     # =======================================================================
-    if active_workspace == "🗓️ Dashboard & Timeline":
-        # 4 Clean KPI Cards in Bordered Containers
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        with kpi1:
-            with st.container(border=True):
-                st.metric(
-                    "🐾 Active Herd",
-                    f"{total_surviving_head:,} / {total_initial_head:,} head",
-                    delta=(
-                        f"-{total_lost_head} lost ({total_active_batches} batches)"
-                        if total_lost_head > 0
-                        else f"{total_active_batches} active batch(es)"
-                    ),
-                    delta_color="inverse" if total_lost_head > 0 else "off",
-                )
-                st.caption(
-                    f"Harvested: **{tot_harvested_head}** head · Remaining: **{max(0, total_surviving_head - tot_harvested_head)}** head"
-                )
-        with kpi2:
-            with st.container(border=True):
-                st.metric(
-                    "🌾 Feed & Barrel Storage",
-                    f"{combined_feed_lbs:,.0f} lbs",
-                    delta=f"{combined_bags} bags · Peak {feed_stats['peak_concurrent_barrels']} barrel(s)",
-                    delta_color="off",
-                )
-                st.caption(
-                    f"Total storage: **{combined_barrels}** × {barrel_capacity}lb barrels · Peak burn: **{feed_stats['peak_weekly_lbs']:,.1f} lbs/wk**"
-                )
-        with kpi3:
-            with st.container(border=True):
-                st.metric(
-                    "💰 Reconciled Cost vs. Est. Revenue",
-                    f"${tot_reconciled_cost:,.2f} / ${combined_revenue:,.2f}",
-                    delta=f"Cost: ${blended_cost_per_lb:,.2f}/lb · Target Sale: ${blended_sale_per_lb:,.2f}/lb",
-                    delta_color="off",
-                )
-                st.caption(
-                    f"Feed Cost: **${combined_feed_cost:,.2f}** (${blended_feed_cost_per_lb:,.2f}/lb) · Cash Sales: **${tot_sales_rev:,.2f}**"
-                )
-        with kpi4:
-            with st.container(border=True):
-                freezer_delta = (
-                    f"❄️ {tot_freezer_lbs:,.1f} lbs freezer ($0.00/lb Free!)"
-                    if tot_eff_freezer_per_lb == 0.0
-                    else (
-                        f"❄️ {tot_freezer_lbs:,.1f} lbs freezer (${tot_eff_freezer_per_lb:,.2f}/lb)"
-                        if tot_eff_freezer_per_lb is not None
-                        else f"{'+' if blended_profit_per_lb >= 0 else ''}${blended_profit_per_lb:,.2f}/lb est. net"
-                    )
-                )
-                st.metric(
-                    "🥩 Net Profit & Home Freezer Meat",
-                    f"${combined_profit:,.2f}",
-                    delta=freezer_delta,
-                    delta_color="normal",
-                )
-                st.caption(
-                    f"Est. Yield: **{combined_meat_lbs:,.1f} lbs** · Harvested: **{tot_actual_dressed:,.1f} lbs** · Freezer: **{tot_freezer_lbs:,.1f} lbs**"
-                )
-
+    if active_workspace == "🗓️ Radar & Timeline":
         if not filtered_active_schedules:
             st.warning(
                 "No active batches match the current Species / Status filters in the sidebar."
             )
         else:
-            # 🔔 Upcoming Milestones & Action Items Strip
-            st.subheader("🔔 Upcoming Milestones & Action Items")
-            upcoming_milestones = compute_upcoming_milestones(
-                filtered_active_schedules
-            )
-            if upcoming_milestones:
-                top_milestones = upcoming_milestones[:4]
-                m_cols = st.columns(len(top_milestones))
-                for idx, ms in enumerate(top_milestones):
-                    with m_cols[idx]:
-                        with st.container(border=True):
-                            st.markdown(
-                                f"**{ms['icon']} {ms['task']}** · `{ms['badge']}`"
+            # 3 Clean Vitals (Single-Number Operational Cards)
+            v_col1, v_col2, v_col3 = st.columns(3)
+            with v_col1:
+                with st.container(border=True):
+                    st.metric(
+                        "🐾 Animals on Ground",
+                        f"{animals_on_ground:,} head",
+                        delta=(
+                            f"{total_active_batches} active batch(es) · {tot_harvested_head} harvested"
+                            if total_lost_head == 0
+                            else f"{total_active_batches} batch(es) · -{total_lost_head} lost"
+                        ),
+                        delta_color="off",
+                    )
+            with v_col2:
+                with st.container(border=True):
+                    st.metric(
+                        "🌾 Feed & Barrel Storage",
+                        f"{combined_bags} bags ({combined_feed_lbs:,.0f} lbs)",
+                        delta=f"Peak {feed_stats['peak_concurrent_barrels']} × {barrel_capacity}lb barrel(s) needed",
+                        delta_color="off",
+                    )
+            with v_col3:
+                with st.container(border=True):
+                    if upcoming_milestones:
+                        nxt = upcoming_milestones[0]
+                        st.metric(
+                            "⏳ Next Farm Milestone",
+                            f"{nxt['icon']} {nxt['task']}",
+                            delta=f"{nxt['badge']} ({nxt['date_display']}) · {nxt['batch_name']}",
+                            delta_color="off",
+                        )
+                    else:
+                        st.metric(
+                            "⏳ Next Farm Milestone",
+                            "All Caught Up",
+                            delta="No pending milestones",
+                            delta_color="off",
+                        )
+
+            # Side-by-Side Main View: Timeline (2/3) + Compact Action Agenda (1/3)
+            tl_col, agenda_col = st.columns([2, 1])
+
+            with tl_col:
+                with st.container(border=True):
+                    st.markdown("##### 🗓️ Shared Herd Lifecycle Timeline")
+                    timeline_groups = []
+                    timeline_items = []
+                    for s in filtered_active_schedules:
+                        b = s["batch"]
+                        loss_badge = (
+                            f" · ⚠️ -{s['total_lost']}"
+                            if s["total_lost"] > 0
+                            else ""
+                        )
+                        harvest_badge = (
+                            f" · 🥩 {s['harvested_head']} harvested"
+                            if s["harvested_head"] > 0
+                            else ""
+                        )
+                        timeline_groups.append(
+                            {
+                                "id": b["id"],
+                                "content": (
+                                    f"<b>{b['name']}</b><br>"
+                                    f"<small>{s['surviving_quantity']}/{s['initial_quantity']}x {b['species'].title()}{loss_badge}{harvest_badge}</small>"
+                                ),
+                            }
+                        )
+                        timeline_items.extend(s["timeline_items"])
+
+                    selected_tl_item = st_timeline(
+                        timeline_items,
+                        groups=timeline_groups,
+                        options={
+                            "selectable": True,
+                            "stack": False,
+                            "zoomable": True,
+                            "verticalScroll": True,
+                            "orientation": "top",
+                            "margin": {"item": 8, "axis": 6},
+                        },
+                        height="380px",
+                    )
+
+                    if selected_tl_item:
+                        item_id = (
+                            selected_tl_item.get("id", "")
+                            if isinstance(selected_tl_item, dict)
+                            else str(selected_tl_item)
+                        )
+                        matched_schedule = None
+                        for s in filtered_active_schedules:
+                            if item_id.startswith(f"b{s['batch']['id']}_"):
+                                matched_schedule = s
+                                break
+                        if matched_schedule:
+                            mb = matched_schedule["batch"]
+                            act_bar1, act_bar2, act_bar3 = st.columns(
+                                [3, 1.3, 1.1]
                             )
+                            with act_bar1:
+                                st.markdown(
+                                    f"**{mb['name']}** (`{matched_schedule['surviving_quantity']}/{matched_schedule['initial_quantity']} head`) · "
+                                    f"🌾 Switch: **{matched_schedule['transition_date']}** · "
+                                    f"🔪 Butcher: **{matched_schedule['proc_date']}**"
+                                )
+                            with act_bar2:
+                                if st.button(
+                                    "🐾 Open Batch Logs",
+                                    key=f"tl_open_mgr_{mb['id']}",
+                                    type="primary",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.selected_batch_id = int(
+                                        mb["id"]
+                                    )
+                                    st.session_state.jump_to_workspace = (
+                                        "🐾 Batch Logs"
+                                    )
+                                    st.rerun()
+                            with act_bar3:
+                                if st.button(
+                                    "✏️ Edit Batch",
+                                    key=f"tl_edit_batch_{mb['id']}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.pending_edit_batch = mb
+                                    st.session_state.show_batch_modal = True
+                                    st.rerun()
+                    else:
+                        st.caption(
+                            "💡 Click any bar on the timeline to open its logs or edit the batch."
+                        )
+
+            with agenda_col:
+                with st.container(border=True):
+                    st.markdown("##### 🔔 Next Up Action Agenda")
+                    if not upcoming_milestones:
+                        st.caption("No upcoming milestones scheduled.")
+                    else:
+                        for ms in upcoming_milestones[:5]:
                             st.markdown(
-                                f"**{ms['batch_name']}** *({ms['species']})*\n\n"
-                                f"📅 **{ms['date_display']}**\n\n"
-                                f"<small>{ms['details']}</small>",
+                                f"**{ms['icon']} {ms['task']}** · `{ms['badge']}`  \n"
+                                f"**{ms['batch_name']}** — {ms['date_display']}  \n"
+                                f"<small>{ms['details']} · <a href=\"{ms['gcal_url']}\" target=\"_blank\">📅 Add to GCal</a></small>",
                                 unsafe_allow_html=True,
                             )
-                            st.link_button(
-                                "📅 Add to Google Calendar",
-                                ms["gcal_url"],
-                                use_container_width=True,
-                            )
-
-                if len(upcoming_milestones) > 4:
-                    with st.expander(
-                        f"View all {len(upcoming_milestones)} chronological farm milestones"
-                    ):
-                        ms_df = pd.DataFrame(
-                            [
-                                {
-                                    "Status": m["badge"],
-                                    "Date": m["date_display"],
-                                    "Batch": m["batch_name"],
-                                    "Milestone": f"{m['icon']} {m['task']}",
-                                    "Action Details": m["details"],
-                                }
-                                for m in upcoming_milestones
-                            ]
-                        )
-                        st.dataframe(
-                            ms_df, use_container_width=True, hide_index=True
-                        )
-
-            # 🗓️ Shared Herd Lifecycle Timeline
-            st.subheader("🗓️ Shared Herd Lifecycle Timeline")
-            st.caption(
-                "Click any phase, loss, or harvest bar on the swimlane timeline to inspect the batch or jump straight to Batch Manager / Edit Modal."
-            )
-            timeline_groups = []
-            timeline_items = []
-            for s in filtered_active_schedules:
-                b = s["batch"]
-                loss_badge = (
-                    f" · ⚠️ -{s['total_lost']}" if s["total_lost"] > 0 else ""
-                )
-                harvest_badge = (
-                    f" · 🥩 {s['harvested_head']} harvested"
-                    if s["harvested_head"] > 0
-                    else ""
-                )
-                timeline_groups.append(
-                    {
-                        "id": b["id"],
-                        "content": (
-                            f"<b>{b['name']}</b><br>"
-                            f"<small>{s['surviving_quantity']}/{s['initial_quantity']}x {b['species'].title()}{loss_badge}{harvest_badge}</small>"
-                        ),
-                    }
-                )
-                timeline_items.extend(s["timeline_items"])
-
-            selected_tl_item = st_timeline(
-                timeline_items,
-                groups=timeline_groups,
-                options={
-                    "selectable": True,
-                    "stack": False,
-                    "zoomable": True,
-                    "verticalScroll": True,
-                    "orientation": "top",
-                    "margin": {"item": 8, "axis": 6},
-                },
-                height="360px",
-            )
-
-            if selected_tl_item:
-                item_id = (
-                    selected_tl_item.get("id", "")
-                    if isinstance(selected_tl_item, dict)
-                    else str(selected_tl_item)
-                )
-                matched_schedule = None
-                for s in filtered_active_schedules:
-                    if item_id.startswith(f"b{s['batch']['id']}_"):
-                        matched_schedule = s
-                        break
-                if matched_schedule:
-                    mb = matched_schedule["batch"]
-                    with st.container(border=True):
-                        tl_c1, tl_c2, tl_c3 = st.columns([4, 1.3, 1.1])
-                        with tl_c1:
-                            st.markdown(
-                                f"🔎 **Selected Timeline Batch:** **{mb['name']}** "
-                                f"(`{matched_schedule['surviving_quantity']}/{matched_schedule['initial_quantity']}x {mb['species'].title()}`)  \n"
-                                f"🌱 **Starter:** {matched_schedule['proc_base']} → {matched_schedule['transition_date']} "
-                                f"({matched_schedule['starter_feed']:,.1f} lbs / {matched_schedule['starter_bags']} bags) · "
-                                f"🌾 **Grower:** {matched_schedule['transition_date']} → {matched_schedule['proc_date']} "
-                                f"({matched_schedule['grower_feed']:,.1f} lbs / {matched_schedule['grower_bags']} bags) · "
-                                f"💰 **Reconciled Cost:** ${matched_schedule['reconciled_total_cost']:,.2f} "
-                                f"(${matched_schedule['reconciled_cost_per_lb_meat']:,.2f}/lb)"
-                            )
-                        with tl_c2:
-                            if st.button(
-                                "🐾 Open in Batch Manager",
-                                key=f"tl_open_mgr_{mb['id']}",
-                                type="primary",
-                                use_container_width=True,
+                            st.divider()
+                        if len(upcoming_milestones) > 5:
+                            with st.expander(
+                                f"See all {len(upcoming_milestones)} milestones"
                             ):
-                                st.session_state.selected_batch_id = int(
-                                    mb["id"]
-                                )
-                                st.session_state.jump_to_workspace = (
-                                    "🐾 Manage Batches & Logs"
-                                )
-                                st.rerun()
-                        with tl_c3:
-                            if st.button(
-                                "✏️ Edit Batch",
-                                key=f"tl_edit_batch_{mb['id']}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.pending_edit_batch = mb
-                                st.session_state.show_batch_modal = True
-                                st.rerun()
+                                for ms in upcoming_milestones[5:]:
+                                    st.markdown(
+                                        f"- **{ms['date_display']}** ({ms['badge']}): "
+                                        f"**{ms['batch_name']}** — {ms['icon']} {ms['task']}"
+                                    )
 
     # =======================================================================
-    # WORKSPACE 2: 🐾 Manage Batches & Logs (Master-Detail Workspace)
+    # WORKSPACE 2: 🐾 Batch Logs (Compact Header + Action-First Logging)
     # =======================================================================
-    elif active_workspace == "🐾 Manage Batches & Logs":
-        st.subheader("🐾 Manage Batches & Logs (Master-Detail Workspace)")
-
-        # Use filtered_schedules if non-empty, otherwise fall back to all_schedules
+    elif active_workspace == "🐾 Batch Logs":
         selectable_schedules = (
             filtered_schedules if filtered_schedules else all_schedules
         )
-        if not filtered_schedules and all_schedules:
-            st.caption(
-                "*Showing all batches because current sidebar filters matched 0 batches.*"
-            )
-
         schedule_by_id = {
             int(s["batch"]["id"]): s for s in selectable_schedules
         }
@@ -3216,19 +3168,15 @@ def render_app() -> None:
             badge = get_batch_status_badge(sc)
             return (
                 f"{badge} | {b_row['name']} (#{bid}) — "
-                f"{sc['surviving_quantity']}/{sc['initial_quantity']} {b_row['species'].title()} · "
-                f"Feed: {sc['reconciled_feed_lbs']:,.0f} lbs · "
-                f"Est. Profit: ${sc['estimated_profit']:,.2f}"
+                f"{sc['surviving_quantity']}/{sc['initial_quantity']} {b_row['species'].title()}"
             )
 
-        # Master Selector & Action Toolbar
+        # Compact Batch Selector + Primary Edit + Tucked-Away 'More & Calendar' Menu
         with st.container(border=True):
-            sel_col, act_col1, act_col2, act_col3, act_col4 = st.columns(
-                [3.4, 1.1, 1.1, 1.2, 0.9]
-            )
+            sel_col, edit_col, more_col = st.columns([4, 1.2, 1.3])
             with sel_col:
                 selected_bid = st.selectbox(
-                    "Select Batch to Inspect & Log",
+                    "Select Batch",
                     options=batch_ids,
                     index=batch_ids.index(st.session_state.selected_batch_id),
                     format_func=_format_batch_selector,
@@ -3239,7 +3187,7 @@ def render_app() -> None:
             s = schedule_by_id[int(selected_bid)]
             b = s["batch"]
 
-            with act_col1:
+            with edit_col:
                 if st.button(
                     "✏️ Edit Batch",
                     key=f"edit_{b['id']}",
@@ -3250,219 +3198,144 @@ def render_app() -> None:
                     st.session_state.show_batch_modal = True
                     st.rerun()
 
-            with act_col2:
-                if st.button(
-                    "📋 Duplicate",
-                    key=f"dup_{b['id']}",
-                    use_container_width=True,
-                ):
-                    new_id = save_batch(
-                        {
-                            "name": f"{b['name']} (Copy)",
-                            "species": b["species"],
-                            "quantity": b["quantity"],
-                            "start_date": b["start_date"],
-                            "end_date": b["end_date"],
-                            "days_to_birth": b["days_to_birth"],
-                            "starter_weeks": b.get("starter_weeks"),
-                            "starter_feed_lbs": b.get("starter_feed_lbs"),
-                            "grower_weeks": b.get("grower_weeks"),
-                            "grower_feed_lbs": b.get("grower_feed_lbs"),
-                            "starter_bag_price": b.get("starter_bag_price"),
-                            "grower_bag_price": b.get("grower_bag_price"),
-                            "unit_cost": b.get("unit_cost"),
-                            "processing_cost": b.get("processing_cost"),
-                            "expected_yield_lbs": b.get("expected_yield_lbs"),
-                            "sale_price_per_lb": b.get("sale_price_per_lb"),
-                            "active": b["active"],
-                            "notes": b.get("notes", ""),
-                        }
+            with more_col:
+                with st.popover("⋯ More & Calendar", use_container_width=True):
+                    if st.button(
+                        "📋 Duplicate Batch",
+                        key=f"dup_{b['id']}",
+                        use_container_width=True,
+                    ):
+                        new_id = save_batch(
+                            {
+                                "name": f"{b['name']} (Copy)",
+                                "species": b["species"],
+                                "quantity": b["quantity"],
+                                "start_date": b["start_date"],
+                                "end_date": b["end_date"],
+                                "days_to_birth": b["days_to_birth"],
+                                "starter_weeks": b.get("starter_weeks"),
+                                "starter_feed_lbs": b.get("starter_feed_lbs"),
+                                "grower_weeks": b.get("grower_weeks"),
+                                "grower_feed_lbs": b.get("grower_feed_lbs"),
+                                "starter_bag_price": b.get("starter_bag_price"),
+                                "grower_bag_price": b.get("grower_bag_price"),
+                                "unit_cost": b.get("unit_cost"),
+                                "processing_cost": b.get("processing_cost"),
+                                "expected_yield_lbs": b.get(
+                                    "expected_yield_lbs"
+                                ),
+                                "sale_price_per_lb": b.get("sale_price_per_lb"),
+                                "active": b["active"],
+                                "notes": b.get("notes", ""),
+                            }
+                        )
+                        st.session_state.selected_batch_id = new_id
+                        st.rerun()
+
+                    toggle_label = (
+                        "⏸️ Exclude from Plan"
+                        if b["active"]
+                        else "▶️ Include in Plan"
                     )
-                    st.session_state.selected_batch_id = new_id
-                    st.rerun()
+                    if st.button(
+                        toggle_label,
+                        key=f"toggle_{b['id']}",
+                        use_container_width=True,
+                    ):
+                        set_batch_active(b["id"], not bool(b["active"]))
+                        st.rerun()
 
-            with act_col3:
-                toggle_label = (
-                    "⏸️ Exclude" if b["active"] else "▶️ Include"
-                )
-                if st.button(
-                    toggle_label,
-                    key=f"toggle_{b['id']}",
-                    use_container_width=True,
-                    help="Include or exclude this batch from the active plan & timeline",
-                ):
-                    set_batch_active(b["id"], not bool(b["active"]))
-                    st.rerun()
+                    if st.button(
+                        "🗑️ Delete Batch",
+                        key=f"del_{b['id']}",
+                        use_container_width=True,
+                    ):
+                        if st.session_state.editing_batch_id == b["id"]:
+                            st.session_state.pending_reset = True
+                        delete_batch(b["id"])
+                        st.rerun()
 
-            with act_col4:
-                if st.button(
-                    "🗑️ Delete",
-                    key=f"del_{b['id']}",
-                    use_container_width=True,
-                ):
-                    if st.session_state.editing_batch_id == b["id"]:
-                        st.session_state.pending_reset = True
-                    delete_batch(b["id"])
-                    st.rerun()
-
-            # Quick Google Calendar Milestone Links Row
-            gcal_cols = st.columns(3)
-            with gcal_cols[0]:
-                if s["birth_start"] and s["birth_end"]:
-                    birth_gcal = create_gcal_link(
-                        f"{b['name']} - {s['birth_label']} Window",
-                        s["birth_start"],
-                        s["birth_end"],
-                        f"Look out for {b['name']} ({s['initial_quantity']}x {b['species']})!",
+                    st.markdown("---")
+                    st.caption("📅 **Google Calendar Links**")
+                    if s["birth_start"] and s["birth_end"]:
+                        birth_gcal = create_gcal_link(
+                            f"{b['name']} - {s['birth_label']} Window",
+                            s["birth_start"],
+                            s["birth_end"],
+                            f"Look out for {b['name']} ({s['initial_quantity']}x {b['species']})!",
+                        )
+                        st.link_button(
+                            f"🐣 {s['birth_label']} ({s['birth_start']})",
+                            birth_gcal,
+                            use_container_width=True,
+                        )
+                    if s["starter_weeks"] > 0 and s["grower_weeks"] > 0:
+                        trans_gcal = create_gcal_link(
+                            f"{b['name']} - Switch to Grower/Finisher Feed",
+                            s["transition_date"],
+                            s["transition_date"],
+                            f"Switch {b['name']} to Grower feed ({s['grower_bags']} bags).",
+                        )
+                        st.link_button(
+                            f"🌾 Ration Switch ({s['transition_date']})",
+                            trans_gcal,
+                            use_container_width=True,
+                        )
+                    proc_gcal = create_gcal_link(
+                        f"{b['name']} - Processing Date",
+                        s["proc_date"],
+                        s["proc_date"],
+                        f"Processing date for {b['name']} ({s['surviving_quantity']} head).",
                     )
                     st.link_button(
-                        f"📅 {s['birth_label']} Window ({s['birth_start']}) → Google Cal",
-                        birth_gcal,
+                        f"🔪 Processing ({s['proc_date']})",
+                        proc_gcal,
                         use_container_width=True,
                     )
-                else:
-                    init_gcal = create_gcal_link(
-                        f"{b['name']} - {s['initial_label']} Date",
-                        s["start_date"],
-                        s["end_date"],
-                        f"{s['initial_label']} for {b['name']} ({s['initial_quantity']}x {b['species']})!",
-                    )
-                    st.link_button(
-                        f"📅 {s['initial_label']} ({s['start_date']}) → Google Cal",
-                        init_gcal,
-                        use_container_width=True,
-                    )
-            with gcal_cols[1]:
-                if s["starter_weeks"] > 0 and s["grower_weeks"] > 0:
-                    trans_gcal = create_gcal_link(
-                        f"{b['name']} - Switch to Grower/Finisher Feed",
-                        s["transition_date"],
-                        s["transition_date"],
-                        (
-                            f"Switch {b['name']} from Starter to Grower/Finisher feed. "
-                            f"Need {s['grower_bags']} bags ({s['grower_feed']:,.1f} lbs)."
-                        ),
-                    )
-                    st.link_button(
-                        f"📅 Ration Switch ({s['transition_date']}) → Google Cal",
-                        trans_gcal,
-                        use_container_width=True,
-                    )
-                else:
-                    st.caption("Single-phase ration (no transition event)")
-            with gcal_cols[2]:
-                proc_gcal = create_gcal_link(
-                    f"{b['name']} - Processing Date",
-                    s["proc_date"],
-                    s["proc_date"],
-                    (
-                        f"Processing date for {b['name']} ({s['surviving_quantity']} surviving head). "
-                        f"Expected meat yield: {s['expected_meat_lbs']:,.1f} lbs."
-                    ),
-                )
-                st.link_button(
-                    f"📅 Processing Date ({s['proc_date']}) → Google Cal",
-                    proc_gcal,
-                    use_container_width=True,
-                )
 
-        # Focused Batch Detail Panel: 4 Clean Bordered Metric Cards
-        status_badge = get_batch_status_badge(s)
-        dc1, dc2, dc3, dc4 = st.columns(4)
-        with dc1:
-            with st.container(border=True):
-                st.metric(
-                    f"{status_badge} · Herd & Lifecycle",
-                    f"{s['surviving_quantity']} / {s['initial_quantity']} head",
-                    delta=(
-                        f"-{s['total_lost']} lost · {s['harvested_head']} harvested"
-                        if s["total_lost"] > 0 or s["harvested_head"] > 0
-                        else f"{b['species'].title()}"
-                    ),
-                    delta_color="off",
-                )
-                birth_line = (
-                    f"**{s['birth_label']}:** {s['birth_start']} → {s['birth_end']} · "
-                    if s["birth_start"] and s["birth_end"]
-                    else ""
-                )
-                st.caption(
-                    f"**{s['initial_label']}:** {s['start_date']} · {birth_line}"
-                    f"**Switch:** {s['transition_date']} · **Butcher:** {s['proc_date']}"
-                )
-        with dc2:
-            with st.container(border=True):
-                st.metric(
-                    "🌾 Phased Feed & Storage",
-                    f"{s['reconciled_feed_lbs']:,.1f} lbs",
-                    delta=f"{s['total_bags']} bags ({s['barrels_needed']} × {barrel_capacity}lb barrels)",
-                    delta_color="off",
-                )
-                st.caption(
-                    f"**Starter ({s['starter_weeks']}w):** {s['starter_feed']:,.1f} lbs ({s['starter_bags']} bags) · "
-                    f"**Grower ({s['grower_weeks']}w):** {s['grower_feed']:,.1f} lbs ({s['grower_bags']} bags)"
-                )
-                if s["feed_saved_by_losses"] > 0 or s["feed_saved_by_early_harvest"] > 0:
-                    st.caption(
-                        f"📉 Saved: {s['feed_saved_by_losses']:,.1f} lbs (losses) · "
-                        f"{s['feed_saved_by_early_harvest']:,.1f} lbs (early harvest)"
-                    )
-        with dc3:
-            with st.container(border=True):
-                st.metric(
-                    "💰 Batch Cost & Meat Yield",
-                    f"${s['reconciled_total_cost']:,.2f}",
-                    delta=f"${s['reconciled_cost_per_lb_meat']:,.2f}/lb · Est. Cost: ${s['total_budget_cost']:,.2f}",
-                    delta_color="off",
-                )
-                st.caption(
-                    f"Acq: **${s['acquisition_cost']:,.2f}** · Feed: **${s['reconciled_feed_cost']:,.2f}** · "
-                    f"Butcher: **${s['reconciled_processing_cost']:,.2f}** · "
-                    f"Meat: **{s['actual_dressed_lbs']:,.1f} / {s['expected_meat_lbs']:,.1f} lbs**"
-                )
-        with dc4:
-            with st.container(border=True):
-                st.metric(
-                    "🥩 Profit, Sales & Freezer",
-                    f"${s['estimated_profit']:,.2f} est.",
-                    delta=f"ROI: {s['roi_margin_pct']:.1f}% (@ ${s['sale_price_per_lb']:,.2f}/lb)",
-                    delta_color="normal",
-                )
-                eff_str = (
-                    "🎉 $0.00/lb Free!"
-                    if s["effective_freezer_cost_per_lb"] == 0.0
-                    else (
-                        f"${s['effective_freezer_cost_per_lb']:,.2f}/lb"
-                        if s["effective_freezer_cost_per_lb"] is not None
-                        else "—"
-                    )
-                )
-                st.caption(
-                    f"Sold: **{s['sold_lbs']:,.1f} lbs** (**${s['actual_sales_revenue']:,.2f}**) · "
-                    f"Freezer: **{s['freezer_lbs']:,.1f} lbs** (Eff: **{eff_str}**)"
-                )
+            # Single-Line Batch Vitals Strip (No multi-paragraph cards)
+            bv1, bv2, bv3, bv4 = st.columns(4)
+            bv1.metric(
+                "🐾 Surviving Head",
+                f"{s['surviving_quantity']} / {s['initial_quantity']} head",
+                delta=f"{s['harvested_head']} harvested · {s['total_lost']} lost",
+                delta_color="off",
+            )
+            bv2.metric(
+                "🔪 Target Butcher Date",
+                f"{s['proc_date']}",
+                delta=f"🌾 Switch: {s['transition_date']}",
+                delta_color="off",
+            )
+            bv3.metric(
+                "🌾 Total Batch Feed",
+                f"{s['reconciled_feed_lbs']:,.0f} lbs",
+                delta=f"{s['starter_bags']} Starter + {s['grower_bags']} Grower bags",
+                delta_color="off",
+            )
+            bv4.metric(
+                "💰 Reconciled Batch Cost",
+                f"${s['reconciled_total_cost']:,.2f}",
+                delta=f"${s['reconciled_cost_per_lb_meat']:,.2f}/lb meat",
+                delta_color="off",
+            )
+            if b.get("notes"):
+                st.caption(f"📝 **Notes:** {b['notes']}")
 
-        if b.get("notes"):
-            st.info(f"📝 **Batch Notes:** {b['notes']}")
-
-        # 3 Spacious Tabs for the Selected Batch
+        # Action-First Logging Tabs
         subtab_losses, subtab_harvest, subtab_sales = st.tabs(
             [
                 f"📉 Batch Losses ({s['total_lost']} lost)",
-                f"🔪 Harvest Log & Actual Feed Override ({s['harvested_head']}/{s['surviving_quantity']} head)",
-                f"💵 Sales & Home Freezer Log ({s['sold_lbs']:,.1f} lbs sold · {s['freezer_lbs']:,.1f} lbs freezer)",
+                f"🔪 Harvest & Butcher Log ({s['harvested_head']}/{s['surviving_quantity']} head)",
+                f"💵 Freezer & Sales Log ({s['freezer_lbs']:,.1f} lbs freezer · {s['sold_lbs']:,.1f} lbs sold)",
             ]
         )
 
         with subtab_losses:
-            st.markdown(
-                f"#### 📉 Log / Manage Batch Losses — Surviving: **{s['surviving_quantity']} / {s['initial_quantity']}** "
-                f"*(Lost: {s['total_lost']} head · Feed Reduced: {s['feed_saved_by_losses']:,.1f} lbs)*"
-            )
             loss_col_form, loss_col_list = st.columns([1, 1])
-
             with loss_col_form:
                 with st.container(border=True):
+                    st.markdown("**➕ Record a Loss**")
                     if s["surviving_quantity"] > 0:
                         default_loss_date = min(
                             max(date.today(), s["start_date"]), s["proc_date"]
@@ -3517,16 +3390,18 @@ def render_app() -> None:
 
             with loss_col_list:
                 with st.container(border=True):
+                    st.markdown(
+                        f"**Recorded Losses** *(Feed Saved: {s['feed_saved_by_losses']:,.1f} lbs)*"
+                    )
                     if s["losses"]:
-                        st.markdown("**Recorded Losses:**")
                         for l_entry in s["losses"]:
                             l_d = l_entry["loss_date"]
                             if l_d < s["proc_base"]:
                                 stage_tag = s["gestation_label"]
                             elif l_d < s["transition_date"]:
-                                stage_tag = "Starter Phase"
+                                stage_tag = "Starter"
                             else:
-                                stage_tag = "Grower/Finisher Phase"
+                                stage_tag = "Grower"
 
                             row_c1, row_c2 = st.columns([4, 1])
                             reason_txt = (
@@ -3546,19 +3421,13 @@ def render_app() -> None:
                                 delete_batch_loss(l_entry["id"])
                                 st.rerun()
                     else:
-                        st.caption(
-                            "No losses recorded for this batch. Recording a loss adjusts feed demand from that date forward."
-                        )
+                        st.caption("No losses recorded for this batch.")
 
         with subtab_harvest:
-            st.markdown(
-                f"#### 🔪 Actual Harvest & Butcher Log — Harvested: **{s['harvested_head']} / {s['surviving_quantity']} head** "
-                f"*(Actual Dressed Yield: **{s['actual_dressed_lbs']:,.1f} lbs** vs. Est. {s['expected_meat_lbs']:,.1f} lbs)*"
-            )
             harv_col_form, harv_col_list = st.columns([1, 1])
-
             with harv_col_form:
                 with st.container(border=True):
+                    st.markdown("**➕ Log Butcher / Harvest Weight**")
                     if s["unharvested_surviving_head"] > 0:
                         default_harv_date = max(date.today(), s["proc_base"])
                         default_head_to_harv = s["unharvested_surviving_head"]
@@ -3590,7 +3459,7 @@ def render_app() -> None:
                             )
                             hf_c3, hf_c4 = st.columns(2)
                             harv_lbs_input = hf_c3.number_input(
-                                "Total Dressed Hanging/Packaged Weight (lbs)",
+                                "Total Dressed Weight (lbs)",
                                 min_value=0.0,
                                 max_value=50000.0,
                                 value=float(default_dressed),
@@ -3598,7 +3467,7 @@ def render_app() -> None:
                                 key=f"harv_lbs_{b['id']}",
                             )
                             harv_proc_input = hf_c4.number_input(
-                                "Total Butcher / Processing Fee ($)",
+                                "Total Butcher Fee ($)",
                                 min_value=0.0,
                                 max_value=50000.0,
                                 value=float(default_proc_total),
@@ -3606,8 +3475,8 @@ def render_app() -> None:
                                 key=f"harv_proc_{b['id']}",
                             )
                             harv_notes_input = st.text_input(
-                                "Carcass / Butcher Notes (optional)",
-                                placeholder="e.g. Barrow #1 hanging weight, processor invoice #...",
+                                "Notes (optional)",
+                                placeholder="e.g. Hanging weight, processor invoice...",
                                 key=f"harv_notes_{b['id']}",
                             )
                             if st.form_submit_button(
@@ -3633,13 +3502,15 @@ def render_app() -> None:
                                 st.rerun()
                     else:
                         st.success(
-                            "✅ All surviving animals in this batch have been logged as harvested."
+                            "✅ All surviving animals in this batch have been harvested."
                         )
 
             with harv_col_list:
                 with st.container(border=True):
+                    st.markdown(
+                        f"**Recorded Harvests** *(Total: {s['actual_dressed_lbs']:,.1f} lbs dressed)*"
+                    )
                     if s["harvests"]:
-                        st.markdown("**Recorded Harvest Events:**")
                         for h_entry in s["harvests"]:
                             avg_h = (
                                 h_entry["dressed_lbs"] / h_entry["head_count"]
@@ -3665,16 +3536,13 @@ def render_app() -> None:
                                 delete_batch_harvest(h_entry["id"])
                                 st.rerun()
                     else:
-                        st.caption(
-                            "No harvest events logged yet. Logging an early or split harvest also reduces remaining feed demand for harvested animals after their harvest date."
-                        )
+                        st.caption("No harvest events logged yet.")
 
-                with st.container(border=True):
-                    st.markdown(
-                        "**⚖️ Actual Feed Used Override (End-of-Batch Reconciliation)**"
-                    )
+                with st.expander(
+                    "⚖️ Actual Feed Used Override (End-of-Batch Reconciliation)"
+                ):
                     st.caption(
-                        f"Calculated feed (adjusted for losses & harvest dates): **{s['total_feed']:,.1f} lbs** / **${s['total_feed_cost_bags']:,.2f}** ({s['total_bags']} bags)."
+                        f"Calculated feed: **{s['total_feed']:,.1f} lbs** / **${s['total_feed_cost_bags']:,.2f}** ({s['total_bags']} bags)."
                     )
                     with st.form(
                         f"actual_feed_form_{b['id']}", clear_on_submit=False
@@ -3698,12 +3566,10 @@ def render_app() -> None:
                         )
                         af_btn1, af_btn2 = st.columns(2)
                         save_af = af_btn1.form_submit_button(
-                            "💾 Save Actual Feed Override",
-                            use_container_width=True,
+                            "💾 Save Override", use_container_width=True
                         )
                         clear_af = af_btn2.form_submit_button(
-                            "↩️ Reset to Calculated Feed",
-                            use_container_width=True,
+                            "↩️ Reset", use_container_width=True
                         )
                         if save_af:
                             set_batch_actual_feed(
@@ -3715,32 +3581,10 @@ def render_app() -> None:
                             st.rerun()
 
         with subtab_sales:
-            if s["effective_freezer_cost_per_lb"] is None:
-                eff_freezer_badge = (
-                    "Log Home Freezer lbs to calculate effective $/lb"
-                )
-            elif s["effective_freezer_cost_per_lb"] == 0.0:
-                eff_freezer_badge = "🎉 **$0.00/lb (Free Meat! Customer sales covered 100% of batch costs)**"
-            else:
-                eff_freezer_badge = (
-                    f"**${s['effective_freezer_cost_per_lb']:,.2f}/lb** "
-                    f"*(after offsetting ${s['reconciled_total_cost']:,.2f} cost with ${s['actual_sales_revenue']:,.2f} sales)*"
-                )
-
-            st.markdown(
-                f"#### 💵 Customer Sales & Home Freezer Allocation\n"
-                f"- **Harvested Dressed Meat:** **{s['actual_dressed_lbs']:,.1f} lbs** "
-                f"(Allocated: **{s['allocated_lbs']:,.1f} lbs** · Unallocated: **{s['unallocated_harvested_lbs']:,.1f} lbs**)\n"
-                f"- **Customer Sales:** **{s['sold_lbs']:,.1f} lbs** → **${s['actual_sales_revenue']:,.2f}** cash revenue "
-                f"(Net Cash vs. Reconciled Cost: **${s['actual_cash_profit']:,.2f}**)\n"
-                f"- **Home Freezer Allocation:** **{s['freezer_lbs']:,.1f} lbs** "
-                f"(Imputed value @ ${s['sale_price_per_lb']:,.2f}/lb: **${s['imputed_freezer_value']:,.2f}**)\n"
-                f"- **Effective Cost of Home Freezer Meat:** {eff_freezer_badge}"
-            )
-
             sale_col_form, sale_col_list = st.columns([1, 1])
             with sale_col_form:
                 with st.container(border=True):
+                    st.markdown("**➕ Allocate Meat to Freezer or Customer Sale**")
                     default_sale_wt = (
                         s["unallocated_harvested_lbs"]
                         if s["unallocated_harvested_lbs"] > 0
@@ -3760,7 +3604,7 @@ def render_app() -> None:
                         )
                         sale_type_input = sf_c2.selectbox(
                             "Allocation Type",
-                            options=["Customer Sale", "Home Freezer"],
+                            options=["Home Freezer", "Customer Sale"],
                             key=f"sale_type_{b['id']}",
                         )
                         sf_c3, sf_c4 = st.columns(2)
@@ -3773,7 +3617,7 @@ def render_app() -> None:
                             key=f"sale_wt_{b['id']}",
                         )
                         sale_rev_input = sf_c4.number_input(
-                            "Total Sale Revenue ($) — ignored for Home Freezer",
+                            "Total Sale Revenue ($) — if sold",
                             min_value=0.0,
                             max_value=500000.0,
                             value=float(default_sale_rev),
@@ -3781,12 +3625,12 @@ def render_app() -> None:
                             key=f"sale_rev_{b['id']}",
                         )
                         sale_notes_input = st.text_input(
-                            "Customer / Cut / Freezer Notes (optional)",
-                            placeholder="e.g. Half hog to neighbor, 10 whole broilers, chest freezer #1...",
+                            "Notes (optional)",
+                            placeholder="e.g. Chest freezer #1, half hog to neighbor...",
                             key=f"sale_notes_{b['id']}",
                         )
                         if st.form_submit_button(
-                            "➕ Log Sale / Freezer Allocation",
+                            "➕ Log Allocation",
                             use_container_width=True,
                         ):
                             resolved_sale_dt = (
@@ -3810,8 +3654,19 @@ def render_app() -> None:
 
             with sale_col_list:
                 with st.container(border=True):
+                    eff_str = (
+                        "🎉 $0.00/lb Free Meat!"
+                        if s["effective_freezer_cost_per_lb"] == 0.0
+                        else (
+                            f"${s['effective_freezer_cost_per_lb']:,.2f}/lb"
+                            if s["effective_freezer_cost_per_lb"] is not None
+                            else "—"
+                        )
+                    )
+                    st.markdown(
+                        f"**Recorded Freezer & Sales** *(Freezer Cost: **{eff_str}** · Unallocated: {s['unallocated_harvested_lbs']:,.1f} lbs)*"
+                    )
                     if s["sales"]:
-                        st.markdown("**Recorded Sales & Freezer Entries:**")
                         for sl_entry in s["sales"]:
                             sl_note = (
                                 f" — *{sl_entry['notes']}*"
@@ -3820,15 +3675,10 @@ def render_app() -> None:
                             )
                             if sl_entry["allocation_type"] == "Home Freezer":
                                 badge = "❄️ Home Freezer"
-                                price_info = f"(Imputed value: ${sl_entry['weight_lbs'] * s['sale_price_per_lb']:,.2f})"
+                                price_info = ""
                             else:
-                                badge = "💵 Customer Sale"
-                                realized_per_lb = (
-                                    sl_entry["revenue"] / sl_entry["weight_lbs"]
-                                    if sl_entry["weight_lbs"] > 0
-                                    else 0.0
-                                )
-                                price_info = f"→ **${sl_entry['revenue']:,.2f}** (${realized_per_lb:,.2f}/lb)"
+                                badge = "💵 Sale"
+                                price_info = f"→ **${sl_entry['revenue']:,.2f}**"
 
                             sc1, sc2 = st.columns([4, 1])
                             sc1.markdown(
@@ -3838,440 +3688,171 @@ def render_app() -> None:
                             if sc2.button(
                                 "🗑️",
                                 key=f"del_sale_{sl_entry['id']}",
-                                help="Remove this sale/freezer entry",
+                                help="Remove this entry",
                             ):
                                 delete_batch_sale(sl_entry["id"])
                                 st.rerun()
                     else:
                         st.caption(
-                            "No customer sales or home freezer allocations logged yet."
+                            "No home freezer or customer sale entries logged yet."
                         )
 
     # =======================================================================
-    # WORKSPACE 3: 🌾 Feed & Storage Schedule
+    # WORKSPACE 3: 🌾 Feed & Shopping (Visuals + Shopping Schedule)
     # =======================================================================
-    elif active_workspace == "🌾 Feed & Storage Schedule":
-        st.subheader("🌾 Phased Feed Burn & Barrel Storage Schedule")
+    elif active_workspace == "🌾 Feed & Shopping":
         if weekly_df.empty:
             st.warning(
                 "No active batches match the current filters to compute a feed schedule."
             )
         else:
-            fs1, fs2, fs3, fs4 = st.columns(4)
-            with fs1:
-                with st.container(border=True):
-                    st.metric(
-                        "🌾 Total Active Feed",
-                        f"{combined_feed_lbs:,.0f} lbs",
-                        delta=f"{combined_bags} × {bag_weight}lb bags",
-                        delta_color="off",
-                    )
-            with fs2:
-                with st.container(border=True):
-                    st.metric(
-                        "🔥 Peak Weekly Burn",
-                        f"{feed_stats['peak_weekly_lbs']:,.1f} lbs/wk",
-                        delta="Across overlapping batches",
-                        delta_color="off",
-                    )
-            with fs3:
-                with st.container(border=True):
-                    st.metric(
-                        "🛢️ Peak Concurrent Barrels",
-                        f"{feed_stats['peak_concurrent_barrels']} barrel(s)",
-                        delta=f"Peak {feed_stats['peak_concurrent_lbs']:,.0f} lbs active",
-                        delta_color="off",
-                    )
-            with fs4:
-                with st.container(border=True):
-                    st.metric(
-                        "📉 Feed Saved by Losses",
-                        f"{combined_feed_saved:,.1f} lbs",
-                        delta=f"{total_lost_head} total loss(es) logged",
-                        delta_color="off",
-                    )
-
-            # Side-by-Side Charts
+            # Side-by-Side Visual Charts
             chart_col1, chart_col2 = st.columns(2)
             with chart_col1:
                 with st.container(border=True):
-                    st.markdown("##### 🌾 Weekly Feed Burn (Starter vs. Grower)")
-                    st.caption(
-                        "Weekly feed consumption (lbs/wk) split by Starter vs. Grower/Finisher ration."
+                    st.markdown(
+                        f"##### 🌾 Weekly Feed Burn · Peak **{feed_stats['peak_weekly_lbs']:,.1f} lbs/wk**"
                     )
                     ration_chart_df = weekly_df.set_index("Week Starting")[
                         ["Starter Feed (lbs)", "Grower/Finisher Feed (lbs)"]
                     ]
-                    st.bar_chart(ration_chart_df, height=320)
+                    st.bar_chart(ration_chart_df, height=280)
 
             with chart_col2:
                 with st.container(border=True):
-                    st.markdown("##### 🛢️ Concurrent Barrel Storage Demand")
-                    st.caption(
-                        f"Number of {barrel_capacity}lb barrels required to store remaining active feed in each week."
+                    st.markdown(
+                        f"##### 🛢️ Barrel Storage Demand · Peak **{feed_stats['peak_concurrent_barrels']} × {barrel_capacity}lb barrel(s)**"
                     )
                     barrel_chart_df = weekly_df.set_index("Week Starting")[
                         ["Concurrent Barrels Needed (Remaining Active)"]
                     ]
-                    st.area_chart(barrel_chart_df, height=320)
+                    st.area_chart(barrel_chart_df, height=280)
 
-            # Formatted Monthly & Weekly Tables
-            st.markdown("##### 📅 Monthly Feed & Barrel Summary")
-            st.dataframe(
-                monthly_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Starter Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Grower/Finisher Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Monthly Feed Consumed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Barrels Consumed in Month": st.column_config.NumberColumn(
-                        format="%.2f barrels"
-                    ),
-                },
-            )
+            # Chronological Feed & Livestock Shopping Schedule
+            st.markdown("##### 🛒 Chronological Feed & Livestock Shopping Schedule")
+            if not purchasing_events_df.empty:
+                shop_c1, shop_c2 = st.columns([2, 1])
+                with shop_c1:
+                    st.dataframe(
+                        purchasing_events_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Feed (lbs)": st.column_config.NumberColumn(
+                                format="%.1f lbs"
+                            ),
+                            "Cost ($)": st.column_config.NumberColumn(
+                                format="$%.2f"
+                            ),
+                        },
+                    )
+                with shop_c2:
+                    st.dataframe(
+                        monthly_cash_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Feed Purchased (lbs)": st.column_config.NumberColumn(
+                                format="%.1f lbs"
+                            ),
+                            "Total Monthly Outlay ($)": st.column_config.NumberColumn(
+                                format="$%.2f"
+                            ),
+                        },
+                    )
 
-            st.markdown("##### 📆 Weekly Feed Breakdown by Batch")
-            st.dataframe(
-                weekly_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Starter Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Grower/Finisher Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Total Weekly Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                    "Remaining Active Batch Feed (lbs)": st.column_config.NumberColumn(
-                        format="%.1f lbs"
-                    ),
-                },
-            )
+            # Raw Weekly & Monthly Feed Tables Tucked into Expander
+            with st.expander("📋 View Raw Weekly & Monthly Feed Tables"):
+                st.markdown("**Monthly Feed & Barrel Summary**")
+                st.dataframe(
+                    monthly_df, use_container_width=True, hide_index=True
+                )
+                st.markdown("**Weekly Feed Breakdown by Batch**")
+                st.dataframe(
+                    weekly_df, use_container_width=True, hide_index=True
+                )
 
     # =======================================================================
-    # WORKSPACE 4: 💰 Financials & Reconciliation
+    # WORKSPACE 4: 💰 Financials & Freezer (Unified Scorecard)
     # =======================================================================
-    elif active_workspace == "💰 Financials & Reconciliation":
-        st.subheader("💰 Financials, ROI & Harvest Reconciliation")
+    elif active_workspace == "💰 Financials & Freezer":
         if not filtered_active_schedules:
             st.warning(
                 "No active batches match the current filters to compute financials."
             )
         else:
-            fin_tab_reconcile, fin_tab_roi, fin_tab_purchase = st.tabs(
-                [
-                    "🥩 Harvest, Freezer & Sales Reconciliation",
-                    "💰 Estimated Cost, Yield & $/lb ROI",
-                    "🛒 Purchasing & Cash-Flow Schedule",
-                ]
+            # 3 Headline Scorecard Metrics
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                with st.container(border=True):
+                    st.metric(
+                        "💰 Total Outlay (Reconciled)",
+                        f"${tot_reconciled_cost:,.2f}",
+                        delta=f"Planned Budget: ${combined_budget_cost:,.2f} (${blended_cost_per_lb:,.2f}/lb est.)",
+                        delta_color="off",
+                    )
+            with sc2:
+                with st.container(border=True):
+                    st.metric(
+                        "💵 Cash Sales & Net Cash",
+                        f"${tot_sales_rev:,.2f} sales",
+                        delta=f"Net Cash: {'+' if tot_cash_net >= 0 else ''}${tot_cash_net:,.2f} ({tot_sold_lbs:,.1f} lbs sold)",
+                        delta_color="normal",
+                    )
+            with sc3:
+                with st.container(border=True):
+                    st.metric(
+                        "❄️ Home Freezer Meat",
+                        f"{tot_freezer_lbs:,.1f} lbs",
+                        delta=(
+                            "🎉 $0.00/lb (Free Meat!)"
+                            if tot_eff_freezer_per_lb == 0.0
+                            else (
+                                f"Effective Cost: ${tot_eff_freezer_per_lb:,.2f}/lb"
+                                if tot_eff_freezer_per_lb is not None
+                                else f"Expected Yield: {combined_meat_lbs:,.1f} lbs"
+                            )
+                        ),
+                        delta_color="off",
+                    )
+
+            # 1 Clean 8-Column Batch Economics Table
+            st.markdown("##### 🥩 Batch Economics & Freezer Summary")
+            st.dataframe(
+                unified_fin_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Reconciled Cost ($)": st.column_config.NumberColumn(
+                        format="$%.2f"
+                    ),
+                    "Meat Yield (lbs)": st.column_config.NumberColumn(
+                        format="%.1f lbs"
+                    ),
+                    "Cost / lb ($)": st.column_config.NumberColumn(
+                        format="$%.2f"
+                    ),
+                    "Cash Sales ($)": st.column_config.NumberColumn(
+                        format="$%.2f"
+                    ),
+                    "Freezer (lbs)": st.column_config.NumberColumn(
+                        format="%.1f lbs"
+                    ),
+                },
             )
 
-            with fin_tab_reconcile:
-                st.caption(
-                    "Compare estimated projections against actual butcher harvest weights, actual feed/butcher costs, customer sales revenue, and home freezer allocation."
-                )
-                rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-                with rc1:
-                    with st.container(border=True):
-                        st.metric(
-                            "Actual Harvested Yield",
-                            f"{tot_actual_dressed:,.1f} lbs",
-                            delta=f"{tot_harvested_head} / {total_surviving_head} head harvested",
-                            delta_color="off",
-                        )
-                with rc2:
-                    with st.container(border=True):
-                        st.metric(
-                            "Reconciled Batch Cost",
-                            f"${tot_reconciled_cost:,.2f}",
-                            delta=f"Est: ${combined_budget_cost:,.2f}",
-                            delta_color="off",
-                        )
-                with rc3:
-                    with st.container(border=True):
-                        st.metric(
-                            "Customer Sales Revenue",
-                            f"${tot_sales_rev:,.2f}",
-                            delta=f"{tot_sold_lbs:,.1f} lbs sold",
-                            delta_color="off",
-                        )
-                with rc4:
-                    with st.container(border=True):
-                        st.metric(
-                            "Home Freezer Meat",
-                            f"{tot_freezer_lbs:,.1f} lbs",
-                            delta=(
-                                "🎉 $0.00/lb (Free Meat!)"
-                                if tot_eff_freezer_per_lb == 0.0
-                                else (
-                                    f"Effective: ${tot_eff_freezer_per_lb:,.2f}/lb"
-                                    if tot_eff_freezer_per_lb is not None
-                                    else "Log freezer lbs in Batch Manager"
-                                )
-                            ),
-                            delta_color="off",
-                        )
-                with rc5:
-                    with st.container(border=True):
-                        st.metric(
-                            "Actual Net Cash Position",
-                            f"${tot_cash_net:,.2f}",
-                            delta="Customer sales minus total cost",
-                            delta_color="normal",
-                        )
-
+            # Granular Cost & Ration Math Tucked into Expander
+            with st.expander(
+                "🔍 View Detailed Cost, Ration & Planned ROI Breakdown"
+            ):
+                st.markdown("**Planned Cost, Ration & ROI Breakdown**")
+                st.dataframe(roi_df, use_container_width=True, hide_index=True)
+                st.markdown("**Full Harvest & Sales Reconciliation Table**")
                 st.dataframe(
                     reconciliation_df,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "Est. Meat (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Actual Harvested (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Est. Cost ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Reconciled Cost ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Reconciled $/lb": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Sold (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Cash Sales ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Home Freezer (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Unallocated (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Cash Net ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Total Realized Profit ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                    },
                 )
-
-            with fin_tab_roi:
-                st.caption(
-                    "Full cost breakdown (Acquisition + Whole-Bag Feed Cost + Processing) vs. expected dressed meat yield and $/lb ROI."
-                )
-                roi_c1, roi_c2, roi_c3, roi_c4 = st.columns(4)
-                with roi_c1:
-                    with st.container(border=True):
-                        st.metric(
-                            "Planned Total Cost",
-                            f"${combined_budget_cost:,.2f}",
-                            delta=f"${combined_feed_cost:,.2f} in whole feed bags",
-                            delta_color="off",
-                        )
-                with roi_c2:
-                    with st.container(border=True):
-                        st.metric(
-                            "Expected Meat Yield",
-                            f"{combined_meat_lbs:,.1f} lbs",
-                            delta=f"Cost: ${blended_cost_per_lb:,.2f}/lb",
-                            delta_color="off",
-                        )
-                with roi_c3:
-                    with st.container(border=True):
-                        st.metric(
-                            "Estimated Gross Revenue",
-                            f"${combined_revenue:,.2f}",
-                            delta=f"Avg Sale: ${blended_sale_per_lb:,.2f}/lb",
-                            delta_color="off",
-                        )
-                with roi_c4:
-                    with st.container(border=True):
-                        st.metric(
-                            "Estimated Net Profit",
-                            f"${combined_profit:,.2f}",
-                            delta=f"{'+' if blended_profit_per_lb >= 0 else ''}${blended_profit_per_lb:,.2f}/lb net",
-                            delta_color="normal",
-                        )
-
-                st.dataframe(
-                    roi_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Acquisition ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Feed Cost - Bags ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Feed Cost - Exact ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Processing ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Total Cost ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Expected Meat (lbs)": st.column_config.NumberColumn(
-                            format="%.1f lbs"
-                        ),
-                        "Feed $/lb Meat": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Total $/lb Meat": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Sale $/lb": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Est. Revenue ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Est. Profit ($)": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                        "Profit $/lb": st.column_config.NumberColumn(
-                            format="$%.2f"
-                        ),
-                    },
-                )
-
-            with fin_tab_purchase:
-                st.caption(
-                    f"Time-phased purchasing and cash-flow schedule using whole {bag_weight}lb feed bags (`ceil(lbs / {bag_weight})`)."
-                )
-                if not monthly_cash_df.empty:
-                    p_col1, p_col2 = st.columns([1, 2])
-                    with p_col1:
-                        st.markdown("**Monthly Outlay Summary**")
-                        st.dataframe(
-                            monthly_cash_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Feed Purchased (lbs)": st.column_config.NumberColumn(
-                                    format="%.1f lbs"
-                                ),
-                                "Total Monthly Outlay ($)": st.column_config.NumberColumn(
-                                    format="$%.2f"
-                                ),
-                            },
-                        )
-                    with p_col2:
-                        st.markdown(
-                            "**Chronological Purchase & Milestone Schedule**"
-                        )
-                        st.dataframe(
-                            purchasing_events_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Feed (lbs)": st.column_config.NumberColumn(
-                                    format="%.1f lbs"
-                                ),
-                                "Cost ($)": st.column_config.NumberColumn(
-                                    format="$%.2f"
-                                ),
-                            },
-                        )
-                else:
-                    st.info("No purchasing events scheduled.")
-
-    # =======================================================================
-    # WORKSPACE 5: ⚙️ Settings & Backup
-    # =======================================================================
-    elif active_workspace == "⚙️ Settings & Backup":
-        st.subheader("⚙️ Global Storage Settings & JSON Herd Backup")
-        set_col1, set_col2 = st.columns(2)
-
-        with set_col1:
-            with st.container(border=True):
-                st.markdown("#### 🛢️ Storage & Feed Bag Settings")
-                st.caption(
-                    "Adjust your homestead's standard storage barrel capacity and feed bag weight. "
-                    "All bag counts (`ceil(lbs / bag_weight)`) and barrel storage curves update automatically."
-                )
-                s_col1, s_col2 = st.columns(2)
-                new_barrel_cap = s_col1.number_input(
-                    "Barrel Size (lbs)",
-                    min_value=10,
-                    max_value=5000,
-                    value=barrel_capacity,
-                    step=25,
-                )
-                new_bag_weight = s_col2.number_input(
-                    "Feed Bag Weight (lbs)",
-                    min_value=5,
-                    max_value=2000,
-                    value=bag_weight,
-                    step=5,
-                )
-                if int(new_barrel_cap) != barrel_capacity:
-                    set_barrel_capacity(int(new_barrel_cap))
-                    st.rerun()
-                if int(new_bag_weight) != bag_weight:
-                    set_bag_weight(int(new_bag_weight))
-                    st.rerun()
-
-        with set_col2:
-            with st.container(border=True):
-                st.markdown("#### 💾 JSON Herd Backup & Restore")
-                st.caption(
-                    "Export your entire SQLite database (batches, losses, harvest logs, sales/freezer entries, and settings) to a portable JSON file or restore from backup."
-                )
-                backup_str = export_backup_json()
-                st.download_button(
-                    "⬇️ Download Herd Backup (.json)",
-                    data=backup_str,
-                    file_name=f"homestead_plan_{date.today().isoformat()}.json",
-                    mime="application/json",
-                    use_container_width=True,
-                )
-                st.divider()
-                uploaded_file = st.file_uploader(
-                    "Restore from JSON", type=["json"]
-                )
-                import_mode = st.radio(
-                    "Import Mode",
-                    ["Merge with existing batches", "Replace existing batches"],
-                    index=0,
-                )
-                if uploaded_file is not None and st.button(
-                    "📥 Import JSON Backup",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    try:
-                        raw_content = uploaded_file.read().decode("utf-8")
-                        imported_n = import_backup_json(
-                            raw_content,
-                            replace_existing=(
-                                import_mode == "Replace existing batches"
-                            ),
-                        )
-                        st.success(
-                            f"Imported {imported_n} batch(es) successfully!"
-                        )
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed to import backup: {exc}")
 
 
 if os.environ.get("FARM_APP_TESTING") != "1":
