@@ -1,12 +1,35 @@
 from datetime import date, datetime, timedelta
 import hashlib
+import importlib.util
 import json
 import math
 import os
 import sqlite3
+import sys
+import types
 import urllib.parse
 import pandas as pd
 import streamlit as st
+
+# Provide a lightweight stdlib shim for pkg_resources (removed in setuptools>=82),
+# which streamlit-vis-timeline imports to locate its frontend/build directory.
+if "pkg_resources" not in sys.modules:
+    try:
+        import pkg_resources  # type: ignore # noqa: F401
+    except ModuleNotFoundError:
+        _pkg_res = types.ModuleType("pkg_resources")
+
+        def _resource_filename(package_or_requirement: str, resource_name: str) -> str:
+            spec = importlib.util.find_spec(package_or_requirement)
+            if spec and spec.origin:
+                return os.path.join(os.path.dirname(spec.origin), resource_name)
+            raise ModuleNotFoundError(
+                f"No module named {package_or_requirement!r}"
+            )
+
+        _pkg_res.resource_filename = _resource_filename  # type: ignore[attr-defined]
+        sys.modules["pkg_resources"] = _pkg_res
+
 from streamlit_timeline import st_timeline
 
 # Livestock Data Dictionary (Default Species Presets)
@@ -737,20 +760,19 @@ def render_app() -> None:
                 key="form_active",
             )
 
-            btn_col1, btn_col2 = st.columns(2)
-            submit_label = (
-                "💾 Update Batch"
-                if st.session_state.editing_batch_id is not None
-                else "➕ Save Batch"
-            )
-            submitted = btn_col1.form_submit_button(
-                submit_label, use_container_width=True, type="primary"
-            )
-            cancel_edit = False
             if st.session_state.editing_batch_id is not None:
+                btn_col1, btn_col2 = st.columns(2)
+                submitted = btn_col1.form_submit_button(
+                    "💾 Update Batch", use_container_width=True, type="primary"
+                )
                 cancel_edit = btn_col2.form_submit_button(
                     "Cancel", use_container_width=True
                 )
+            else:
+                submitted = st.form_submit_button(
+                    "➕ Save Batch", use_container_width=True, type="primary"
+                )
+                cancel_edit = False
 
         if cancel_edit:
             st.session_state.pending_reset = True

@@ -22,7 +22,7 @@ RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
     && pip3 uninstall -y pip setuptools wheel \
     && addgroup -S appgroup && adduser -S appuser -G appgroup \
     && mkdir -p /app/data \
-    && chown -R appuser:appgroup /app
+    && chown -R appuser:appgroup /app /usr/local/lib/python*/site-packages/streamlit_timeline
 
 # Copy application code into the container with non-root ownership
 COPY --chown=appuser:appgroup . .
