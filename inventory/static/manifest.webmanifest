@@ -1,0 +1,9 @@
+{
+  "name": "Hive & Harvest",
+  "short_name": "Quick sale",
+  "start_url": "/quick-sale",
+  "display": "standalone",
+  "background_color": "#f6f4ec",
+  "theme_color": "#2d5a43",
+  "icons": []
+}

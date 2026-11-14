@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Inventory · Hive &amp; Harvest{% endblock %}
+{% block content %}
+<div class="eyebrow">YOUR FARM, AT A GLANCE</div>
+<div class="pagehead">
+  <div><h1>Inventory</h1><p class="sub">Know what's on the shelf before you head to market.</p></div>
+  <button class="btn primary" onclick="document.getElementById('addp').showModal()">+ Add product</button>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards three">
+  <div class="card"><small>Units on hand</small><div class="big">{{ units }}</div><small>Across all your products</small></div>
+  <div class="card"><small>Active products</small><div class="big">{{ rows|length }}</div><small>{{ categories|join(', ')|lower }}</small></div>
+  <div class="card"><small>Running low</small>{% if low %}<span class="pill amber right">Needs attention</span>{% endif %}<div class="big">{{ low }}</div><small>Time to top up for market</small></div>
+</div>
+
+<div class="card table-card">
+  <div class="filters">
+    <input id="q" type="search" placeholder="Search by name or SKU...">
+    <select id="cat"><option value="">All categories</option>{% for c in categories %}<option>{{ c }}</option>{% endfor %}</select>
+    <select id="st"><option value="">Stock status</option><option value="in_stock">In stock</option><option value="low">Low stock</option><option value="count_needed">Count needed</option></select>
+    <span class="count" id="count">{{ rows|length }} products</span>
+  </div>
+  <table>
+    <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>On hand</th><th>Status</th><th></th></tr></thead>
+    <tbody id="rows">
+    {% for r in rows %}
+      <tr data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
+        <td><b>{{ r.name }}</b><small>{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}</small></td>
+        <td>{{ r.category }}</td>
+        <td><b>{{ r.price_cents|money }}</b></td>
+        <td><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
+        <td>
+          {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
+          {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
+          {% else %}<span class="pill red">Count needed</span>{% endif %}
+        </td>
+        <td style="text-align:right">
+          <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
+            Count / Adjust
+          </button>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No products synced yet. Connect Zettle and click Sync now in Settings.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="foot"><span>Showing <span id="shown">{{ rows|length }}</span> of {{ rows|length }} products</span><span>Stock updates automatically after every sale.</span></div>
+</div>
+
+{% if 'quick_sale' in nav|map(attribute=0) %}
+<div class="banner"><span><b>Ready for market?</b> Keep cash sales and Zettle sales together. We'll keep your stock in sync.</span><a href="/quick-sale">Open quick sale →</a></div>
+{% endif %}
+
+<dialog id="addp" class="card">
+  <h2>Add a product</h2>
+  <p>Products come from Zettle. Add or edit the product in Zettle, and it will appear here after the next sync.</p>
+  <form method="dialog"><button class="btn primary">Got it</button></form>
+</dialog>
+
+<dialog id="stockm" class="card" style="width:100%;max-width:420px">
+  <h2 id="sm-title" style="margin-bottom:4px">Update stock</h2>
+  <small id="sm-current" style="margin-bottom:14px"></small>
+  <form method="post" action="/inventory/stock" style="display:flex;flex-direction:column;gap:12px">
+    <input type="hidden" name="sku_id" id="sm-sku">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Action
+      <select name="mode" id="sm-mode" onchange="syncModeLabel()">
+        <option value="set">Set exact on-hand count</option>
+        <option value="restock">Add restock / harvest (+ units)</option>
+        <option value="adjust">Relative adjustment (+ or − units)</option>
+      </select>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px"><span id="sm-qlabel">New on-hand count</span>
+      <input type="number" name="quantity" id="sm-qty" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Low-stock alert threshold (units)
+      <input type="number" name="low_stock_threshold" id="sm-thresh" min="0" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Note (optional)
+      <input type="text" name="note" placeholder="e.g. Initial count, Jarred batch #4, Broken jar" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <div class="row" style="justify-content:flex-end;margin-top:6px">
+      <button type="button" class="btn" onclick="document.getElementById('stockm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save stock</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const q=document.getElementById('q'),cat=document.getElementById('cat'),st=document.getElementById('st');
+function filt(){
+  let n=0;
+  document.querySelectorAll('#rows tr[data-text]').forEach(tr=>{
+    const ok=tr.dataset.text.includes(q.value.toLowerCase())&&(!cat.value||tr.dataset.cat===cat.value)&&(!st.value||tr.dataset.st===st.value);
+    tr.hidden=!ok; if(ok)n++;
+  });
+  document.getElementById('shown').textContent=n;
+  document.getElementById('count').textContent=n+' products';
+}
+[q,cat,st].forEach(e=>e.addEventListener('input',filt));
+
+let currentOnHand = 0;
+function openStockModal(skuId, title, onHand, threshold) {
+  currentOnHand = onHand;
+  document.getElementById('sm-sku').value = skuId;
+  document.getElementById('sm-title').textContent = title;
+  document.getElementById('sm-current').textContent = 'Currently on hand: ' + onHand + ' units';
+  document.getElementById('sm-mode').value = 'set';
+  document.getElementById('sm-qty').value = onHand;
+  document.getElementById('sm-thresh').value = threshold;
+  syncModeLabel();
+  document.getElementById('stockm').showModal();
+}
+function syncModeLabel() {
+  const mode = document.getElementById('sm-mode').value;
+  const lbl = document.getElementById('sm-qlabel');
+  const qty = document.getElementById('sm-qty');
+  if (mode === 'set') {
+    lbl.textContent = 'New exact on-hand count';
+    qty.value = currentOnHand;
+  } else if (mode === 'restock') {
+    lbl.textContent = 'Units to add';
+    qty.value = '';
+  } else {
+    lbl.textContent = 'Change in units (e.g. -2 for spoilage)';
+    qty.value = '';
+  }
+}
+</script>
+{% endblock %}

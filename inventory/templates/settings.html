@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Settings · Hive &amp; Harvest{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Settings</h1><p class="sub">Zettle connection and who has access.</p></div></div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card" style="margin-bottom:20px">
+  <h2>Zettle</h2>
+  {% if status.connected %}
+    <p><span class="pill green">Connected</span></p>
+    <small>Last sync: {{ status.last_sync or 'never' }} (UTC)</small>
+    {% if status.last_error %}<p class="err">Last error: {{ status.last_error }}</p>{% endif %}
+    <form method="post" action="/zettle/sync" style="margin-top:12px"><button class="btn primary">Sync now</button></form>
+    <p><a href="/zettle/connect">Reconnect</a></p>
+  {% elif configured %}
+    <p>Not connected yet. Sign in to Zettle to share your products and sales (read-only).</p>
+    <a class="btn primary" href="/zettle/connect" style="text-decoration:none;display:inline-block">Connect Zettle</a>
+  {% else %}
+    <p class="err">Set <code>ZETTLE_CLIENT_ID</code> and <code>ZETTLE_CLIENT_SECRET</code> on the server, then restart.</p>
+  {% endif %}
+  <small style="margin-top:12px">Redirect URL to register in the Zettle developer portal: <code>{{ redirect_uri }}</code></small>
+</div>
+
+<div class="card table-card" style="margin-bottom:20px">
+  <div class="filters"><b>Members ({{ ctx.membership.merchant_name }})</b></div>
+  <table>
+    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+    {% for m in members %}
+      <tr>
+        <td><b>{{ m.display_name }}</b></td>
+        <td>{{ m.username }}</td>
+        <td><span class="pill {{ 'green' if m.role == 'owner' else 'amber' }}">{{ m.role }}</span></td>
+        <td style="text-align:right">
+          <form method="post" action="/settings/members/remove" style="display:inline">
+            <input type="hidden" name="user_id" value="{{ m.user_id }}">
+            <button class="link" style="color:var(--redink)">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Add or update member</h2>
+  <p class="sub">Add Zach, Marty, or a market helper. Staff accounts land directly on Quick sale and only see Quick sale. If the username already exists, their role on this merchant is updated.</p>
+  <form method="post" action="/settings/members" class="filters" style="padding:0;flex-wrap:wrap">
+    <input name="username" placeholder="Username (e.g. marty)" required style="max-width:180px">
+    <input name="display_name" placeholder="Display name (e.g. Marty)" style="max-width:180px">
+    <input name="password" type="password" placeholder="Password (if new user)" style="max-width:180px">
+    <select name="role">
+      {% for r in roles %}
+        <option value="{{ r }}" {{ 'selected' if r == 'staff' }}>{{ r }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn primary">Save member</button>
+  </form>
+</div>
+{% endblock %}
