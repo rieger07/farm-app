@@ -166,9 +166,10 @@ def render_radar_tab(
                 for ms in upcoming_milestones[:5]:
                     st.markdown(
                         f"**{ms['icon']} {ms['task']}** · `{ms['badge']}`  \n"
-                        f"**{ms['batch_name']}** — {ms['date_display']}  \n"
-                        f"<small>{ms['details']} · <a href=\"{ms['gcal_url']}\" target=\"_blank\">📅 Add to GCal</a></small>",
-                        unsafe_allow_html=True,
+                        f"**{ms['batch_name']}** — {ms['date_display']}"
+                    )
+                    st.caption(
+                        f"{ms['details']} · [📅 Add to GCal]({ms['gcal_url']})"
                     )
                     st.divider()
                 if len(upcoming_milestones) > 5:
