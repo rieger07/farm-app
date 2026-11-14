@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from homestead.telemetry import record_ui_action
 from homestead.ui.timeline_shim import st_timeline
 
 
@@ -140,6 +141,11 @@ def render_radar_tab(
                             type="primary",
                             width="stretch",
                         ):
+                            record_ui_action(
+                                "Timeline -> Open Batch Logs",
+                                event_type="click",
+                                details={"batch_id": mb["id"]},
+                            )
                             st.session_state.selected_batch_id = int(mb["id"])
                             st.session_state.jump_to_workspace = "🐾 Batch Logs"
                             st.rerun()
@@ -149,6 +155,11 @@ def render_radar_tab(
                             key=f"tl_edit_batch_{mb['id']}",
                             width="stretch",
                         ):
+                            record_ui_action(
+                                "Timeline -> Edit Batch",
+                                event_type="modal",
+                                details={"batch_id": mb["id"]},
+                            )
                             st.session_state.pending_edit_batch = mb
                             st.session_state.show_batch_modal = True
                             st.rerun()

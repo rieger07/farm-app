@@ -1,6 +1,8 @@
 """Authentication gate, persistent session management, and User / Admin management modal."""
 
+import json
 import streamlit as st
+import streamlit.components.v1 as components
 
 from homestead.database import (
     authenticate_user,
@@ -16,27 +18,90 @@ from homestead.database import (
     set_public_registration_enabled,
     update_user_password,
 )
+from homestead.telemetry import (
+    clear_telemetry_events,
+    get_telemetry_summary,
+    list_telemetry_events,
+    log_telemetry_event,
+    record_ui_action,
+)
+
+SESSION_COOKIE_NAME = "homestead_session"
 
 
-def login_user_session(user: dict) -> None:
-    """Establish an authenticated session in session_state and URL query_params."""
-    token = create_user_session(int(user["id"]))
-    st.session_state.current_user_id = int(user["id"])
-    st.session_state.session_token = token
+def _get_cookie_session_token() -> str | None:
+    """Safely read the session token from the browser request cookies."""
     try:
-        st.query_params["session"] = token
+        cookies = st.context.cookies
+        if cookies and SESSION_COOKIE_NAME in cookies:
+            val = str(cookies[SESSION_COOKIE_NAME]).strip()
+            return val or None
+    except Exception:
+        pass
+    return None
+
+
+def _strip_legacy_session_query_param() -> None:
+    """Remove any 'session' query parameter from the URL so tokens never appear or authenticate via URL."""
+    try:
+        if "session" in st.query_params:
+            del st.query_params["session"]
     except Exception:
         pass
 
 
+def _sync_session_cookie_component() -> None:
+    """Synchronize browser cookie state when a login or logout event occurs."""
+    token_to_set = st.session_state.pop("_pending_cookie_set", None)
+    should_clear = st.session_state.pop("_pending_cookie_clear", False)
+    if token_to_set:
+        safe_token_js = json.dumps(str(token_to_set))
+        components.html(
+            f"""<script>
+            (function() {{
+                var token = {safe_token_js};
+                var secure = (window.parent.location.protocol === "https:") ? "; Secure" : "";
+                window.parent.document.cookie = "{SESSION_COOKIE_NAME}=" + encodeURIComponent(token) + "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+            }})();
+            </script>""",
+            height=0,
+        )
+    elif should_clear:
+        components.html(
+            f"""<script>
+            (function() {{
+                var secure = (window.parent.location.protocol === "https:") ? "; Secure" : "";
+                window.parent.document.cookie = "{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax" + secure;
+            }})();
+            </script>""",
+            height=0,
+        )
+
+
+def login_user_session(user: dict, action_label: str = "Sign In") -> None:
+    """Establish an authenticated session in session_state and browser cookie (never in URL query_params)."""
+    token = create_user_session(int(user["id"]))
+    st.session_state.current_user_id = int(user["id"])
+    st.session_state.session_token = token
+    st.session_state.pop("_logged_out_this_tab", None)
+    st.session_state._pending_cookie_set = token
+    _strip_legacy_session_query_param()
+    record_ui_action(
+        action_label,
+        event_type="auth",
+        details={"username": user.get("username", "")},
+    )
+
+
 def logout_user_session() -> None:
-    """Terminate the current user session and clear query_params."""
-    token = st.session_state.get("session_token")
-    if not token:
-        try:
-            token = st.query_params.get("session")
-        except Exception:
-            token = None
+    """Terminate the current user session and expire the browser session cookie."""
+    uid = st.session_state.get("current_user_id")
+    log_telemetry_event(
+        event_type="auth",
+        action="Sign Out",
+        user_id=int(uid) if uid is not None else None,
+    )
+    token = st.session_state.get("session_token") or _get_cookie_session_token()
     if token:
         delete_user_session(str(token))
     for k in (
@@ -48,17 +113,21 @@ def logout_user_session() -> None:
         "show_batch_modal",
         "show_species_modal",
         "show_user_modal",
+        "sidebar_species_filter",
+        "_known_species_present",
+        "sidebar_status_filter",
     ):
         st.session_state.pop(k, None)
-    try:
-        if "session" in st.query_params:
-            del st.query_params["session"]
-    except Exception:
-        pass
+    st.session_state._logged_out_this_tab = True
+    st.session_state._pending_cookie_clear = True
+    _strip_legacy_session_query_param()
 
 
 def ensure_authenticated_user() -> dict | None:
-    """Return the authenticated user dict if logged in or restorable from session token."""
+    """Return the authenticated user dict if logged in or restorable from browser cookie."""
+    _strip_legacy_session_query_param()
+    _sync_session_cookie_component()
+
     uid = st.session_state.get("current_user_id")
     if uid is not None:
         user = get_user_by_id(int(uid))
@@ -66,21 +135,18 @@ def ensure_authenticated_user() -> dict | None:
             return user
         st.session_state.pop("current_user_id", None)
 
-    try:
-        token = st.query_params.get("session")
-    except Exception:
-        token = None
+    if st.session_state.get("_logged_out_this_tab"):
+        return None
 
+    token = _get_cookie_session_token()
     if token:
         user = get_user_by_session_token(str(token))
         if user:
             st.session_state.current_user_id = int(user["id"])
             st.session_state.session_token = str(token)
             return user
-        try:
-            del st.query_params["session"]
-        except Exception:
-            pass
+        st.session_state._pending_cookie_clear = True
+        _sync_session_cookie_component()
 
     return None
 
@@ -258,11 +324,16 @@ def render_user_admin_modal(current_user: dict) -> None:
     )
 
     if current_user.get("is_admin"):
-        tab_users, tab_pw = st.tabs(
-            ["👥 Manage Users (Admin)", "🔑 Change My Password"]
+        tab_users, tab_telemetry, tab_pw = st.tabs(
+            [
+                "👥 Manage Users (Admin)",
+                "📊 Telemetry & Timing",
+                "🔑 Change My Password",
+            ]
         )
     else:
         tab_users = None
+        tab_telemetry = None
         tab_pw = st.container()
 
     with tab_pw:
@@ -290,7 +361,112 @@ def render_user_admin_modal(current_user: dict) -> None:
                     st.error("Passwords do not match.")
                 else:
                     update_user_password(int(current_user["id"]), new_pw)
+                    log_telemetry_event(
+                        event_type="auth",
+                        action="Update Own Password",
+                        user_id=int(current_user["id"]),
+                        username=str(current_user.get("username", "")),
+                    )
                     st.success("Password updated!")
+
+    if tab_telemetry is not None:
+        with tab_telemetry:
+            summary = get_telemetry_summary()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("🖱️ Tracked Events", f"{summary['total_events']:,}")
+            m2.metric("⚡ Avg Latency", f"{summary['avg_ms']:,.1f} ms")
+            m3.metric(
+                "📈 P95 / Peak",
+                f"{summary['p95_ms']:,.1f} ms",
+                delta=f"Max {summary['max_ms']:,.1f} ms",
+                delta_color="off",
+            )
+            m4.metric("👥 Active Users", f"{summary['unique_users']:,}")
+
+            if summary["by_workspace"] or summary["by_user"]:
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    st.markdown("##### 🗂️ Workspace Usage & Timing")
+                    st.dataframe(
+                        summary["by_workspace"],
+                        width="stretch",
+                        hide_index=True,
+                    )
+                with tc2:
+                    st.markdown("##### 👤 Activity by User")
+                    st.dataframe(
+                        summary["by_user"],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+            if summary["by_action"]:
+                st.markdown("##### 🎯 Click & Action Breakdown")
+                st.dataframe(
+                    summary["by_action"],
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            st.markdown("##### 🕒 Recent Click & Timing Stream")
+            f_c1, f_c2, f_c3 = st.columns([1.5, 1.5, 1])
+            user_opts = ["All Users"] + sorted(
+                {u["username"] for u in list_users()}
+            )
+            with f_c1:
+                sel_u_filter = st.selectbox(
+                    "Filter by User",
+                    options=user_opts,
+                    key="telemetry_user_filter",
+                )
+            with f_c2:
+                sel_type_filter = st.selectbox(
+                    "Filter by Event Type",
+                    options=[
+                        "All Types",
+                        "navigation",
+                        "click",
+                        "modal",
+                        "mutation",
+                        "auth",
+                        "export",
+                    ],
+                    key="telemetry_type_filter",
+                )
+            with f_c3:
+                if st.button(
+                    "🗑️ Clear Logs",
+                    key="clear_telemetry_btn",
+                    width="stretch",
+                ):
+                    clear_telemetry_events()
+                    st.rerun()
+
+            recent_rows = list_telemetry_events(
+                limit=150,
+                username_filter=sel_u_filter,
+                event_type_filter=sel_type_filter,
+            )
+            if recent_rows:
+                display_stream = [
+                    {
+                        "Time (UTC)": r["created_at"],
+                        "User": f"@{r['username']}" if r["username"] else "—",
+                        "Type": r["event_type"],
+                        "Action": r["action"],
+                        "Workspace": r["workspace"],
+                        "Timing (ms)": r["duration_ms"],
+                        "Details": r["details"],
+                    }
+                    for r in recent_rows
+                ]
+                st.dataframe(
+                    display_stream,
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.caption("No telemetry events recorded yet.")
 
     if tab_users is not None:
         with tab_users:

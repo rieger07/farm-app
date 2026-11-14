@@ -17,6 +17,7 @@ from homestead.database import (
     set_batch_actual_feed,
 )
 from homestead.scheduling import get_batch_status_badge
+from homestead.telemetry import record_ui_action
 
 
 def render_batch_logs_tab(
@@ -66,6 +67,11 @@ def render_batch_logs_tab(
                 type="primary",
                 width="stretch",
             ):
+                record_ui_action(
+                    "Open Edit Batch Modal",
+                    event_type="modal",
+                    details={"batch_id": b["id"]},
+                )
                 st.session_state.pending_edit_batch = b
                 st.session_state.show_batch_modal = True
                 st.rerun()
@@ -99,6 +105,11 @@ def render_batch_logs_tab(
                             "notes": b.get("notes", ""),
                         }
                     )
+                    record_ui_action(
+                        "Duplicate Batch",
+                        event_type="mutation",
+                        details={"source_id": b["id"], "new_id": new_id},
+                    )
                     st.session_state.selected_batch_id = new_id
                     st.rerun()
 
@@ -112,6 +123,11 @@ def render_batch_logs_tab(
                     key=f"toggle_{b['id']}",
                     width="stretch",
                 ):
+                    record_ui_action(
+                        "Toggle Batch Active",
+                        event_type="mutation",
+                        details={"batch_id": b["id"], "active": not bool(b["active"])},
+                    )
                     set_batch_active(b["id"], not bool(b["active"]))
                     st.rerun()
 
@@ -120,6 +136,11 @@ def render_batch_logs_tab(
                     key=f"del_{b['id']}",
                     width="stretch",
                 ):
+                    record_ui_action(
+                        "Delete Batch",
+                        event_type="mutation",
+                        details={"batch_id": b["id"]},
+                    )
                     if st.session_state.editing_batch_id == b["id"]:
                         st.session_state.pending_reset = True
                     delete_batch(b["id"])
@@ -250,6 +271,14 @@ def render_batch_logs_tab(
                                 ),
                                 loss_reason_input,
                             )
+                            record_ui_action(
+                                "Record Batch Loss",
+                                event_type="mutation",
+                                details={
+                                    "batch_id": b["id"],
+                                    "count": int(loss_cnt_input),
+                                },
+                            )
                             st.rerun()
                 else:
                     st.warning(
@@ -326,16 +355,14 @@ def render_batch_logs_tab(
                         harv_lbs_input = hf_c3.number_input(
                             "Total Dressed Weight (lbs)",
                             min_value=0.0,
-                            max_value=50000.0,
-                            value=float(default_dressed),
+                            value=max(0.0, float(default_dressed)),
                             step=1.0,
                             key=f"harv_lbs_{b['id']}",
                         )
                         harv_proc_input = hf_c4.number_input(
                             "Total Butcher Fee ($)",
                             min_value=0.0,
-                            max_value=50000.0,
-                            value=float(default_proc_total),
+                            value=max(0.0, float(default_proc_total)),
                             step=5.0,
                             key=f"harv_proc_{b['id']}",
                         )
@@ -363,6 +390,15 @@ def render_batch_logs_tab(
                                 float(harv_lbs_input),
                                 float(harv_proc_input),
                                 harv_notes_input,
+                            )
+                            record_ui_action(
+                                "Record Batch Harvest",
+                                event_type="mutation",
+                                details={
+                                    "batch_id": b["id"],
+                                    "head": int(harv_head_input),
+                                    "dressed_lbs": float(harv_lbs_input),
+                                },
                             )
                             st.rerun()
                 else:
@@ -416,16 +452,14 @@ def render_batch_logs_tab(
                     af_lbs_val = af_c1.number_input(
                         "Actual Total Feed Used (lbs)",
                         min_value=0.0,
-                        max_value=500000.0,
-                        value=float(s["reconciled_feed_lbs"]),
+                        value=max(0.0, float(s["reconciled_feed_lbs"])),
                         step=10.0,
                         key=f"af_lbs_{b['id']}",
                     )
                     af_cost_val = af_c2.number_input(
                         "Actual Total Feed Cost ($)",
                         min_value=0.0,
-                        max_value=500000.0,
-                        value=float(s["reconciled_feed_cost"]),
+                        value=max(0.0, float(s["reconciled_feed_cost"])),
                         step=5.0,
                         key=f"af_cost_{b['id']}",
                     )
@@ -474,7 +508,6 @@ def render_batch_logs_tab(
                     sale_wt_input = sf_c3.number_input(
                         "Weight (lbs)",
                         min_value=0.1,
-                        max_value=50000.0,
                         value=float(max(0.1, default_sale_wt)),
                         step=1.0,
                         key=f"sale_wt_{b['id']}",
@@ -482,8 +515,7 @@ def render_batch_logs_tab(
                     sale_rev_input = sf_c4.number_input(
                         "Total Sale Revenue ($) — if sold",
                         min_value=0.0,
-                        max_value=500000.0,
-                        value=float(default_sale_rev),
+                        value=max(0.0, float(default_sale_rev)),
                         step=5.0,
                         key=f"sale_rev_{b['id']}",
                     )

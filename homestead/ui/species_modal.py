@@ -10,6 +10,7 @@ from homestead.database import (
     save_species_preset,
     seed_user_species_presets,
 )
+from homestead.telemetry import record_ui_action
 
 
 def _dismiss_species_modal() -> None:
@@ -28,6 +29,15 @@ def render_species_manager_modal(bag_weight: int) -> None:
     catalog = get_species_catalog()
     existing_keys = list(catalog.keys())
     selector_options = ["__new__"] + existing_keys
+
+    pending_sel = st.session_state.pop("pending_species_mgr_selector", None)
+    if pending_sel in selector_options:
+        st.session_state.species_mgr_selector = pending_sel
+    elif (
+        "species_mgr_selector" not in st.session_state
+        or st.session_state.species_mgr_selector not in selector_options
+    ):
+        st.session_state.species_mgr_selector = "__new__"
 
     def _fmt_option(opt: str) -> str:
         if opt == "__new__":
@@ -92,12 +102,15 @@ def render_species_manager_modal(bag_weight: int) -> None:
         default_days = (
             0
             if is_direct
-            else (int(defaults["days_to_birth"]) or (114 if lifecycle_type == "mammal_breeding" else 21))
+            else (
+                min(3650, max(0, int(defaults["days_to_birth"])))
+                or (114 if lifecycle_type == "mammal_breeding" else 21)
+            )
         )
         days_to_birth = st.number_input(
             "Gestation / Incubation (days)",
             min_value=0,
-            max_value=400,
+            max_value=3650,
             value=0 if is_direct else default_days,
             disabled=is_direct,
             key=f"sp_mgr_days_{sfx}",
@@ -110,24 +123,22 @@ def render_species_manager_modal(bag_weight: int) -> None:
         starter_weeks = st.number_input(
             "Starter Phase (wks)",
             min_value=0,
-            max_value=104,
-            value=int(defaults["starter_weeks"]),
+            max_value=520,
+            value=min(520, max(0, int(defaults["starter_weeks"]))),
             key=f"sp_mgr_st_wks_{sfx}",
             step=1,
         )
         starter_feed_lbs = st.number_input(
             "Starter Feed/Head (lbs)",
             min_value=0.0,
-            max_value=5000.0,
-            value=float(defaults["starter_feed_lbs"]),
+            value=max(0.0, float(defaults["starter_feed_lbs"])),
             key=f"sp_mgr_st_fd_{sfx}",
             step=1.0,
         )
         starter_bag_price = st.number_input(
             f"Starter Bag (${bag_weight}lb)",
             min_value=0.0,
-            max_value=500.0,
-            value=float(defaults["starter_bag_price"]),
+            value=max(0.0, float(defaults["starter_bag_price"])),
             key=f"sp_mgr_st_pr_{sfx}",
             step=1.0,
         )
@@ -136,24 +147,22 @@ def render_species_manager_modal(bag_weight: int) -> None:
         grower_weeks = st.number_input(
             "Grower/Finisher (wks)",
             min_value=0,
-            max_value=260,
-            value=int(defaults["grower_weeks"]),
+            max_value=520,
+            value=min(520, max(0, int(defaults["grower_weeks"]))),
             key=f"sp_mgr_gr_wks_{sfx}",
             step=1,
         )
         grower_feed_lbs = st.number_input(
             "Grower Feed/Head (lbs)",
             min_value=0.0,
-            max_value=10000.0,
-            value=float(defaults["grower_feed_lbs"]),
+            value=max(0.0, float(defaults["grower_feed_lbs"])),
             key=f"sp_mgr_gr_fd_{sfx}",
             step=5.0,
         )
         grower_bag_price = st.number_input(
             f"Grower Bag (${bag_weight}lb)",
             min_value=0.0,
-            max_value=500.0,
-            value=float(defaults["grower_bag_price"]),
+            value=max(0.0, float(defaults["grower_bag_price"])),
             key=f"sp_mgr_gr_pr_{sfx}",
             step=1.0,
         )
@@ -162,32 +171,28 @@ def render_species_manager_modal(bag_weight: int) -> None:
         unit_cost = st.number_input(
             "Acquisition $/Unit",
             min_value=0.0,
-            max_value=5000.0,
-            value=float(defaults["unit_cost"]),
+            value=max(0.0, float(defaults["unit_cost"])),
             key=f"sp_mgr_ucost_{sfx}",
             step=1.0,
         )
         processing_cost = st.number_input(
             "Processing $/Head",
             min_value=0.0,
-            max_value=5000.0,
-            value=float(defaults["processing_cost"]),
+            value=max(0.0, float(defaults["processing_cost"])),
             key=f"sp_mgr_pcost_{sfx}",
             step=1.0,
         )
         expected_yield_lbs = st.number_input(
             "Meat Yield (lbs/head)",
             min_value=0.0,
-            max_value=2000.0,
-            value=float(defaults["expected_yield_lbs"]),
+            value=max(0.0, float(defaults["expected_yield_lbs"])),
             key=f"sp_mgr_yield_{sfx}",
             step=0.5,
         )
         sale_price_per_lb = st.number_input(
             "Target Sale Price ($/lb)",
             min_value=0.0,
-            max_value=500.0,
-            value=float(defaults["sale_price_per_lb"]),
+            value=max(0.0, float(defaults["sale_price_per_lb"])),
             key=f"sp_mgr_sprice_{sfx}",
             step=0.5,
         )
@@ -239,6 +244,13 @@ def render_species_manager_modal(bag_weight: int) -> None:
                     },
                     apply_to_active_batches=bool(apply_to_active),
                 )
+                record_ui_action(
+                    "Create Species Preset"
+                    if is_new
+                    else "Update Species Preset",
+                    event_type="mutation",
+                    details={"species": saved["species"]},
+                )
                 st.session_state.form_species = saved["species"]
                 st.success(
                     f"Saved species preset '{saved['species'].title()}'!"
@@ -253,7 +265,12 @@ def render_species_manager_modal(bag_weight: int) -> None:
                 width="stretch",
             ):
                 delete_species_preset(selected_opt)
-                st.session_state.species_mgr_selector = "__new__"
+                record_ui_action(
+                    "Delete Species Preset",
+                    event_type="mutation",
+                    details={"species": selected_opt},
+                )
+                st.session_state.pending_species_mgr_selector = "__new__"
                 st.rerun()
 
     with btn_c3:
@@ -266,6 +283,10 @@ def render_species_manager_modal(bag_weight: int) -> None:
             uid = get_active_user_id()
             if uid is not None:
                 seed_user_species_presets(uid, reset_defaults=True)
+            record_ui_action(
+                "Reset Default Species Presets",
+                event_type="mutation",
+            )
             st.rerun()
 
     st.divider()

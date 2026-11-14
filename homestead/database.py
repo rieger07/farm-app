@@ -285,6 +285,25 @@ def init_db() -> None:
             )
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telemetry_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT DEFAULT '',
+                event_type TEXT NOT NULL,
+                action TEXT NOT NULL,
+                workspace TEXT DEFAULT '',
+                duration_ms REAL,
+                details TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_telemetry_created ON telemetry_events(id DESC)"
+        )
         conn.commit()
 
 
@@ -618,8 +637,13 @@ def delete_user(user_id: int) -> None:
         conn.commit()
 
 
+def _hash_session_token(raw_token: str) -> str:
+    return hashlib.sha256(str(raw_token).encode("utf-8")).hexdigest()
+
+
 def create_user_session(user_id: int, days_valid: int = 30) -> str:
-    token = secrets.token_urlsafe(32)
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_session_token(raw_token)
     now = datetime.utcnow()
     expires = now + timedelta(days=max(1, int(days_valid)))
     with get_db_connection() as conn:
@@ -633,19 +657,20 @@ def create_user_session(user_id: int, days_valid: int = 30) -> str:
             VALUES (?, ?, ?, ?)
             """,
             (
-                token,
+                token_hash,
                 int(user_id),
                 expires.isoformat(timespec="seconds"),
                 now.isoformat(timespec="seconds"),
             ),
         )
         conn.commit()
-    return token
+    return raw_token
 
 
 def get_user_by_session_token(token: str) -> dict | None:
     if not token:
         return None
+    token_hash = _hash_session_token(str(token))
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         row = conn.execute(
@@ -655,7 +680,7 @@ def get_user_by_session_token(token: str) -> dict | None:
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at >= ?
             """,
-            (str(token), now_iso),
+            (token_hash, now_iso),
         ).fetchone()
         if not row:
             return None
@@ -671,9 +696,11 @@ def get_user_by_session_token(token: str) -> dict | None:
 def delete_user_session(token: str) -> None:
     if not token:
         return
+    token_hash = _hash_session_token(str(token))
     with get_db_connection() as conn:
         conn.execute(
-            "DELETE FROM user_sessions WHERE token = ?", (str(token),)
+            "DELETE FROM user_sessions WHERE token = ? OR token = ?",
+            (token_hash, str(token)),
         )
         conn.commit()
 
@@ -705,20 +732,21 @@ def set_public_registration_enabled(enabled: bool) -> None:
 # Species Presets Catalog (Per-User + Fallback)
 # ---------------------------------------------------------------------------
 def _row_to_species_preset(row: sqlite3.Row | dict) -> dict:
-    st_wks = max(0, int(row["starter_weeks"]))
-    gr_wks = max(0, int(row["grower_weeks"]))
+    st_wks = min(520, max(0, int(row["starter_weeks"])))
+    gr_wks = min(520, max(0, int(row["grower_weeks"])))
     if st_wks + gr_wks < 1:
         gr_wks = 1
     st_fd = max(0.0, float(row["starter_feed_lbs"]))
     gr_fd = max(0.0, float(row["grower_feed_lbs"]))
     sp_name = str(row["species"]).strip().lower()
+    days_b = min(3650, max(0, int(row["days_to_birth"])))
     lc_type = str(row["lifecycle_type"] or "").strip()
     if lc_type not in LIFECYCLE_TYPES:
-        lc_type = infer_lifecycle_type(sp_name, int(row["days_to_birth"]))
+        lc_type = infer_lifecycle_type(sp_name, days_b)
     return {
         "species": sp_name,
         "lifecycle_type": lc_type,
-        "days_to_birth": max(0, int(row["days_to_birth"])),
+        "days_to_birth": days_b,
         "starter_weeks": st_wks,
         "starter_feed_lbs": st_fd,
         "grower_weeks": gr_wks,
@@ -791,15 +819,15 @@ def save_species_preset(
         raise ValueError("Species name cannot be empty.")
 
     uid = _resolve_user_id(user_id)
-    days_to_birth = max(0, int(preset_data.get("days_to_birth", 0)))
+    days_to_birth = min(3650, max(0, int(preset_data.get("days_to_birth", 0))))
     lc_type = str(preset_data.get("lifecycle_type") or "").strip()
     if lc_type not in LIFECYCLE_TYPES:
         lc_type = infer_lifecycle_type(sp_key, days_to_birth)
     if lc_type == "direct_arrival":
         days_to_birth = 0
 
-    st_wks = max(0, int(preset_data.get("starter_weeks", 3)))
-    gr_wks = max(0, int(preset_data.get("grower_weeks", 5)))
+    st_wks = min(520, max(0, int(preset_data.get("starter_weeks", 3))))
+    gr_wks = min(520, max(0, int(preset_data.get("grower_weeks", 5))))
     if st_wks + gr_wks < 1:
         gr_wks = 1
     st_fd = max(0.0, float(preset_data.get("starter_feed_lbs", 3.0)))
@@ -1263,11 +1291,19 @@ def _normalize_batch_payload(
     )
 
     if has_phased:
-        starter_weeks = max(
-            0, int(batch_data.get("starter_weeks", defaults["starter_weeks"]))
+        starter_weeks = min(
+            520,
+            max(
+                0,
+                int(batch_data.get("starter_weeks", defaults["starter_weeks"])),
+            ),
         )
-        grower_weeks = max(
-            0, int(batch_data.get("grower_weeks", defaults["grower_weeks"]))
+        grower_weeks = min(
+            520,
+            max(
+                0,
+                int(batch_data.get("grower_weeks", defaults["grower_weeks"])),
+            ),
         )
         if starter_weeks + grower_weeks < 1:
             grower_weeks = 1
@@ -1286,8 +1322,12 @@ def _normalize_batch_payload(
         weeks_to_proc = starter_weeks + grower_weeks
         feed_total = round(starter_feed_lbs + grower_feed_lbs, 4)
     else:
-        weeks_to_proc = max(
-            1, int(batch_data.get("weeks_to_proc", defaults["weeks_to_proc"]))
+        weeks_to_proc = min(
+            1040,
+            max(
+                1,
+                int(batch_data.get("weeks_to_proc", defaults["weeks_to_proc"])),
+            ),
         )
         feed_total = max(
             0.0, float(batch_data.get("feed_total", defaults["feed_total"]))
@@ -1299,13 +1339,19 @@ def _normalize_batch_payload(
             0.001, defaults["starter_feed_lbs"] + defaults["grower_feed_lbs"]
         )
         starter_weeks = min(
-            weeks_to_proc,
-            max(
-                0,
-                round(weeks_to_proc * (defaults["starter_weeks"] / default_wks)),
+            520,
+            min(
+                weeks_to_proc,
+                max(
+                    0,
+                    round(
+                        weeks_to_proc
+                        * (defaults["starter_weeks"] / default_wks)
+                    ),
+                ),
             ),
         )
-        grower_weeks = max(0, weeks_to_proc - starter_weeks)
+        grower_weeks = min(520, max(0, weeks_to_proc - starter_weeks))
         starter_feed_lbs = round(
             feed_total * (defaults["starter_feed_lbs"] / default_fd), 2
         )
@@ -1313,8 +1359,9 @@ def _normalize_batch_payload(
 
     start_str = str(batch_data.get("start_date", date.today().isoformat()))
     end_str = str(batch_data.get("end_date", start_str))
-    days_to_birth = max(
-        0, int(batch_data.get("days_to_birth", defaults["days_to_birth"]))
+    days_to_birth = min(
+        3650,
+        max(0, int(batch_data.get("days_to_birth", defaults["days_to_birth"]))),
     )
     lc_type = str(
         batch_data.get("lifecycle_type")
@@ -1536,6 +1583,7 @@ def import_backup_json(
     raw_json: str,
     replace_existing: bool = False,
     user_id: int | None = None,
+    merge_by_name: bool = False,
 ) -> int:
     uid = _resolve_user_id(user_id)
     data = json.loads(raw_json)
@@ -1636,47 +1684,119 @@ def import_backup_json(
                 if item.get("actual_feed_cost") is not None
                 else None
             )
-            cursor = conn.execute(
-                """
-                INSERT INTO batches (
-                    user_id, name, species, lifecycle_type, quantity, start_date, end_date,
-                    days_to_birth, weeks_to_proc, feed_total,
-                    starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
-                    starter_bag_price, grower_bag_price, unit_cost,
-                    processing_cost, expected_yield_lbs, sale_price_per_lb,
-                    actual_feed_lbs, actual_feed_cost, active, notes, created_at
+            existing_match_id: int | None = None
+            if merge_by_name and not replace_existing:
+                if uid is not None:
+                    matches = conn.execute(
+                        "SELECT id FROM batches WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id ASC",
+                        (uid, norm["name"]),
+                    ).fetchall()
+                else:
+                    matches = conn.execute(
+                        "SELECT id FROM batches WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id ASC",
+                        (norm["name"],),
+                    ).fetchall()
+                if matches:
+                    existing_match_id = int(matches[0]["id"])
+                    for m_row in matches:
+                        m_id = int(m_row["id"])
+                        conn.execute(
+                            "DELETE FROM batch_sales WHERE batch_id = ?", (m_id,)
+                        )
+                        conn.execute(
+                            "DELETE FROM batch_harvests WHERE batch_id = ?",
+                            (m_id,),
+                        )
+                        conn.execute(
+                            "DELETE FROM batch_losses WHERE batch_id = ?", (m_id,)
+                        )
+                    for extra_row in matches[1:]:
+                        conn.execute(
+                            "DELETE FROM batches WHERE id = ?",
+                            (int(extra_row["id"]),),
+                        )
+
+            if existing_match_id is not None:
+                conn.execute(
+                    """
+                    UPDATE batches
+                    SET species = ?, lifecycle_type = ?, quantity = ?, start_date = ?, end_date = ?,
+                        days_to_birth = ?, weeks_to_proc = ?, feed_total = ?,
+                        starter_weeks = ?, starter_feed_lbs = ?, grower_weeks = ?, grower_feed_lbs = ?,
+                        starter_bag_price = ?, grower_bag_price = ?, unit_cost = ?,
+                        processing_cost = ?, expected_yield_lbs = ?, sale_price_per_lb = ?,
+                        actual_feed_lbs = ?, actual_feed_cost = ?, active = ?, notes = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        norm["species"],
+                        norm["lifecycle_type"],
+                        norm["quantity"],
+                        norm["start_date"],
+                        norm["end_date"],
+                        norm["days_to_birth"],
+                        norm["weeks_to_proc"],
+                        norm["feed_total"],
+                        norm["starter_weeks"],
+                        norm["starter_feed_lbs"],
+                        norm["grower_weeks"],
+                        norm["grower_feed_lbs"],
+                        norm["starter_bag_price"],
+                        norm["grower_bag_price"],
+                        norm["unit_cost"],
+                        norm["processing_cost"],
+                        norm["expected_yield_lbs"],
+                        norm["sale_price_per_lb"],
+                        act_fd_lbs,
+                        act_fd_cost,
+                        norm["active"],
+                        norm["notes"],
+                        existing_match_id,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    uid,
-                    norm["name"],
-                    norm["species"],
-                    norm["lifecycle_type"],
-                    norm["quantity"],
-                    norm["start_date"],
-                    norm["end_date"],
-                    norm["days_to_birth"],
-                    norm["weeks_to_proc"],
-                    norm["feed_total"],
-                    norm["starter_weeks"],
-                    norm["starter_feed_lbs"],
-                    norm["grower_weeks"],
-                    norm["grower_feed_lbs"],
-                    norm["starter_bag_price"],
-                    norm["grower_bag_price"],
-                    norm["unit_cost"],
-                    norm["processing_cost"],
-                    norm["expected_yield_lbs"],
-                    norm["sale_price_per_lb"],
-                    act_fd_lbs,
-                    act_fd_cost,
-                    norm["active"],
-                    norm["notes"],
-                    str(item.get("created_at") or now_iso),
-                ),
-            )
-            new_batch_id = int(cursor.lastrowid)
+                new_batch_id = existing_match_id
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO batches (
+                        user_id, name, species, lifecycle_type, quantity, start_date, end_date,
+                        days_to_birth, weeks_to_proc, feed_total,
+                        starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
+                        starter_bag_price, grower_bag_price, unit_cost,
+                        processing_cost, expected_yield_lbs, sale_price_per_lb,
+                        actual_feed_lbs, actual_feed_cost, active, notes, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uid,
+                        norm["name"],
+                        norm["species"],
+                        norm["lifecycle_type"],
+                        norm["quantity"],
+                        norm["start_date"],
+                        norm["end_date"],
+                        norm["days_to_birth"],
+                        norm["weeks_to_proc"],
+                        norm["feed_total"],
+                        norm["starter_weeks"],
+                        norm["starter_feed_lbs"],
+                        norm["grower_weeks"],
+                        norm["grower_feed_lbs"],
+                        norm["starter_bag_price"],
+                        norm["grower_bag_price"],
+                        norm["unit_cost"],
+                        norm["processing_cost"],
+                        norm["expected_yield_lbs"],
+                        norm["sale_price_per_lb"],
+                        act_fd_lbs,
+                        act_fd_cost,
+                        norm["active"],
+                        norm["notes"],
+                        str(item.get("created_at") or now_iso),
+                    ),
+                )
+                new_batch_id = int(cursor.lastrowid)
             for loss_item in item.get("losses", []):
                 conn.execute(
                     """
