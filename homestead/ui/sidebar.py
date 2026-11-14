@@ -1,4 +1,4 @@
-"""Minimal sidebar: Add Livestock Batch button, herd filters, .ics export, and Settings & Backup."""
+"""Minimal sidebar: User badge, Add Livestock Batch button, Species Presets button, herd filters, .ics export, and Settings & Backup."""
 
 from datetime import date
 import streamlit as st
@@ -12,6 +12,7 @@ from homestead.database import (
     set_barrel_capacity,
 )
 from homestead.scheduling import get_batch_status_badge
+from homestead.ui.auth_view import logout_user_session
 
 
 def render_sidebar(
@@ -19,11 +20,42 @@ def render_sidebar(
     all_schedules: list[dict],
     barrel_capacity: int,
     bag_weight: int,
+    current_user: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Render the minimal sidebar and return (filtered_schedules, filtered_active_schedules)."""
     with st.sidebar:
         st.markdown("## 🚜 Homestead Planner")
-        st.caption("Poultry & Pigs Operations, Feed & Freezer")
+        if current_user:
+            role_tag = " · 🛡️ Admin" if current_user.get("is_admin") else ""
+            st.caption(
+                f"👤 **{current_user['display_name']}** (`@{current_user['username']}`){role_tag}"
+            )
+            u_btn1, u_btn2 = st.columns(2)
+            with u_btn1:
+                acct_label = (
+                    "👥 Users & PW"
+                    if current_user.get("is_admin")
+                    else "🔑 Account"
+                )
+                if st.button(
+                    acct_label,
+                    key="sidebar_user_admin_btn",
+                    use_container_width=True,
+                ):
+                    st.session_state.show_batch_modal = False
+                    st.session_state.show_species_modal = False
+                    st.session_state.show_user_modal = True
+                    st.rerun()
+            with u_btn2:
+                if st.button(
+                    "🚪 Log Out",
+                    key="sidebar_logout_btn",
+                    use_container_width=True,
+                ):
+                    logout_user_session()
+                    st.rerun()
+        else:
+            st.caption("Poultry, Pigs & Custom Livestock Operations")
 
         if st.button(
             "➕ Add Livestock Batch",
@@ -32,7 +64,19 @@ def render_sidebar(
             use_container_width=True,
         ):
             st.session_state.pending_reset = True
+            st.session_state.show_species_modal = False
+            st.session_state.show_user_modal = False
             st.session_state.show_batch_modal = True
+            st.rerun()
+
+        if st.button(
+            "🐾 Manage Species Presets",
+            key="sidebar_manage_species_btn",
+            use_container_width=True,
+        ):
+            st.session_state.show_batch_modal = False
+            st.session_state.show_user_modal = False
+            st.session_state.show_species_modal = True
             st.rerun()
 
         st.divider()

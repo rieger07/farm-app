@@ -8,9 +8,10 @@ from homestead.calendar_export import create_gcal_link
 from homestead.config import (
     DEFAULT_BAG_WEIGHT,
     DEFAULT_BARREL_CAPACITY,
-    get_species_defaults,
+    get_lifecycle_labels,
 )
 from homestead.database import (
+    get_species_defaults,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
@@ -40,9 +41,16 @@ def compute_batch_schedule(
         start_dt, end_dt = end_dt, start_dt
 
     species = batch["species"]
-    defaults = get_species_defaults(species)
-    is_pigs = "pigs" in species.lower()
+    defaults = get_species_defaults(
+        species, user_id=batch.get("user_id")
+    )
     days_to_birth = int(batch["days_to_birth"])
+    lc_labels = get_lifecycle_labels(
+        batch.get("lifecycle_type") or defaults.get("lifecycle_type"),
+        species=species,
+        days_to_birth=days_to_birth,
+    )
+    is_pigs = lc_labels["lifecycle_type"] == "mammal_breeding"
     initial_quantity = max(1, int(batch["quantity"]))
 
     starter_weeks = int(
@@ -193,9 +201,10 @@ def compute_batch_schedule(
     )
     surviving_quantity = max(0, initial_quantity - total_lost)
 
-    initial_label = "Breeding" if is_pigs else "Arrival"
-    gestation_label = "Gestation" if is_pigs else "Incubation"
-    birth_label = "Birth" if is_pigs else "Hatch"
+    initial_label = lc_labels["initial_label"]
+    gestation_label = lc_labels["gestation_label"]
+    birth_label = lc_labels["birth_label"]
+    birth_icon = lc_labels["birth_icon"]
 
     timeline_items = []
 
@@ -588,6 +597,8 @@ def compute_batch_schedule(
         "initial_label": initial_label,
         "gestation_label": gestation_label,
         "birth_label": birth_label,
+        "birth_icon": birth_icon,
+        "lifecycle_type": lc_labels["lifecycle_type"],
         "birth_start": birth_start,
         "birth_end": birth_end,
         "proc_base": proc_base,
@@ -913,7 +924,7 @@ def compute_upcoming_milestones(
                     "batch_id": bid,
                     "batch_name": b_name,
                     "species": sp_title,
-                    "icon": "🐣",
+                    "icon": s.get("birth_icon", "🐣"),
                     "task": f"{s['birth_label']} Window",
                     "event_date": s["birth_start"],
                     "end_date": s["birth_end"],

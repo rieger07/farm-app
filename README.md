@@ -4,6 +4,13 @@ A Streamlit application for planning, comparing, and persisting multiple livesto
 
 ## Features
 
+- **Multi-Tenant User Accounts & Persistent Sessions**:
+  - **First-Run Admin Onboarding**: Creating the first account promotes it to Administrator, seeds the 4 built-in species presets, and automatically claims any existing unowned batches, logs, and settings in the database.
+  - **Per-User Data Isolation**: Each user has their own isolated livestock batches, loss/harvest/sales logs, storage barrel/bag settings, custom species presets, and JSON backups.
+  - **Admin User Management & Persistent Login**: Administrators can create/delete user accounts, reset passwords, or toggle public self-registration on/off. Sessions persist across browser reloads via expiring session tokens.
+- **Custom Livestock Species Presets & Lifecycle Types**:
+  - Each user starts with 4 built-in presets (`Chicken Eggs`, `Chicken Chicks`, `Turkey Chicks`, `Kunekune Pigs`) and can add new species (e.g., `Meat Rabbits`, `Ducklings`, `Quail Eggs`, `Feeder Pigs`), edit/delete presets, or restore defaults via the `🐾 Manage Species Presets` modal or inline inside the `➕ Add Livestock Batch` dialog.
+  - Supports 3 configurable **Lifecycle Types** per species: `🐣 Poultry / Eggs (Arrival → Incubation → Hatch)`, `🐖 Mammal / Breeding (Breeding → Gestation → Birth)`, and `📥 Direct Arrival (0 days to birth/hatch)`.
 - **Streamlined 4-Tab Workflow Navigation**:
   - **🗓️ Radar & Timeline (Operational Radar)**: 3 clean single-number vital cards (`🐾 Animals on Ground`, `🌾 Feed & Barrel Storage`, `⏳ Next Farm Milestone`), plus a side-by-side main view with the interactive **Shared Herd Lifecycle Timeline** (2/3 width, with quick action buttons to `🐾 Open Batch Logs` or `✏️ Edit Batch`) and a compact **🔔 Next Up Action Agenda** checklist (1/3 width, with relative day badges and Google Calendar links).
   - **🐾 Batch Logs (Master-Detail Logging)**: Compact batch selector bar with primary `✏️ Edit Batch` button and a tucked-away `⋯ More & Calendar` popover menu (`📋 Duplicate Batch`, `⏸️ Exclude from Plan` / `▶️ Include in Plan`, `🗑️ Delete Batch`, and Google Calendar links), a single-line 4-metric vitals strip, and 3 action-first logging tabs (`📉 Batch Losses`, `🔪 Harvest & Butcher Log` with tucked-away Actual Feed Override, and `💵 Freezer & Sales Log`).
@@ -40,8 +47,10 @@ A Streamlit application for planning, comparing, and persisting multiple livesto
 │   ├── calendar_export.py        # Google Calendar link builder & RFC 5545 .ics export
 │   └── ui/                       # Streamlit UI views & components
 │       ├── timeline_shim.py      # streamlit-vis-timeline loader & headless AppTest fallback
-│       ├── sidebar.py            # Minimal sidebar: Quick-Add trigger, filters, .ics & settings
-│       ├── batch_modal.py        # @st.dialog Quick-Add / Edit batch modal & form state transitions
+│       ├── auth_view.py          # First-run admin setup, login/registration gate & user management modal
+│       ├── species_modal.py      # @st.dialog modal for adding, editing & deleting species presets
+│       ├── sidebar.py            # Minimal sidebar: user badge, Quick-Add, species manager, filters & settings
+│       ├── batch_modal.py        # @st.dialog Quick-Add / Edit batch modal & inline custom species creation
 │       ├── radar_tab.py          # Workspace 1: 🗓️ Radar & Timeline
 │       ├── batch_logs_tab.py     # Workspace 2: 🐾 Batch Logs (losses, harvests & freezer/sales)
 │       ├── feed_tab.py           # Workspace 3: 🌾 Feed & Shopping

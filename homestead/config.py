@@ -1,6 +1,13 @@
 """Species presets, constants, and workspace definitions for Homestead Planner."""
 
+LIFECYCLE_TYPES: dict[str, str] = {
+    "poultry_incubation": "🐣 Poultry / Eggs (Arrival → Incubation → Hatch)",
+    "mammal_breeding": "🐖 Mammal / Breeding (Breeding → Gestation → Birth)",
+    "direct_arrival": "📥 Direct Arrival (0 days to birth/hatch)",
+}
+
 # Livestock Data Dictionary (Default Species Presets)
+# lifecycle_type: 'poultry_incubation' | 'mammal_breeding' | 'direct_arrival'
 # days_to_birth: Gestation or Incubation days
 # starter_weeks / starter_feed_lbs: Starter phase duration (weeks) & feed per animal (lbs)
 # grower_weeks / grower_feed_lbs: Grower/Finisher phase duration (weeks) & feed per animal (lbs)
@@ -11,6 +18,7 @@
 # sale_price_per_lb: Default target sale price ($/lb) of dressed meat
 LIVESTOCK_DATA: dict[str, dict] = {
     "chicken eggs": {
+        "lifecycle_type": "poultry_incubation",
         "days_to_birth": 21,
         "starter_weeks": 3,
         "starter_feed_lbs": 3.0,
@@ -26,6 +34,7 @@ LIVESTOCK_DATA: dict[str, dict] = {
         "feed_total": 15.0,
     },
     "chicken chicks": {
+        "lifecycle_type": "direct_arrival",
         "days_to_birth": 0,
         "starter_weeks": 3,
         "starter_feed_lbs": 3.0,
@@ -41,6 +50,7 @@ LIVESTOCK_DATA: dict[str, dict] = {
         "feed_total": 15.0,
     },
     "turkey chicks": {
+        "lifecycle_type": "direct_arrival",
         "days_to_birth": 0,
         "starter_weeks": 6,
         "starter_feed_lbs": 12.0,
@@ -56,6 +66,7 @@ LIVESTOCK_DATA: dict[str, dict] = {
         "feed_total": 75.0,
     },
     "kunekune pigs": {
+        "lifecycle_type": "mammal_breeding",
         "days_to_birth": 116,
         "starter_weeks": 8,
         "starter_feed_lbs": 50.0,
@@ -89,7 +100,59 @@ STATUS_OPTIONS = [
 ]
 
 
+def infer_lifecycle_type(species: str, days_to_birth: int = 0) -> str:
+    sp = str(species).strip().lower()
+    if sp in LIVESTOCK_DATA:
+        return str(LIVESTOCK_DATA[sp].get("lifecycle_type", "direct_arrival"))
+    if any(
+        kw in sp
+        for kw in ("pig", "hog", "boar", "sow", "goat", "sheep", "lamb", "calf", "cattle", "cow", "rabbit", "doe")
+    ):
+        return "mammal_breeding" if int(days_to_birth) > 0 else "direct_arrival"
+    if int(days_to_birth) > 0 or "egg" in sp:
+        return "poultry_incubation"
+    return "direct_arrival"
+
+
+def get_lifecycle_labels(
+    lifecycle_type: str | None = None,
+    species: str = "",
+    days_to_birth: int = 0,
+) -> dict[str, str]:
+    resolved_type = lifecycle_type or infer_lifecycle_type(
+        species, days_to_birth
+    )
+    if resolved_type == "mammal_breeding":
+        return {
+            "lifecycle_type": "mammal_breeding",
+            "initial_label": "Breeding",
+            "gestation_label": "Gestation",
+            "birth_label": "Birth",
+            "birth_icon": "🐖",
+            "date_input_label": "Expected Breeding Date (or Range)",
+        }
+    if resolved_type == "poultry_incubation":
+        return {
+            "lifecycle_type": "poultry_incubation",
+            "initial_label": "Arrival",
+            "gestation_label": "Incubation",
+            "birth_label": "Hatch",
+            "birth_icon": "🐣",
+            "date_input_label": "Egg Set / Arrival Date (or Range)",
+        }
+    return {
+        "lifecycle_type": "direct_arrival",
+        "initial_label": "Arrival",
+        "gestation_label": "Incubation",
+        "birth_label": "Hatch",
+        "birth_icon": "🐣",
+        "date_input_label": "Arrival Date (or Range)",
+    }
+
+
 def get_species_defaults(species: str) -> dict:
-    return LIVESTOCK_DATA.get(
-        str(species).lower(), LIVESTOCK_DATA["chicken chicks"]
+    return dict(
+        LIVESTOCK_DATA.get(
+            str(species).strip().lower(), LIVESTOCK_DATA["chicken chicks"]
+        )
     )

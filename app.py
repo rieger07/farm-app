@@ -7,38 +7,61 @@ from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.config import (
     DEFAULT_BAG_WEIGHT,
     DEFAULT_BARREL_CAPACITY,
+    LIFECYCLE_TYPES,
     LIVESTOCK_DATA,
     STATUS_OPTIONS,
     WORKSPACES,
-    get_species_defaults,
+    get_lifecycle_labels,
+    infer_lifecycle_type,
 )
 from homestead.database import (
     _normalize_batch_payload,
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
+    authenticate_user,
+    count_users,
+    create_user,
+    create_user_session,
     delete_batch,
     delete_batch_harvest,
     delete_batch_loss,
     delete_batch_sale,
+    delete_species_preset,
+    delete_user,
+    delete_user_session,
     export_backup_json,
+    get_active_user_id,
     get_bag_weight,
     get_barrel_capacity,
     get_db_connection,
     get_db_path,
     get_int_setting,
+    get_species_catalog,
+    get_species_defaults,
+    get_user_by_id,
+    get_user_by_session_token,
+    get_user_by_username,
+    hash_password,
     import_backup_json,
     init_db,
+    is_public_registration_enabled,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
     list_batches,
+    list_users,
     save_batch,
+    save_species_preset,
+    seed_user_species_presets,
     set_bag_weight,
     set_barrel_capacity,
     set_batch_active,
     set_batch_actual_feed,
     set_int_setting,
+    set_public_registration_enabled,
+    update_user_password,
+    verify_password,
 )
 from homestead.financials import (
     compute_purchasing_schedule,
@@ -54,6 +77,13 @@ from homestead.scheduling import (
     compute_upcoming_milestones,
     get_batch_status_badge,
 )
+from homestead.ui.auth_view import (
+    ensure_authenticated_user,
+    login_user_session,
+    logout_user_session,
+    render_auth_gate,
+    render_user_admin_modal,
+)
 from homestead.ui.batch_logs_tab import render_batch_logs_tab
 from homestead.ui.batch_modal import (
     _cancel_batch_modal_callback,
@@ -67,6 +97,7 @@ from homestead.ui.feed_tab import render_feed_tab
 from homestead.ui.financials_tab import render_financials_tab
 from homestead.ui.radar_tab import render_radar_tab
 from homestead.ui.sidebar import render_sidebar
+from homestead.ui.species_modal import render_species_manager_modal
 from homestead.ui.timeline_shim import st_timeline
 
 
@@ -78,6 +109,12 @@ def render_app() -> None:
     )
 
     init_db()
+
+    current_user = ensure_authenticated_user()
+    if current_user is None:
+        render_auth_gate()
+        return
+
     apply_pending_editor_transitions()
 
     barrel_capacity = get_barrel_capacity()
@@ -116,10 +153,15 @@ def render_app() -> None:
         all_schedules=all_schedules,
         barrel_capacity=barrel_capacity,
         bag_weight=bag_weight,
+        current_user=current_user,
     )
 
     if st.session_state.get("show_batch_modal", False):
         render_batch_editor_modal(barrel_capacity, bag_weight)
+    elif st.session_state.get("show_species_modal", False):
+        render_species_manager_modal(bag_weight)
+    elif st.session_state.get("show_user_modal", False):
+        render_user_admin_modal(current_user)
 
     st.title("🚜 Homestead Planner")
 
@@ -148,16 +190,27 @@ def render_app() -> None:
     if not all_batches:
         with st.container(border=True):
             st.info(
-                "👋 **No livestock batches saved yet.** Click **➕ Add Livestock Batch** below (or in the sidebar) to add your first batch, or restore a JSON backup under **⚙️ Settings & Backup** in the sidebar."
+                "👋 **No livestock batches saved yet.** Click **➕ Add Livestock Batch** below (or in the sidebar) to add your first batch, manage custom species under **🐾 Manage Species Presets**, or restore a JSON backup under **⚙️ Settings & Backup**."
             )
-            if st.button(
-                "➕ Add Your First Livestock Batch",
-                key="empty_add_batch_btn",
-                type="primary",
-            ):
-                st.session_state.pending_reset = True
-                st.session_state.show_batch_modal = True
-                st.rerun()
+            e_col1, e_col2 = st.columns(2)
+            with e_col1:
+                if st.button(
+                    "➕ Add Your First Livestock Batch",
+                    key="empty_add_batch_btn",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_reset = True
+                    st.session_state.show_batch_modal = True
+                    st.rerun()
+            with e_col2:
+                if st.button(
+                    "🐾 Manage Species Presets",
+                    key="empty_manage_species_btn",
+                    use_container_width=True,
+                ):
+                    st.session_state.show_species_modal = True
+                    st.rerun()
         return
 
     # Precompute aggregated tables & metrics for active plan
@@ -205,6 +258,7 @@ def render_app() -> None:
 __all__ = [
     "DEFAULT_BAG_WEIGHT",
     "DEFAULT_BARREL_CAPACITY",
+    "LIFECYCLE_TYPES",
     "LIVESTOCK_DATA",
     "STATUS_OPTIONS",
     "WORKSPACES",
@@ -218,6 +272,7 @@ __all__ = [
     "add_batch_loss",
     "add_batch_sale",
     "apply_pending_editor_transitions",
+    "authenticate_user",
     "compute_batch_schedule",
     "compute_combined_feed_schedule",
     "compute_purchasing_schedule",
@@ -225,41 +280,68 @@ __all__ = [
     "compute_roi_summary_table",
     "compute_unified_financials_table",
     "compute_upcoming_milestones",
+    "count_users",
     "create_gcal_link",
+    "create_user",
+    "create_user_session",
     "delete_batch",
     "delete_batch_harvest",
     "delete_batch_loss",
     "delete_batch_sale",
+    "delete_species_preset",
+    "delete_user",
+    "delete_user_session",
+    "ensure_authenticated_user",
     "export_backup_json",
     "generate_ics_calendar",
+    "get_active_user_id",
     "get_bag_weight",
     "get_barrel_capacity",
     "get_batch_status_badge",
     "get_db_connection",
     "get_db_path",
     "get_int_setting",
+    "get_lifecycle_labels",
+    "get_species_catalog",
     "get_species_defaults",
+    "get_user_by_id",
+    "get_user_by_session_token",
+    "get_user_by_username",
+    "hash_password",
     "import_backup_json",
+    "infer_lifecycle_type",
     "init_db",
+    "is_public_registration_enabled",
     "list_batch_harvests",
     "list_batch_losses",
     "list_batch_sales",
     "list_batches",
+    "list_users",
+    "login_user_session",
+    "logout_user_session",
     "on_species_change",
     "render_app",
+    "render_auth_gate",
     "render_batch_editor_modal",
     "render_batch_logs_tab",
     "render_feed_tab",
     "render_financials_tab",
     "render_radar_tab",
     "render_sidebar",
+    "render_species_manager_modal",
+    "render_user_admin_modal",
     "save_batch",
+    "save_species_preset",
+    "seed_user_species_presets",
     "set_bag_weight",
     "set_barrel_capacity",
     "set_batch_active",
     "set_batch_actual_feed",
     "set_int_setting",
+    "set_public_registration_enabled",
     "st_timeline",
+    "update_user_password",
+    "verify_password",
 ]
 
 
