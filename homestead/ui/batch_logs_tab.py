@@ -64,18 +64,18 @@ def render_batch_logs_tab(
                 "✏️ Edit Batch",
                 key=f"edit_{b['id']}",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state.pending_edit_batch = b
                 st.session_state.show_batch_modal = True
                 st.rerun()
 
         with more_col:
-            with st.popover("⋯ More & Calendar", use_container_width=True):
+            with st.popover("⋯ More & Calendar", width="stretch"):
                 if st.button(
                     "📋 Duplicate Batch",
                     key=f"dup_{b['id']}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     new_id = save_batch(
                         {
@@ -110,7 +110,7 @@ def render_batch_logs_tab(
                 if st.button(
                     toggle_label,
                     key=f"toggle_{b['id']}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     set_batch_active(b["id"], not bool(b["active"]))
                     st.rerun()
@@ -118,7 +118,7 @@ def render_batch_logs_tab(
                 if st.button(
                     "🗑️ Delete Batch",
                     key=f"del_{b['id']}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     if st.session_state.editing_batch_id == b["id"]:
                         st.session_state.pending_reset = True
@@ -137,7 +137,7 @@ def render_batch_logs_tab(
                     st.link_button(
                         f"🐣 {s['birth_label']} ({s['birth_start']})",
                         birth_gcal,
-                        use_container_width=True,
+                        width="stretch",
                     )
                 if s["starter_weeks"] > 0 and s["grower_weeks"] > 0:
                     trans_gcal = create_gcal_link(
@@ -149,7 +149,7 @@ def render_batch_logs_tab(
                     st.link_button(
                         f"🌾 Ration Switch ({s['transition_date']})",
                         trans_gcal,
-                        use_container_width=True,
+                        width="stretch",
                     )
                 proc_gcal = create_gcal_link(
                     f"{b['name']} - Processing Date",
@@ -160,7 +160,7 @@ def render_batch_logs_tab(
                 st.link_button(
                     f"🔪 Processing ({s['proc_date']})",
                     proc_gcal,
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         # Single-Line Batch Vitals Strip (No multi-paragraph cards)
@@ -234,7 +234,7 @@ def render_batch_logs_tab(
                         )
                         if st.form_submit_button(
                             "➕ Record Loss & Recalculate Feed",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             resolved_loss_dt = (
                                 loss_dt_input[0]
@@ -346,7 +346,7 @@ def render_batch_logs_tab(
                         )
                         if st.form_submit_button(
                             "➕ Log Harvest Event",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             resolved_harv_dt = (
                                 harv_dt_input[0]
@@ -431,10 +431,10 @@ def render_batch_logs_tab(
                     )
                     af_btn1, af_btn2 = st.columns(2)
                     save_af = af_btn1.form_submit_button(
-                        "💾 Save Override", use_container_width=True
+                        "💾 Save Override", width="stretch"
                     )
                     clear_af = af_btn2.form_submit_button(
-                        "↩️ Reset", use_container_width=True
+                        "↩️ Reset", width="stretch"
                     )
                     if save_af:
                         set_batch_actual_feed(
@@ -494,7 +494,7 @@ def render_batch_logs_tab(
                     )
                     if st.form_submit_button(
                         "➕ Log Allocation",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         resolved_sale_dt = (
                             sale_dt_input[0]

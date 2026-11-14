@@ -125,7 +125,7 @@ def render_auth_gate() -> None:
                     "🚀 Create Admin Account & Sign In",
                     key="setup_admin_submit_btn",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 if submitted_setup:
                     if not admin_username.strip():
@@ -174,7 +174,7 @@ def render_auth_gate() -> None:
                     "🔐 Sign In",
                     key="login_submit_btn",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 if submitted_login:
                     user = authenticate_user(login_username, login_pw)
@@ -215,7 +215,7 @@ def render_auth_gate() -> None:
                         "📝 Create Account & Sign In",
                         key="reg_submit_btn",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     )
                     if submitted_reg:
                         if not reg_username.strip():
@@ -383,7 +383,7 @@ def render_user_admin_modal(current_user: dict) -> None:
                                 if st.form_submit_button(
                                     "🔑 Reset PW",
                                     key=f"adm_reset_pw_btn_{uid}",
-                                    use_container_width=True,
+                                    width="stretch",
                                 ):
                                     try:
                                         update_user_password(uid, reset_pw_val)
@@ -397,7 +397,7 @@ def render_user_admin_modal(current_user: dict) -> None:
                             if st.button(
                                 "🗑️ Delete",
                                 key=f"adm_del_user_btn_{uid}",
-                                use_container_width=True,
+                                width="stretch",
                             ):
                                 delete_user(uid)
                                 st.rerun()
@@ -406,6 +406,6 @@ def render_user_admin_modal(current_user: dict) -> None:
     st.button(
         "Close",
         key="close_user_modal_btn",
-        use_container_width=True,
+        width="stretch",
         on_click=_dismiss_user_modal,
     )

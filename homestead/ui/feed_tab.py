@@ -47,7 +47,7 @@ def render_feed_tab(
         with shop_c1:
             st.dataframe(
                 purchasing_events_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Feed (lbs)": st.column_config.NumberColumn(
@@ -59,7 +59,7 @@ def render_feed_tab(
         with shop_c2:
             st.dataframe(
                 monthly_cash_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Feed Purchased (lbs)": st.column_config.NumberColumn(
@@ -74,6 +74,6 @@ def render_feed_tab(
     # Raw Weekly & Monthly Feed Tables Tucked into Expander
     with st.expander("📋 View Raw Weekly & Monthly Feed Tables"):
         st.markdown("**Monthly Feed & Barrel Summary**")
-        st.dataframe(monthly_df, use_container_width=True, hide_index=True)
+        st.dataframe(monthly_df, width="stretch", hide_index=True)
         st.markdown("**Weekly Feed Breakdown by Batch**")
-        st.dataframe(weekly_df, use_container_width=True, hide_index=True)
+        st.dataframe(weekly_df, width="stretch", hide_index=True)

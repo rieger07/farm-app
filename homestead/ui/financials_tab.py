@@ -83,7 +83,7 @@ def render_financials_tab(
     st.markdown("##### 🥩 Batch Economics & Freezer Summary")
     st.dataframe(
         unified_fin_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Reconciled Cost ($)": st.column_config.NumberColumn(
@@ -101,10 +101,10 @@ def render_financials_tab(
     # Granular Cost & Ration Math Tucked into Expander
     with st.expander("🔍 View Detailed Cost, Ration & Planned ROI Breakdown"):
         st.markdown("**Planned Cost, Ration & ROI Breakdown**")
-        st.dataframe(roi_df, use_container_width=True, hide_index=True)
+        st.dataframe(roi_df, width="stretch", hide_index=True)
         st.markdown("**Full Harvest & Sales Reconciliation Table**")
         st.dataframe(
             reconciliation_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )

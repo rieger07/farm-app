@@ -138,7 +138,7 @@ def render_radar_tab(
                             "🐾 Open Batch Logs",
                             key=f"tl_open_mgr_{mb['id']}",
                             type="primary",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state.selected_batch_id = int(mb["id"])
                             st.session_state.jump_to_workspace = "🐾 Batch Logs"
@@ -147,7 +147,7 @@ def render_radar_tab(
                         if st.button(
                             "✏️ Edit Batch",
                             key=f"tl_edit_batch_{mb['id']}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state.pending_edit_batch = mb
                             st.session_state.show_batch_modal = True

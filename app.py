@@ -198,7 +198,7 @@ def render_app() -> None:
                     "➕ Add Your First Livestock Batch",
                     key="empty_add_batch_btn",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state.pending_reset = True
                     st.session_state.show_batch_modal = True
@@ -207,7 +207,7 @@ def render_app() -> None:
                 if st.button(
                     "🐾 Manage Species Presets",
                     key="empty_manage_species_btn",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state.show_species_modal = True
                     st.rerun()
