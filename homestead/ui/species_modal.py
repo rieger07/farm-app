@@ -211,7 +211,7 @@ def render_species_manager_modal(bag_weight: int) -> None:
             save_btn_label,
             key=f"sp_mgr_save_btn_{sfx}",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             target_species = (
                 species_name_input.strip().lower()
@@ -250,7 +250,7 @@ def render_species_manager_modal(bag_weight: int) -> None:
             if st.button(
                 "🗑️ Delete Preset",
                 key=f"sp_mgr_del_btn_{sfx}",
-                use_container_width=True,
+                width="stretch",
             ):
                 delete_species_preset(selected_opt)
                 st.session_state.species_mgr_selector = "__new__"
@@ -260,7 +260,7 @@ def render_species_manager_modal(bag_weight: int) -> None:
         if st.button(
             "🔄 Reset 4 Defaults",
             key="sp_mgr_reset_defaults_btn",
-            use_container_width=True,
+            width="stretch",
             help="Restore the 4 built-in presets (Chicken Eggs, Chicken Chicks, Turkey Chicks, Kunekune Pigs).",
         ):
             uid = get_active_user_id()
@@ -272,6 +272,6 @@ def render_species_manager_modal(bag_weight: int) -> None:
     st.button(
         "Close",
         key="close_species_modal_btn",
-        use_container_width=True,
+        width="stretch",
         on_click=_dismiss_species_modal,
     )

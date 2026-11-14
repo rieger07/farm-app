@@ -40,7 +40,7 @@ def render_sidebar(
                 if st.button(
                     acct_label,
                     key="sidebar_user_admin_btn",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state.show_batch_modal = False
                     st.session_state.show_species_modal = False
@@ -50,7 +50,7 @@ def render_sidebar(
                 if st.button(
                     "🚪 Log Out",
                     key="sidebar_logout_btn",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     logout_user_session()
                     st.rerun()
@@ -61,7 +61,7 @@ def render_sidebar(
             "➕ Add Livestock Batch",
             key="sidebar_add_batch_btn",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.pending_reset = True
             st.session_state.show_species_modal = False
@@ -72,7 +72,7 @@ def render_sidebar(
         if st.button(
             "🐾 Manage Species Presets",
             key="sidebar_manage_species_btn",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.show_batch_modal = False
             st.session_state.show_user_modal = False
@@ -115,7 +115,7 @@ def render_sidebar(
                 data=ics_content,
                 file_name="homestead_schedule.ics",
                 mime="text/calendar",
-                use_container_width=True,
+                width="stretch",
                 help="Download an iCalendar (.ics) file with all active batch milestones.",
             )
 
@@ -151,7 +151,7 @@ def render_sidebar(
                 data=backup_str,
                 file_name=f"homestead_plan_{date.today().isoformat()}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
             uploaded_file = st.file_uploader(
                 "Restore from JSON", type=["json"]
@@ -164,7 +164,7 @@ def render_sidebar(
             if uploaded_file is not None and st.button(
                 "📥 Import JSON Backup",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 try:
                     raw_content = uploaded_file.read().decode("utf-8")

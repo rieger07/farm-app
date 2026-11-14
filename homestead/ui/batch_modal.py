@@ -625,12 +625,12 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
         save_label,
         key="modal_save_batch_btn",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         on_click=_save_batch_modal_callback,
     )
     btn_c2.button(
         "Cancel",
         key="modal_cancel_batch_btn",
-        use_container_width=True,
+        width="stretch",
         on_click=_cancel_batch_modal_callback,
     )
