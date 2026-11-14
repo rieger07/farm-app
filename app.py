@@ -1,6 +1,7 @@
 """Homestead Planner: Poultry & Pigs — Streamlit entry point."""
 
 import os
+import time
 import streamlit as st
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
@@ -77,6 +78,14 @@ from homestead.scheduling import (
     compute_upcoming_milestones,
     get_batch_status_badge,
 )
+from homestead.telemetry import (
+    clear_telemetry_events,
+    finalize_rerun_telemetry,
+    get_telemetry_summary,
+    list_telemetry_events,
+    log_telemetry_event,
+    record_ui_action,
+)
 from homestead.ui.auth_view import (
     ensure_authenticated_user,
     login_user_session,
@@ -102,6 +111,7 @@ from homestead.ui.timeline_shim import st_timeline
 
 
 def render_app() -> None:
+    rerun_start_t0 = time.perf_counter()
     st.set_page_config(
         page_title="Homestead Planner: Poultry & Pigs",
         page_icon="🚜",
@@ -117,6 +127,7 @@ def render_app() -> None:
 
     apply_pending_editor_transitions()
 
+    db_t0 = time.perf_counter()
     barrel_capacity = get_barrel_capacity()
     bag_weight = get_bag_weight()
 
@@ -147,6 +158,8 @@ def render_app() -> None:
         )
         for b in all_batches
     ]
+    db_sched_ms = (time.perf_counter() - db_t0) * 1000.0
+    ui_t0 = time.perf_counter()
 
     filtered_schedules, filtered_active_schedules = render_sidebar(
         all_batches=all_batches,
@@ -200,6 +213,7 @@ def render_app() -> None:
                     type="primary",
                     width="stretch",
                 ):
+                    record_ui_action("Open Add First Batch Modal", event_type="modal")
                     st.session_state.pending_reset = True
                     st.session_state.show_batch_modal = True
                     st.rerun()
@@ -209,23 +223,25 @@ def render_app() -> None:
                     key="empty_manage_species_btn",
                     width="stretch",
                 ):
+                    record_ui_action("Open Species Presets Modal", event_type="modal")
                     st.session_state.show_species_modal = True
                     st.rerun()
+        finalize_rerun_telemetry(
+            current_user=current_user,
+            active_workspace=active_workspace,
+            rerun_start_t0=rerun_start_t0,
+            db_sched_ms=db_sched_ms,
+            ui_render_ms=(time.perf_counter() - ui_t0) * 1000.0,
+        )
         return
 
-    # Precompute aggregated tables & metrics for active plan
-    weekly_df, monthly_df, feed_stats = compute_combined_feed_schedule(
-        filtered_active_schedules, barrel_capacity
-    )
-    purchasing_events_df, monthly_cash_df = compute_purchasing_schedule(
-        filtered_active_schedules, bag_weight
-    )
-    roi_df = compute_roi_summary_table(filtered_active_schedules)
-    reconciliation_df = compute_reconciliation_table(filtered_active_schedules)
-    unified_fin_df = compute_unified_financials_table(filtered_active_schedules)
-    upcoming_milestones = compute_upcoming_milestones(filtered_active_schedules)
-
     if active_workspace == "🗓️ Radar & Timeline":
+        _, _, feed_stats = compute_combined_feed_schedule(
+            filtered_active_schedules, barrel_capacity
+        )
+        upcoming_milestones = compute_upcoming_milestones(
+            filtered_active_schedules
+        )
         render_radar_tab(
             filtered_active_schedules=filtered_active_schedules,
             upcoming_milestones=upcoming_milestones,
@@ -238,6 +254,12 @@ def render_app() -> None:
             all_schedules=all_schedules,
         )
     elif active_workspace == "🌾 Feed & Shopping":
+        weekly_df, monthly_df, feed_stats = compute_combined_feed_schedule(
+            filtered_active_schedules, barrel_capacity
+        )
+        purchasing_events_df, monthly_cash_df = compute_purchasing_schedule(
+            filtered_active_schedules, bag_weight
+        )
         render_feed_tab(
             weekly_df=weekly_df,
             monthly_df=monthly_df,
@@ -247,12 +269,27 @@ def render_app() -> None:
             barrel_capacity=barrel_capacity,
         )
     elif active_workspace == "💰 Financials & Freezer":
+        roi_df = compute_roi_summary_table(filtered_active_schedules)
+        reconciliation_df = compute_reconciliation_table(
+            filtered_active_schedules
+        )
+        unified_fin_df = compute_unified_financials_table(
+            filtered_active_schedules
+        )
         render_financials_tab(
             filtered_active_schedules=filtered_active_schedules,
             unified_fin_df=unified_fin_df,
             roi_df=roi_df,
             reconciliation_df=reconciliation_df,
         )
+
+    finalize_rerun_telemetry(
+        current_user=current_user,
+        active_workspace=active_workspace,
+        rerun_start_t0=rerun_start_t0,
+        db_sched_ms=db_sched_ms,
+        ui_render_ms=(time.perf_counter() - ui_t0) * 1000.0,
+    )
 
 
 __all__ = [
@@ -273,6 +310,7 @@ __all__ = [
     "add_batch_sale",
     "apply_pending_editor_transitions",
     "authenticate_user",
+    "clear_telemetry_events",
     "compute_batch_schedule",
     "compute_combined_feed_schedule",
     "compute_purchasing_schedule",
@@ -293,6 +331,7 @@ __all__ = [
     "delete_user_session",
     "ensure_authenticated_user",
     "export_backup_json",
+    "finalize_rerun_telemetry",
     "generate_ics_calendar",
     "get_active_user_id",
     "get_bag_weight",
@@ -304,6 +343,7 @@ __all__ = [
     "get_lifecycle_labels",
     "get_species_catalog",
     "get_species_defaults",
+    "get_telemetry_summary",
     "get_user_by_id",
     "get_user_by_session_token",
     "get_user_by_username",
@@ -316,10 +356,13 @@ __all__ = [
     "list_batch_losses",
     "list_batch_sales",
     "list_batches",
+    "list_telemetry_events",
     "list_users",
+    "log_telemetry_event",
     "login_user_session",
     "logout_user_session",
     "on_species_change",
+    "record_ui_action",
     "render_app",
     "render_auth_gate",
     "render_batch_editor_modal",

@@ -17,6 +17,7 @@ from homestead.database import (
     save_species_preset,
 )
 from homestead.scheduling import compute_batch_schedule
+from homestead.telemetry import record_ui_action
 
 NEW_SPECIES_OPTION = "__new_species__"
 
@@ -31,22 +32,36 @@ def on_species_change() -> None:
     st.session_state.form_lifecycle_type = str(
         defaults.get("lifecycle_type", "direct_arrival")
     )
-    st.session_state.form_days_to_birth = int(defaults["days_to_birth"])
-    st.session_state.form_starter_weeks = int(defaults["starter_weeks"])
-    st.session_state.form_starter_feed_lbs = float(defaults["starter_feed_lbs"])
-    st.session_state.form_grower_weeks = int(defaults["grower_weeks"])
-    st.session_state.form_grower_feed_lbs = float(defaults["grower_feed_lbs"])
-    st.session_state.form_starter_bag_price = float(
-        defaults["starter_bag_price"]
+    st.session_state.form_days_to_birth = min(
+        3650, max(0, int(defaults["days_to_birth"]))
     )
-    st.session_state.form_grower_bag_price = float(defaults["grower_bag_price"])
-    st.session_state.form_unit_cost = float(defaults["unit_cost"])
-    st.session_state.form_processing_cost = float(defaults["processing_cost"])
-    st.session_state.form_expected_yield_lbs = float(
-        defaults["expected_yield_lbs"]
+    st.session_state.form_starter_weeks = min(
+        520, max(0, int(defaults["starter_weeks"]))
     )
-    st.session_state.form_sale_price_per_lb = float(
-        defaults["sale_price_per_lb"]
+    st.session_state.form_starter_feed_lbs = max(
+        0.0, float(defaults["starter_feed_lbs"])
+    )
+    st.session_state.form_grower_weeks = min(
+        520, max(0, int(defaults["grower_weeks"]))
+    )
+    st.session_state.form_grower_feed_lbs = max(
+        0.0, float(defaults["grower_feed_lbs"])
+    )
+    st.session_state.form_starter_bag_price = max(
+        0.0, float(defaults["starter_bag_price"])
+    )
+    st.session_state.form_grower_bag_price = max(
+        0.0, float(defaults["grower_bag_price"])
+    )
+    st.session_state.form_unit_cost = max(0.0, float(defaults["unit_cost"]))
+    st.session_state.form_processing_cost = max(
+        0.0, float(defaults["processing_cost"])
+    )
+    st.session_state.form_expected_yield_lbs = max(
+        0.0, float(defaults["expected_yield_lbs"])
+    )
+    st.session_state.form_sale_price_per_lb = max(
+        0.0, float(defaults["sale_price_per_lb"])
     )
 
 
@@ -127,63 +142,99 @@ def apply_pending_editor_transitions() -> None:
             pending_batch.get("lifecycle_type")
             or defaults.get("lifecycle_type", "direct_arrival")
         )
-        st.session_state.form_quantity = int(pending_batch["quantity"])
+        st.session_state.form_quantity = max(1, int(pending_batch["quantity"]))
         st.session_state.form_dates = (
             date.fromisoformat(pending_batch["start_date"]),
             date.fromisoformat(pending_batch["end_date"]),
         )
-        st.session_state.form_days_to_birth = int(
-            pending_batch["days_to_birth"]
+        st.session_state.form_days_to_birth = min(
+            3650, max(0, int(pending_batch["days_to_birth"]))
         )
-        st.session_state.form_starter_weeks = int(
-            pending_batch.get("starter_weeks")
-            if pending_batch.get("starter_weeks") is not None
-            else defaults["starter_weeks"]
+        st.session_state.form_starter_weeks = min(
+            520,
+            max(
+                0,
+                int(
+                    pending_batch.get("starter_weeks")
+                    if pending_batch.get("starter_weeks") is not None
+                    else defaults["starter_weeks"]
+                ),
+            ),
         )
-        st.session_state.form_starter_feed_lbs = float(
-            pending_batch.get("starter_feed_lbs")
-            if pending_batch.get("starter_feed_lbs") is not None
-            else defaults["starter_feed_lbs"]
+        st.session_state.form_starter_feed_lbs = max(
+            0.0,
+            float(
+                pending_batch.get("starter_feed_lbs")
+                if pending_batch.get("starter_feed_lbs") is not None
+                else defaults["starter_feed_lbs"]
+            ),
         )
-        st.session_state.form_grower_weeks = int(
-            pending_batch.get("grower_weeks")
-            if pending_batch.get("grower_weeks") is not None
-            else defaults["grower_weeks"]
+        st.session_state.form_grower_weeks = min(
+            520,
+            max(
+                0,
+                int(
+                    pending_batch.get("grower_weeks")
+                    if pending_batch.get("grower_weeks") is not None
+                    else defaults["grower_weeks"]
+                ),
+            ),
         )
-        st.session_state.form_grower_feed_lbs = float(
-            pending_batch.get("grower_feed_lbs")
-            if pending_batch.get("grower_feed_lbs") is not None
-            else defaults["grower_feed_lbs"]
+        st.session_state.form_grower_feed_lbs = max(
+            0.0,
+            float(
+                pending_batch.get("grower_feed_lbs")
+                if pending_batch.get("grower_feed_lbs") is not None
+                else defaults["grower_feed_lbs"]
+            ),
         )
-        st.session_state.form_starter_bag_price = float(
-            pending_batch.get("starter_bag_price")
-            if pending_batch.get("starter_bag_price") is not None
-            else defaults["starter_bag_price"]
+        st.session_state.form_starter_bag_price = max(
+            0.0,
+            float(
+                pending_batch.get("starter_bag_price")
+                if pending_batch.get("starter_bag_price") is not None
+                else defaults["starter_bag_price"]
+            ),
         )
-        st.session_state.form_grower_bag_price = float(
-            pending_batch.get("grower_bag_price")
-            if pending_batch.get("grower_bag_price") is not None
-            else defaults["grower_bag_price"]
+        st.session_state.form_grower_bag_price = max(
+            0.0,
+            float(
+                pending_batch.get("grower_bag_price")
+                if pending_batch.get("grower_bag_price") is not None
+                else defaults["grower_bag_price"]
+            ),
         )
-        st.session_state.form_unit_cost = float(
-            pending_batch.get("unit_cost")
-            if pending_batch.get("unit_cost") is not None
-            else defaults["unit_cost"]
+        st.session_state.form_unit_cost = max(
+            0.0,
+            float(
+                pending_batch.get("unit_cost")
+                if pending_batch.get("unit_cost") is not None
+                else defaults["unit_cost"]
+            ),
         )
-        st.session_state.form_processing_cost = float(
-            pending_batch.get("processing_cost")
-            if pending_batch.get("processing_cost") is not None
-            else defaults["processing_cost"]
+        st.session_state.form_processing_cost = max(
+            0.0,
+            float(
+                pending_batch.get("processing_cost")
+                if pending_batch.get("processing_cost") is not None
+                else defaults["processing_cost"]
+            ),
         )
-        st.session_state.form_expected_yield_lbs = float(
-            pending_batch.get("expected_yield_lbs")
-            if pending_batch.get("expected_yield_lbs") is not None
-            else defaults["expected_yield_lbs"]
+        st.session_state.form_expected_yield_lbs = max(
+            0.0,
+            float(
+                pending_batch.get("expected_yield_lbs")
+                if pending_batch.get("expected_yield_lbs") is not None
+                else defaults["expected_yield_lbs"]
+            ),
         )
-        st.session_state.form_sale_price_per_lb = float(
-            pending_batch.get("sale_price_per_lb")
-            if pending_batch.get("sale_price_per_lb") is not None
-            else defaults["sale_price_per_lb"]
+        st.session_state.form_sale_price_per_lb = max(
+            0.0,
+            float(
+                pending_batch.get("sale_price_per_lb")
+                if pending_batch.get("sale_price_per_lb") is not None
+                else defaults["sale_price_per_lb"]
+            ),
         )
         st.session_state.form_active = bool(pending_batch["active"])
         st.session_state.form_notes = pending_batch.get("notes", "")
@@ -318,6 +369,7 @@ def _save_batch_modal_callback() -> None:
         batch_name or f"{order_type.title()} #{existing_count + 1}"
     )
 
+    editing_bid = st.session_state.get("editing_batch_id")
     saved_id = save_batch(
         {
             "name": resolved_name,
@@ -340,7 +392,16 @@ def _save_batch_modal_callback() -> None:
             "active": active_flag,
             "notes": notes,
         },
-        batch_id=st.session_state.get("editing_batch_id"),
+        batch_id=editing_bid,
+    )
+    record_ui_action(
+        "Update Batch" if editing_bid is not None else "Create Batch",
+        event_type="mutation",
+        details={
+            "batch_id": saved_id,
+            "species": order_type,
+            "quantity": quantity,
+        },
     )
     st.session_state.selected_batch_id = saved_id
     st.session_state.show_batch_modal = False
@@ -442,21 +503,19 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
             starter_weeks = st.number_input(
                 "Starter Phase (wks)",
                 min_value=0,
-                max_value=104,
+                max_value=520,
                 key="form_starter_weeks",
                 step=1,
             )
             starter_feed_lbs = st.number_input(
                 "Starter Feed/Head (lbs)",
                 min_value=0.0,
-                max_value=5000.0,
                 key="form_starter_feed_lbs",
                 step=1.0,
             )
             starter_bag_price = st.number_input(
                 f"Starter Bag (${bag_weight}lb)",
                 min_value=0.0,
-                max_value=500.0,
                 key="form_starter_bag_price",
                 step=1.0,
             )
@@ -465,21 +524,19 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
             grower_weeks = st.number_input(
                 "Grower/Finisher (wks)",
                 min_value=0,
-                max_value=260,
+                max_value=520,
                 key="form_grower_weeks",
                 step=1,
             )
             grower_feed_lbs = st.number_input(
                 "Grower Feed/Head (lbs)",
                 min_value=0.0,
-                max_value=10000.0,
                 key="form_grower_feed_lbs",
                 step=5.0,
             )
             grower_bag_price = st.number_input(
                 f"Grower Bag (${bag_weight}lb)",
                 min_value=0.0,
-                max_value=500.0,
                 key="form_grower_bag_price",
                 step=1.0,
             )
@@ -488,28 +545,24 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
             unit_cost = st.number_input(
                 "Acquisition $/Unit",
                 min_value=0.0,
-                max_value=5000.0,
                 key="form_unit_cost",
                 step=1.0,
             )
             processing_cost = st.number_input(
                 "Processing $/Head",
                 min_value=0.0,
-                max_value=5000.0,
                 key="form_processing_cost",
                 step=1.0,
             )
             expected_yield_lbs = st.number_input(
                 "Meat Yield (lbs/head)",
                 min_value=0.0,
-                max_value=2000.0,
                 key="form_expected_yield_lbs",
                 step=0.5,
             )
             sale_price_per_lb = st.number_input(
                 "Target Sale Price ($/lb)",
                 min_value=0.0,
-                max_value=500.0,
                 key="form_sale_price_per_lb",
                 step=0.5,
             )
@@ -526,7 +579,7 @@ def render_batch_editor_modal(barrel_capacity: int, bag_weight: int) -> None:
             days_to_birth = st.number_input(
                 "Gestation / Incubation (days)",
                 min_value=0,
-                max_value=400,
+                max_value=3650,
                 key="form_days_to_birth",
                 disabled=(st.session_state.get("form_lifecycle_type") == "direct_arrival"),
                 step=1,
