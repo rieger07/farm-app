@@ -54,3 +54,26 @@ jobs:
           subject-name: index.docker.io/asralis/farm-app
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Extract metadata (tags, labels) for Inventory Docker image
+        id: meta_inventory
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: asralis/farm-inventory
+
+      - name: Build and push Inventory Docker image
+        id: push_inventory
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./Dockerfile.inventory
+          push: true
+          tags: ${{ steps.meta_inventory.outputs.tags }}
+          labels: ${{ steps.meta_inventory.outputs.labels }}
+
+      - name: Generate artifact attestation for Inventory image
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: index.docker.io/asralis/farm-inventory
+          subject-digest: ${{ steps.push_inventory.outputs.digest }}
+          push-to-registry: true

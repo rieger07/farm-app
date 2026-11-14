@@ -7,7 +7,11 @@ import json
 import os
 import secrets
 import sqlite3
-import streamlit as st
+
+try:
+    import streamlit as st
+except ModuleNotFoundError:
+    st = None  # type: ignore[assignment]
 
 from homestead.config import (
     DEFAULT_BAG_WEIGHT,

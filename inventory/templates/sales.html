@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Sales · Hive &amp; Harvest{% endblock %}
+{% block content %}
+<div class="eyebrow">A GOOD DAY AT THE MARKET</div>
+<div class="pagehead">
+  <div><h1>Sales</h1><p class="sub">Every sale, in one place. A little less bookkeeping.</p></div>
+  <form method="get" class="row">
+    <select name="period" onchange="this.form.submit()">
+      <option value="today" {{ 'selected' if period=='today' }}>Today</option>
+      <option value="yesterday" {{ 'selected' if period=='yesterday' }}>Yesterday</option>
+      <option value="week" {{ 'selected' if period=='week' }}>Last 7 days</option>
+    </select>
+    <input type="hidden" name="source" value="{{ source }}">
+  </form>
+</div>
+
+<div class="cards four">
+  <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }} · {{ today_label }}</small></div>
+  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.zettle_count }} Zettle · {{ summary.cash_count }} cash</small></div>
+  <div class="card"><small>Average sale</small><div class="big">{{ summary.avg_cents|money }}</div><small>Per transaction</small></div>
+  <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across all products</small></div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <div class="legend"><b>Sales this week</b><span><i class="dot g"></i>Zettle <i class="dot y"></i>Cash</span></div>
+    <div class="chart">
+      {% for d in days %}
+      {% set tot = d.zettle_cents + d.cash_cents %}
+      <div class="barcol">
+        <div class="bar" title="{{ tot|money }}" style="height: {{ (tot / peak * 100)|round|int }}%">
+          <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
+          <div class="seg g" style="flex: {{ d.zettle_cents }}"></div>
+        </div>
+        <small>{{ d.label }}</small>
+      </div>
+      {% endfor %}
+    </div>
+    <small class="muted">{{ best.label }} is your strongest market day this week.</small>
+  </div>
+  <div class="card">
+    <b>Cash or card. All accounted for.</b>
+    <small class="muted block">{{ period_label|upper }} SALES BY SOURCE</small>
+    {% set tot = (summary.zettle_cents + summary.cash_cents) or 1 %}
+    <div class="split"><div class="g" style="width: {{ (summary.zettle_cents / tot * 100)|round|int }}%"></div><div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div></div>
+    <div class="srcrow"><div><b>Zettle</b><small>{{ summary.zettle_count }} sales · Card</small></div><b>{{ summary.zettle_cents|money }}</b></div>
+    <div class="srcrow"><div><b>Cash</b><small>{{ summary.cash_count }} sales · Quick sale</small></div><b>{{ summary.cash_cents|money }}</b></div>
+  </div>
+</div>
+
+<div class="card table-card">
+  <div class="filters">
+    <b>Recent transactions</b>
+    <form method="get" class="right">
+      <input type="hidden" name="period" value="{{ period }}">
+      <select name="source" onchange="this.form.submit()">
+        <option value="all">All sources</option>
+        <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle</option>
+        <option value="cash" {{ 'selected' if source=='cash' }}>Cash</option>
+      </select>
+    </form>
+  </div>
+  <table>
+    <thead><tr><th>Sale</th><th>Time</th><th>Source</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for t in txns %}
+      <tr>
+        <td>#{{ t.id }}</td><td>{{ t.local_time }}</td>
+        <td class="src {{ t.source }}">{{ t.source|capitalize }}</td>
+        <td>{{ t.units }} unit{{ '' if t.units == 1 else 's' }}</td>
+        <td><b>{{ t.total_cents|money }}</b></td>
+        <td>{{ t.status|capitalize }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No sales in this period yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="foot"><span>Zettle transactions appear here automatically. Cash sales are recorded in Quick sale.</span></div>
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+services:
+  farm-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - farm-data:/app/data
+    environment:
+      - FARM_DB_PATH=/app/data/homestead.db
+    restart: unless-stopped
+
+  inventory:
+    build:
+      context: .
+      dockerfile: Dockerfile.inventory
+    ports:
+      - "8600:8600"
+    volumes:
+      - farm-data:/app/data
+    environment:
+      - FARM_DB_PATH=/app/data/homestead.db
+      - INVENTORY_TZ=${INVENTORY_TZ:-America/New_York}
+      - INVENTORY_COOKIE_SECURE=${INVENTORY_COOKIE_SECURE:-1}
+      - ZETTLE_CLIENT_ID=${ZETTLE_CLIENT_ID:-}
+      - ZETTLE_CLIENT_SECRET=${ZETTLE_CLIENT_SECRET:-}
+      - ZETTLE_REDIRECT_URI=${ZETTLE_REDIRECT_URI:-}
+      - ZETTLE_POLL_SECONDS=${ZETTLE_POLL_SECONDS:-300}
+    restart: unless-stopped
+
+volumes:
+  farm-data:
