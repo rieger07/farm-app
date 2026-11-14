@@ -28,6 +28,26 @@ A Streamlit application for planning, comparing, and persisting multiple livesto
 - **Purchasing & Cash-Flow Schedule**: Chronological and monthly summary of when to purchase animals, Starter feed bags, Grower/Finisher feed bags, and pay butcher/processing fees.
 - **Calendar Exports**: Fixed Google Calendar all-day event links per batch (including Ration Transition reminders) plus a one-click `.ics` calendar export for all active batches.
 
+## Project Structure
+
+```text
+├── app.py                        # Streamlit entry point & backward-compatible re-exports
+├── homestead/                    # Core domain & data package
+│   ├── config.py                 # Species presets, defaults, workspace & status constants
+│   ├── database.py               # SQLite persistence, schema migrations, CRUD & JSON backup/restore
+│   ├── scheduling.py             # Batch lifecycle engine, phased feed demand & upcoming milestones
+│   ├── financials.py             # Shopping schedule, ROI summary & harvest/freezer reconciliation tables
+│   ├── calendar_export.py        # Google Calendar link builder & RFC 5545 .ics export
+│   └── ui/                       # Streamlit UI views & components
+│       ├── timeline_shim.py      # streamlit-vis-timeline loader & headless AppTest fallback
+│       ├── sidebar.py            # Minimal sidebar: Quick-Add trigger, filters, .ics & settings
+│       ├── batch_modal.py        # @st.dialog Quick-Add / Edit batch modal & form state transitions
+│       ├── radar_tab.py          # Workspace 1: 🗓️ Radar & Timeline
+│       ├── batch_logs_tab.py     # Workspace 2: 🐾 Batch Logs (losses, harvests & freezer/sales)
+│       ├── feed_tab.py           # Workspace 3: 🌾 Feed & Shopping
+│       └── financials_tab.py     # Workspace 4: 💰 Financials & Freezer
+```
+
 ## Running Locally
 
 ```bash
