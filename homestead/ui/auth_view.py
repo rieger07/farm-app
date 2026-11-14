@@ -94,7 +94,7 @@ def render_auth_gate() -> None:
 
         total_users = count_users()
         if total_users == 0:
-            with st.container(border=True):
+            with st.form("setup_admin_form", border=True):
                 st.markdown("### 🛡️ Create Administrator Account")
                 st.info(
                     "👋 **Welcome!** Create the first administrator account to secure your Homestead Planner. "
@@ -121,12 +121,13 @@ def render_auth_gate() -> None:
                     type="password",
                     key="setup_admin_password_confirm",
                 )
-                if st.button(
+                submitted_setup = st.form_submit_button(
                     "🚀 Create Admin Account & Sign In",
                     key="setup_admin_submit_btn",
                     type="primary",
                     use_container_width=True,
-                ):
+                )
+                if submitted_setup:
                     if not admin_username.strip():
                         st.error("Please enter a username.")
                     elif len(admin_pw) < 4:
@@ -158,7 +159,7 @@ def render_auth_gate() -> None:
             tab_register = None
 
         with tab_login:
-            with st.container(border=True):
+            with st.form("login_form", border=True):
                 st.markdown("### 🔐 Sign In")
                 login_username = st.text_input(
                     "Username",
@@ -169,12 +170,13 @@ def render_auth_gate() -> None:
                     type="password",
                     key="login_password_input",
                 )
-                if st.button(
+                submitted_login = st.form_submit_button(
                     "🔐 Sign In",
                     key="login_submit_btn",
                     type="primary",
                     use_container_width=True,
-                ):
+                )
+                if submitted_login:
                     user = authenticate_user(login_username, login_pw)
                     if user:
                         login_user_session(user)
@@ -188,7 +190,7 @@ def render_auth_gate() -> None:
 
         if tab_register is not None:
             with tab_register:
-                with st.container(border=True):
+                with st.form("register_form", border=True):
                     st.markdown("### 📝 Create New Account")
                     reg_username = st.text_input(
                         "Username",
@@ -209,12 +211,13 @@ def render_auth_gate() -> None:
                         type="password",
                         key="reg_password_confirm_input",
                     )
-                    if st.button(
+                    submitted_reg = st.form_submit_button(
                         "📝 Create Account & Sign In",
                         key="reg_submit_btn",
                         type="primary",
                         use_container_width=True,
-                    ):
+                    )
+                    if submitted_reg:
                         if not reg_username.strip():
                             st.error("Please enter a username.")
                         elif len(reg_pw) < 4:
@@ -263,30 +266,31 @@ def render_user_admin_modal(current_user: dict) -> None:
         tab_pw = st.container()
 
     with tab_pw:
-        st.markdown("#### 🔑 Update Your Password")
-        new_pw = st.text_input(
-            "New Password",
-            type="password",
-            key="self_new_pw_input",
-            placeholder="At least 4 characters",
-        )
-        confirm_pw = st.text_input(
-            "Confirm New Password",
-            type="password",
-            key="self_confirm_pw_input",
-        )
-        if st.button(
-            "💾 Update My Password",
-            key="self_update_pw_btn",
-            type="primary",
-        ):
-            if len(new_pw) < 4:
-                st.error("Password must be at least 4 characters.")
-            elif new_pw != confirm_pw:
-                st.error("Passwords do not match.")
-            else:
-                update_user_password(int(current_user["id"]), new_pw)
-                st.success("Password updated!")
+        with st.form("self_update_pw_form", border=True):
+            st.markdown("#### 🔑 Update Your Password")
+            new_pw = st.text_input(
+                "New Password",
+                type="password",
+                key="self_new_pw_input",
+                placeholder="At least 4 characters",
+            )
+            confirm_pw = st.text_input(
+                "Confirm New Password",
+                type="password",
+                key="self_confirm_pw_input",
+            )
+            if st.form_submit_button(
+                "💾 Update My Password",
+                key="self_update_pw_btn",
+                type="primary",
+            ):
+                if len(new_pw) < 4:
+                    st.error("Password must be at least 4 characters.")
+                elif new_pw != confirm_pw:
+                    st.error("Passwords do not match.")
+                else:
+                    update_user_password(int(current_user["id"]), new_pw)
+                    st.success("Password updated!")
 
     if tab_users is not None:
         with tab_users:
@@ -302,51 +306,52 @@ def render_user_admin_modal(current_user: dict) -> None:
                 st.rerun()
 
             st.divider()
-            st.markdown("#### ➕ Create New User Account")
-            u_c1, u_c2, u_c3 = st.columns(3)
-            with u_c1:
-                adm_new_username = st.text_input(
-                    "Username",
-                    key="adm_create_username",
-                    placeholder="e.g. neighbor_farm",
-                )
-            with u_c2:
-                adm_new_display = st.text_input(
-                    "Display Name",
-                    key="adm_create_display",
-                    placeholder="e.g. Neighbor Farm",
-                )
-            with u_c3:
-                adm_new_pw = st.text_input(
-                    "Initial Password",
-                    type="password",
-                    key="adm_create_password",
-                    placeholder="At least 4 chars",
-                )
-            adm_new_is_admin = st.checkbox(
-                "Grant Administrator privileges",
-                key="adm_create_is_admin",
-                value=False,
-            )
-            if st.button(
-                "➕ Create User Account",
-                key="adm_create_user_btn",
-                type="primary",
-            ):
-                try:
-                    created_u = create_user(
-                        username=adm_new_username,
-                        password=adm_new_pw,
-                        display_name=adm_new_display,
-                        is_admin=adm_new_is_admin,
-                        claim_unowned_data=False,
+            with st.form("adm_create_user_form", border=True):
+                st.markdown("#### ➕ Create New User Account")
+                u_c1, u_c2, u_c3 = st.columns(3)
+                with u_c1:
+                    adm_new_username = st.text_input(
+                        "Username",
+                        key="adm_create_username",
+                        placeholder="e.g. neighbor_farm",
                     )
-                    st.success(
-                        f"Created account @{created_u['username']} ({created_u['display_name']})!"
+                with u_c2:
+                    adm_new_display = st.text_input(
+                        "Display Name",
+                        key="adm_create_display",
+                        placeholder="e.g. Neighbor Farm",
                     )
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
+                with u_c3:
+                    adm_new_pw = st.text_input(
+                        "Initial Password",
+                        type="password",
+                        key="adm_create_password",
+                        placeholder="At least 4 chars",
+                    )
+                adm_new_is_admin = st.checkbox(
+                    "Grant Administrator privileges",
+                    key="adm_create_is_admin",
+                    value=False,
+                )
+                if st.form_submit_button(
+                    "➕ Create User Account",
+                    key="adm_create_user_btn",
+                    type="primary",
+                ):
+                    try:
+                        created_u = create_user(
+                            username=adm_new_username,
+                            password=adm_new_pw,
+                            display_name=adm_new_display,
+                            is_admin=adm_new_is_admin,
+                            claim_unowned_data=False,
+                        )
+                        st.success(
+                            f"Created account @{created_u['username']} ({created_u['display_name']})!"
+                        )
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
 
             st.divider()
             st.markdown("#### 📋 Existing Accounts")
@@ -356,7 +361,7 @@ def render_user_admin_modal(current_user: dict) -> None:
                 is_self = uid == int(current_user["id"])
                 role_badge = "🛡️ Admin" if u["is_admin"] else "👤 User"
                 with st.container(border=True):
-                    r_c1, r_c2, r_c3 = st.columns([2.2, 1.8, 1])
+                    r_c1, r_c2, r_c3 = st.columns([2.2, 2.2, 0.8])
                     with r_c1:
                         st.markdown(
                             f"**{u['display_name']}** (`@{u['username']}`) · {role_badge}"
@@ -364,24 +369,30 @@ def render_user_admin_modal(current_user: dict) -> None:
                         )
                         st.caption(f"Created: {u['created_at']}")
                     with r_c2:
-                        reset_pw_val = st.text_input(
-                            "Reset Password",
-                            type="password",
-                            key=f"adm_reset_pw_val_{uid}",
-                            placeholder="New password...",
-                            label_visibility="collapsed",
-                        )
+                        with st.form(f"adm_reset_pw_form_{uid}", border=False):
+                            pw_c1, pw_c2 = st.columns([1.6, 1])
+                            with pw_c1:
+                                reset_pw_val = st.text_input(
+                                    "Reset Password",
+                                    type="password",
+                                    key=f"adm_reset_pw_val_{uid}",
+                                    placeholder="New password...",
+                                    label_visibility="collapsed",
+                                )
+                            with pw_c2:
+                                if st.form_submit_button(
+                                    "🔑 Reset PW",
+                                    key=f"adm_reset_pw_btn_{uid}",
+                                    use_container_width=True,
+                                ):
+                                    try:
+                                        update_user_password(uid, reset_pw_val)
+                                        st.success(
+                                            f"Reset password for @{u['username']}."
+                                        )
+                                    except ValueError as exc:
+                                        st.error(str(exc))
                     with r_c3:
-                        if st.button(
-                            "🔑 Reset PW",
-                            key=f"adm_reset_pw_btn_{uid}",
-                            use_container_width=True,
-                        ):
-                            try:
-                                update_user_password(uid, reset_pw_val)
-                                st.success(f"Reset password for @{u['username']}.")
-                            except ValueError as exc:
-                                st.error(str(exc))
                         if not is_self:
                             if st.button(
                                 "🗑️ Delete",
