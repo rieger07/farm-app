@@ -2,7 +2,6 @@
 
 import json
 import streamlit as st
-import streamlit.components.v1 as components
 
 from homestead.database import (
     authenticate_user,
@@ -50,31 +49,42 @@ def _strip_legacy_session_query_param() -> None:
         pass
 
 
+def _render_cookie_iframe(html_snippet: str) -> None:
+    """Render an inline HTML/JS snippet via st.iframe (with fallback for Streamlit < 1.56)."""
+    iframe_fn = getattr(st, "iframe", None)
+    if callable(iframe_fn):
+        iframe_fn(html_snippet, height=1)
+    else:
+        import streamlit.components.v1 as components
+
+        components.html(html_snippet, height=0)
+
+
 def _sync_session_cookie_component() -> None:
     """Synchronize browser cookie state when a login or logout event occurs."""
     token_to_set = st.session_state.pop("_pending_cookie_set", None)
     should_clear = st.session_state.pop("_pending_cookie_clear", False)
     if token_to_set:
         safe_token_js = json.dumps(str(token_to_set))
-        components.html(
+        _render_cookie_iframe(
             f"""<script>
             (function() {{
                 var token = {safe_token_js};
                 var secure = (window.parent.location.protocol === "https:") ? "; Secure" : "";
-                window.parent.document.cookie = "{SESSION_COOKIE_NAME}=" + encodeURIComponent(token) + "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+                var cookieStr = "{SESSION_COOKIE_NAME}=" + encodeURIComponent(token) + "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{ document.cookie = cookieStr; }}
             }})();
-            </script>""",
-            height=0,
+            </script>"""
         )
     elif should_clear:
-        components.html(
+        _render_cookie_iframe(
             f"""<script>
             (function() {{
                 var secure = (window.parent.location.protocol === "https:") ? "; Secure" : "";
-                window.parent.document.cookie = "{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax" + secure;
+                var cookieStr = "{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax" + secure;
+                try {{ window.parent.document.cookie = cookieStr; }} catch (e) {{ document.cookie = cookieStr; }}
             }})();
-            </script>""",
-            height=0,
+            </script>"""
         )
 
 
