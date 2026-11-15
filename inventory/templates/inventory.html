@@ -21,11 +21,12 @@
     <select id="st"><option value="">Stock status</option><option value="in_stock">In stock</option><option value="low">Low stock</option><option value="count_needed">Count needed</option></select>
     <span class="count" id="count">{{ rows|length }} products</span>
   </div>
-  <table class="stock">
+  <!-- Desktop table view -->
+  <table class="stock desktop-table">
     <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>On hand</th><th>Status</th><th></th></tr></thead>
-    <tbody id="rows">
+    <tbody id="rows-table">
     {% for r in rows %}
-      <tr data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
+      <tr data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
         <td class="c-prod"><b>{{ r.name }}</b><small>{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}</small></td>
         <td class="c-cat">{{ r.category }}</td>
         <td class="c-price"><b>{{ r.price_cents|money }}</b></td>
@@ -47,6 +48,43 @@
     {% endfor %}
     </tbody>
   </table>
+
+  <!-- Mobile cards view -->
+  <div class="mobile-cards" id="rows-cards">
+    {% for r in rows %}
+      <div class="inv-card" data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
+        <div class="inv-card-head">
+          <div>
+            <b class="inv-name">{{ r.name }}</b>
+            <small class="muted">{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}{% if r.category %} · {{ r.category }}{% endif %}</small>
+          </div>
+          <div class="inv-status">
+            {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
+            {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
+            {% else %}<span class="pill red">Count needed</span>{% endif %}
+          </div>
+        </div>
+        <div class="inv-card-stats">
+          <div class="inv-stat">
+            <small class="muted">Price</small>
+            <b>{{ r.price_cents|money }}</b>
+          </div>
+          <div class="inv-stat text-right">
+            <small class="muted">On hand</small>
+            <b>{{ r.on_hand }} <small class="inline">units</small></b>
+          </div>
+        </div>
+        <div class="inv-card-act">
+          <button type="button" class="btn primary wide-btn"
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
+            Count / Adjust Stock
+          </button>
+        </div>
+      </div>
+    {% else %}
+      <div class="empty emptyrow" style="padding: 24px;">No products synced yet. Connect Zettle and click Sync now in Settings.</div>
+    {% endfor %}
+  </div>
   <div class="foot"><span>Showing <span id="shown">{{ rows|length }}</span> of {{ rows|length }} products</span><span>Stock updates automatically after every sale.</span></div>
 </div>
 
@@ -92,9 +130,17 @@
 const q=document.getElementById('q'),cat=document.getElementById('cat'),st=document.getElementById('st');
 function filt(){
   let n=0;
-  document.querySelectorAll('#rows tr[data-text]').forEach(tr=>{
-    const ok=tr.dataset.text.includes(q.value.toLowerCase())&&(!cat.value||tr.dataset.cat===cat.value)&&(!st.value||tr.dataset.st===st.value);
-    tr.hidden=!ok; if(ok)n++;
+  const qval = q.value.toLowerCase();
+  const cval = cat.value;
+  const sval = st.value;
+  document.querySelectorAll('#rows-table tr[data-item]').forEach(el => {
+    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && (!sval || el.dataset.st === sval);
+    el.hidden = !ok;
+    if (ok) n++;
+  });
+  document.querySelectorAll('#rows-cards .inv-card[data-item]').forEach(el => {
+    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && (!sval || el.dataset.st === sval);
+    el.hidden = !ok;
   });
   document.getElementById('shown').textContent=n;
   document.getElementById('count').textContent=n+' products';

@@ -315,8 +315,9 @@ class WebTest(unittest.TestCase):
         inv = c.get("/inventory").text
         self.assertIn("iron ledger", inv)
         self.assertNotIn("hive", inv.lower())
-        self.assertIn('class="stock"', inv)
-        self.assertIn("c-act", inv)
+        self.assertIn("desktop-table", inv)
+        self.assertIn("mobile-cards", inv)
+        self.assertIn("inv-card", inv)
 
 
 if __name__ == "__main__":
