@@ -39,7 +39,7 @@
         <td class="c-act" style="text-align:right">
           <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
-            Count / Adjust
+            Update
           </button>
         </td>
       </tr>
@@ -75,7 +75,7 @@
           </div>
           <button type="button" class="btn inv-adjust-btn"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
-            Count / Adjust
+            Update
           </button>
         </div>
       </div>
