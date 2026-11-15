@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Accept Invite · Hive &amp; Harvest{% endblock %}
+{% block title %}Accept Invite · iron ledger{% endblock %}
 {% block body %}
 <div class="login">
   <div class="card" style="width:100%;max-width:400px">
-    <div class="brand">hive &amp; harvest</div>
+    <div class="brand">iron ledger</div>
     {% if not invite or not invite.valid %}
       <h1>Invite unavailable</h1>
       <p class="err">This invite link has expired or has already been used. Ask your administrator for a fresh link.</p>
@@ -13,14 +13,14 @@
         <h1>Join {{ invite.merchant_name }}</h1>
         <p class="sub" style="margin:0 0 12px">You've been invited as <b>{{ invite.role }}</b>. Choose your username and password below.</p>
       {% else %}
-        <h1>Set up your apiary</h1>
+        <h1>Set up your workspace</h1>
         <p class="sub" style="margin:0 0 12px">Create your workspace and owner account below.</p>
       {% endif %}
       {% if error %}<p class="err" style="margin-bottom:10px">{{ error }}</p>{% endif %}
       <form method="post" action="/invite/{{ token }}" style="display:flex;flex-direction:column;gap:12px">
         {% if not invite.merchant_id %}
-          <label>Apiary / Merchant name
-            <input name="merchant_name" value="{{ invite.default_merchant_name }}" placeholder="Willow Creek Apiary" required autofocus>
+          <label>Business name
+            <input name="merchant_name" value="{{ invite.default_merchant_name }}" placeholder="Your business name" required autofocus>
           </label>
         {% endif %}
         <label>Your display name

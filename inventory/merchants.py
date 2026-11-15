@@ -384,7 +384,7 @@ def redeem_invite(
         chosen_name = (
             merchant_name.strip()
             or inv["default_merchant_name"]
-            or "My Apiary"
+            or "My Business"
         )
         mid = create_merchant(chosen_name, int(user_id))
     conn = get_connection()

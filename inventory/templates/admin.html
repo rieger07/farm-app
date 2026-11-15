@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Super Admin · Hive &amp; Harvest{% endblock %}
+{% block title %}Super Admin · iron ledger{% endblock %}
 {% block content %}
 <div class="eyebrow">PLATFORM ADMINISTRATION</div>
 <div class="pagehead">
@@ -17,12 +17,12 @@
 </div>
 {% endif %}
 
-<div class="cards two" style="grid-template-columns:1fr 1fr">
+<div class="cards two even">
   <div class="card">
     <h2>1. Create tenant workspace directly</h2>
     <p class="sub">Create Zach's workspace now and optionally set up his owner login in one step.</p>
     <form method="post" action="/admin/merchants/create" style="display:flex;flex-direction:column;gap:10px">
-      <input name="merchant_name" placeholder="Merchant / Apiary name (e.g. Zach's Honey)" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="merchant_name" placeholder="Business name (e.g. Zach's Honey)" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <input name="owner_username" placeholder="Owner username (optional, e.g. zach)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <input name="owner_display_name" placeholder="Owner display name (optional, e.g. Zach)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <input name="owner_password" type="password" placeholder="Owner password (if creating new user)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">

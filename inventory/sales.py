@@ -157,12 +157,32 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
     return out
 
 
+def count_sales(
+    merchant_id: int, since_iso: str, until_iso: str, source: str | None = None
+) -> int:
+    sql = (
+        "SELECT COUNT(*) FROM sales WHERE merchant_id = ?"
+        " AND occurred_at >= ? AND occurred_at < ?"
+    )
+    args: list = [int(merchant_id), since_iso, until_iso]
+    if source in ("zettle", "cash"):
+        sql += " AND source = ?"
+        args.append(source)
+    conn = get_connection()
+    try:
+        return int(conn.execute(sql, args).fetchone()[0])
+    finally:
+        conn.close()
+
+
 def recent_sales(
     merchant_id: int, since_iso: str, until_iso: str,
-    source: str | None = None, limit: int = 50,
+    source: str | None = None, limit: int = 25, offset: int = 0,
 ) -> list[dict]:
+    """Newest-first sales in [since, until), each with its line items attached."""
     sql = (
         "SELECT s.id, s.source, s.occurred_at, s.total_cents, s.status,"
+        " s.payment_type, s.cash_received_cents,"
         " COALESCE((SELECT SUM(quantity) FROM sale_items WHERE sale_id = s.id), 0) AS units"
         " FROM sales s WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
     )
@@ -170,8 +190,53 @@ def recent_sales(
     if source in ("zettle", "cash"):
         sql += " AND s.source = ?"
         args.append(source)
-    sql += " ORDER BY s.occurred_at DESC, s.id DESC LIMIT ?"
-    args.append(int(limit))
+    sql += " ORDER BY s.occurred_at DESC, s.id DESC LIMIT ? OFFSET ?"
+    args += [int(limit), int(offset)]
+    conn = get_connection()
+    try:
+        sales = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        if sales:
+            ids = [s["id"] for s in sales]
+            marks = ",".join("?" * len(ids))
+            items = conn.execute(
+                "SELECT sale_id, name_snapshot, quantity, unit_price_cents"
+                f" FROM sale_items WHERE sale_id IN ({marks}) ORDER BY id",
+                ids,
+            ).fetchall()
+        else:
+            items = []
+    finally:
+        conn.close()
+    by_sale: dict[int, list[dict]] = {}
+    for it in items:
+        d = dict(it)
+        d["subtotal_cents"] = d["quantity"] * d["unit_price_cents"]
+        by_sale.setdefault(d["sale_id"], []).append(d)
+    for s in sales:
+        s["items"] = by_sale.get(s["id"], [])
+        rec = s["cash_received_cents"]
+        s["change_cents"] = (rec - s["total_cents"]) if rec is not None else None
+    return sales
+
+
+def export_rows(
+    merchant_id: int, since_iso: str, until_iso: str, source: str | None = None
+) -> list[dict]:
+    """One row per sale line item (sales with no items still produce one row)."""
+    sql = (
+        "SELECT s.id AS sale_id, s.occurred_at, s.source, s.payment_type, s.status,"
+        " u.username AS cashier, i.name_snapshot AS item, i.quantity,"
+        " i.unit_price_cents, s.total_cents"
+        " FROM sales s"
+        " LEFT JOIN sale_items i ON i.sale_id = s.id"
+        " LEFT JOIN users u ON u.id = s.created_by"
+        " WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
+    )
+    args: list = [int(merchant_id), since_iso, until_iso]
+    if source in ("zettle", "cash"):
+        sql += " AND s.source = ?"
+        args.append(source)
+    sql += " ORDER BY s.occurred_at ASC, s.id ASC, i.id ASC"
     conn = get_connection()
     try:
         return [dict(r) for r in conn.execute(sql, args).fetchall()]

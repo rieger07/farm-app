@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#2d5a43">
   <link rel="manifest" href="/manifest.webmanifest">
-  <title>{% block title %}Hive &amp; Harvest{% endblock %}</title>
+  <title>{% block title %}iron ledger{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 {% block body %}
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand">hive &amp; harvest<small>THE APIARY WORKSPACE</small></div>
+    <div class="brand">iron ledger<small>INVENTORY &amp; SALES</small></div>
     <div class="side-label">WORKSPACE</div>
     {% if ctx.workspaces|length > 1 or (ctx.is_admin and ctx.workspaces|length > 0) %}
     <form method="post" action="/switch-merchant" style="margin:0 4px 12px">
@@ -29,7 +29,7 @@
       <a href="{{ path }}" class="{{ 'on' if key == active }}"><span>{{ '%02d' % loop.index }}</span>{{ label }}</a>
       {% endfor %}
     </nav>
-    <div class="tagline"><b>Made for the way you grow.</b><p>From hive to market, all in one place.</p></div>
+    <div class="tagline"><b>Built for the market stall.</b><p>Stock, sales and cash, all in one place.</p></div>
     <div class="who">
       <b>{{ ctx.membership.merchant_name }}</b>
       <small>{{ ctx.user.display_name }} · {{ ctx.role }}{% if ctx.is_admin %} · super admin{% endif %}</small>

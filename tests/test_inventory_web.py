@@ -262,6 +262,62 @@ class WebTest(unittest.TestCase):
         )
         self.assertEqual(marty2.get("/").headers["location"], "/quick-sale")
 
+    def test_sales_ranges_accordion_and_csv(self):
+        import csv
+        import io
+        from datetime import datetime, timedelta
+
+        c = self.client("zach")
+        # Ring a cash sale now so there is a sale with detail to expand.
+        conn = get_connection()
+        sku = conn.execute("SELECT id FROM skus WHERE sku_code='CL-250'").fetchone()["id"]
+        conn.close()
+        c.post("/api/cash-sale", json={"client_uuid": "csv-1", "cash_received_cents": 2000,
+                                       "items": [{"sku_id": sku, "quantity": 2}]})
+        page = c.get("/sales?period=today")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('<details class="sale">', page.text)
+        self.assertIn("2 × Clover honey", page.text)
+        self.assertIn("Change given", page.text)  # cash received $20 vs $18 total
+        self.assertIn("Today", page.text)
+
+        for url in ("/sales?period=yesterday", "/sales?period=month", "/sales?period=week&limit=50"):
+            self.assertEqual(c.get(url).status_code, 200, url)
+
+        # Custom range, including a reversed one and a garbage one (falls back, no crash)
+        today = datetime.utcnow().date()
+        a, b = (today - timedelta(days=45)).isoformat(), today.isoformat()
+        long = c.get(f"/sales?period=custom&from={a}&to={b}")
+        self.assertEqual(long.status_code, 200)
+        self.assertIn("Sales by week", long.text)  # >31 days groups by week
+        self.assertEqual(c.get(f"/sales?period=custom&from={b}&to={a}").status_code, 200)
+        self.assertEqual(c.get("/sales?period=custom&from=nope&to=").status_code, 200)
+
+        # CSV: one row per line item, same range semantics, formula-safe
+        resp = c.get(f"/sales/export.csv?period=custom&from={a}&to={b}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/csv", resp.headers["content-type"])
+        self.assertIn("ironledger-sales-", resp.headers["content-disposition"])
+        rows = list(csv.DictReader(io.StringIO(resp.text)))
+        self.assertTrue(rows)
+        mine = [r for r in rows if r["item"] == "Clover honey · 250 g jar" and r["quantity"] == "2"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual((mine[0]["line_subtotal"], mine[0]["sale_total"]), ("18.00", "18.00"))
+        only_cash = c.get("/sales/export.csv?period=week&source=cash").text
+        self.assertNotIn(",zettle,", only_cash)
+
+        # Staff cannot export
+        marty = self.client("marty")
+        self.assertEqual(marty.get("/sales/export.csv").status_code, 303)
+
+    def test_branding_and_inventory_cards(self):
+        c = self.client("zach")
+        inv = c.get("/inventory").text
+        self.assertIn("iron ledger", inv)
+        self.assertNotIn("hive", inv.lower())
+        self.assertIn('class="stock"', inv)
+        self.assertIn("c-act", inv)
+
 
 if __name__ == "__main__":
     unittest.main()

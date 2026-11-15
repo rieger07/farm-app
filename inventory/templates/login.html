@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ 'Setup' if first_run else 'Sign in' }} · Hive &amp; Harvest{% endblock %}
+{% block title %}{{ 'Setup' if first_run else 'Sign in' }} · iron ledger{% endblock %}
 {% block body %}
 <div class="login">
   <form method="post" action="/login" class="card">
-    <div class="brand">hive &amp; harvest</div>
+    <div class="brand">iron ledger</div>
     {% if first_run %}
       <h1>Set up your workspace</h1>
       <p class="sub" style="margin:0">Create your owner account (or sign in with your existing farm-app account) to create the first merchant.</p>
@@ -12,7 +12,7 @@
     {% endif %}
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     {% if first_run %}
-      <label>Apiary / Merchant name<input name="merchant_name" placeholder="Willow Creek Apiary" required autofocus></label>
+      <label>Business name<input name="merchant_name" placeholder="Your business name" required autofocus></label>
       <label>Your display name<input name="display_name" placeholder="Zach"></label>
     {% endif %}
     <label>Username<input name="username" autocomplete="username" autocapitalize="none" required {{ '' if first_run else 'autofocus' }}></label>

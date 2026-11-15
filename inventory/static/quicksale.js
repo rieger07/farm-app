@@ -1,6 +1,6 @@
 (() => {
   const SKUS = JSON.parse(document.getElementById('skus').textContent);
-  const QKEY = 'hh_cash_queue';
+  const QKEY = 'hh_cash_queue'; // legacy key name kept so queued sales survive the rename
   const cart = {}; // sku_id -> qty
   let cat = '', query = '';
   const $ = id => document.getElementById(id);

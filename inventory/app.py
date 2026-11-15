@@ -1,16 +1,18 @@
 """FastAPI web app: Inventory, Sales, Quick sale, Invites, and Super Admin pages."""
 
 import asyncio
+import csv
+import io
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -48,6 +50,8 @@ from inventory.merchants import (
     set_user_admin,
 )
 from inventory.sales import (
+    count_sales,
+    export_rows,
     money,
     recent_sales,
     record_cash_sale,
@@ -84,7 +88,7 @@ async def lifespan(_: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="Hive & Harvest", lifespan=lifespan)
+app = FastAPI(title="iron ledger", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.filters["money"] = money
@@ -94,14 +98,81 @@ def local_tz() -> ZoneInfo:
     return ZoneInfo(os.environ.get("INVENTORY_TZ", "America/New_York"))
 
 
-def local_day_bounds(day_offset: int = 0) -> tuple[str, str]:
-    """UTC ISO bounds [start, end) of the local day offset from today."""
+def utc_bounds(d0: date, d1: date) -> tuple[str, str]:
+    """UTC ISO bounds [start, end) for the local dates d0 (inclusive) to d1 (exclusive)."""
     tz = local_tz()
-    today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    start = today + timedelta(days=day_offset)
-    end = start + timedelta(days=1)
-    to_utc = lambda d: d.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
-    return to_utc(start), to_utc(end)
+
+    def conv(d: date) -> str:
+        local = datetime(d.year, d.month, d.day, tzinfo=tz)
+        return local.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+    return conv(d0), conv(d1)
+
+
+def to_local(occurred_at: str) -> datetime:
+    return datetime.fromisoformat(occurred_at).replace(tzinfo=timezone.utc).astimezone(local_tz())
+
+
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+MAX_RANGE_DAYS = 366
+
+
+def resolve_range(period: str, date_from: str = "", date_to: str = "") -> dict:
+    """Turn a period choice into local date bounds plus the window the chart covers."""
+    today = datetime.now(local_tz()).date()
+    one = timedelta(days=1)
+    if period == "custom":
+        d0, d1 = _parse_date(date_from), _parse_date(date_to)
+        if d0 and d1:
+            if d0 > d1:
+                d0, d1 = d1, d0
+            start, end = max(d0, d1 - timedelta(days=MAX_RANGE_DAYS - 1)), d1 + one
+            label = (
+                start.strftime("%b %-d, %Y") if start == d1
+                else f"{start.strftime('%b %-d, %Y')} – {d1.strftime('%b %-d, %Y')}"
+            )
+            return {"period": "custom", "label": label, "start": start, "end": end,
+                    "chart_start": start, "chart_end": end,
+                    "date_from": start.isoformat(), "date_to": d1.isoformat()}
+        period = "week"  # incomplete custom range: fall back
+    if period == "yesterday":
+        start, end, label = today - one, today, "Yesterday"
+    elif period == "month":
+        start, end, label = today - timedelta(days=29), today + one, "Last 30 days"
+    elif period == "week":
+        start, end, label = today - timedelta(days=6), today + one, "Last 7 days"
+    else:
+        period, start, end, label = "today", today, today + one, "Today"
+    if period in ("today", "yesterday"):
+        chart_start, chart_end = today - timedelta(days=6), today + one
+    else:
+        chart_start, chart_end = start, end
+    return {"period": period, "label": label, "start": start, "end": end,
+            "chart_start": chart_start, "chart_end": chart_end,
+            "date_from": start.isoformat(), "date_to": (end - one).isoformat()}
+
+
+def chart_buckets(chart_start: date, chart_end: date) -> list[dict]:
+    """Daily buckets for up to 31 days, weekly buckets beyond that."""
+    n = (chart_end - chart_start).days
+    step = 1 if n <= 31 else 7
+    out, d = [], chart_start
+    while d < chart_end:
+        nxt = min(d + timedelta(days=step), chart_end)
+        if step == 7:
+            label, title = d.strftime("%b %-d"), f"Week of {d.strftime('%b %-d')}"
+        else:
+            label = d.strftime("%a") if n <= 7 else d.strftime("%-d")
+            title = d.strftime("%a %b %-d")
+        out.append({"d0": d, "d1": nxt, "label": label, "title": title})
+        d = nxt
+    return out
 
 
 class Ctx:
@@ -279,7 +350,7 @@ def login(
     user = authenticate_user(username, password)
     created_mid = None
     if first_run:
-        clean_merchant = merchant_name.strip() or f"{display_name.strip() or username.strip()}'s Apiary"
+        clean_merchant = merchant_name.strip() or f"{display_name.strip() or username.strip()}'s Business"
         if not user:
             if get_user_by_username(username):
                 return templates.TemplateResponse(
@@ -452,47 +523,100 @@ def inventory_update_stock(
     return RedirectResponse(f"/inventory?msg={quote_plus(msg)}", status_code=303)
 
 
+def _sales_query(period: str, date_from: str, date_to: str) -> dict:
+    rng = resolve_range(period, date_from, date_to)
+    rng["since"], rng["until"] = utc_bounds(rng["start"], rng["end"])
+    return rng
+
+
 @app.get("/sales")
 def sales_page(
-    request: Request, period: str = "today", source: str = "all",
+    request: Request,
+    period: str = "today",
+    source: str = "all",
+    date_from: str = Query("", alias="from"),
+    date_to: str = Query("", alias="to"),
+    limit: int = 25,
     ctx: Ctx = Depends(require("sales")),
 ):
-    if period == "week":
-        since, _ = local_day_bounds(-6)
-        _, until = local_day_bounds(0)
-        label = "Last 7 days"
-    elif period == "yesterday":
-        since, until = local_day_bounds(-1)
-        label = "Yesterday"
-    else:
-        period = "today"
-        since, until = local_day_bounds(0)
-        label = "Today"
-    summary = sales_summary(ctx.merchant_id, since, until)
+    rng = _sales_query(period, date_from, date_to)
+    src = None if source == "all" else source
+    limit = max(25, min(int(limit), 500))
+    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"])
 
     days = []
-    for i in range(7):
-        s, e = local_day_bounds(-6 + i)
-        d = sales_summary(ctx.merchant_id, s, e)
-        local = datetime.fromisoformat(s).replace(tzinfo=timezone.utc).astimezone(local_tz())
-        days.append({"label": local.strftime("%a"), "zettle_cents": d["zettle_cents"],
-                     "cash_cents": d["cash_cents"]})
+    for b in chart_buckets(rng["chart_start"], rng["chart_end"]):
+        s0, s1 = utc_bounds(b["d0"], b["d1"])
+        d = sales_summary(ctx.merchant_id, s0, s1)
+        days.append({"label": b["label"], "title": b["title"],
+                     "zettle_cents": d["zettle_cents"], "cash_cents": d["cash_cents"]})
     peak = max((d["zettle_cents"] + d["cash_cents"] for d in days), default=0) or 1
     best = max(days, key=lambda d: d["zettle_cents"] + d["cash_cents"])
 
-    txns = recent_sales(ctx.merchant_id, since, until,
-                        None if source == "all" else source)
-    tz = local_tz()
+    txns = recent_sales(ctx.merchant_id, rng["since"], rng["until"], src, limit=limit)
+    total_count = count_sales(ctx.merchant_id, rng["since"], rng["until"], src)
+    today = datetime.now(local_tz()).date()
     for t in txns:
-        t["local_time"] = (
-            datetime.fromisoformat(t["occurred_at"]).replace(tzinfo=timezone.utc)
-            .astimezone(tz).strftime("%-I:%M %p").lower()
+        local = to_local(t["occurred_at"])
+        t["date_label"] = (
+            "Today" if local.date() == today
+            else "Yesterday" if local.date() == today - timedelta(days=1)
+            else local.strftime("%b %-d")
         )
+        t["time_label"] = local.strftime("%-I:%M %p").lower()
+        t["full_label"] = local.strftime("%a %b %-d, %Y · %-I:%M %p").replace("AM", "am").replace("PM", "pm")
+
+    export_qs = f"period={rng['period']}&source={source}"
+    if rng["period"] == "custom":
+        export_qs += f"&from={rng['date_from']}&to={rng['date_to']}"
     return render(
         request, "sales.html", ctx, "sales",
         summary=summary, days=days, peak=peak, best=best, txns=txns,
-        period=period, period_label=label, source=source,
-        today_label=datetime.now(tz).strftime("%-d %b %Y"),
+        period=rng["period"], period_label=rng["label"], source=source,
+        date_from=rng["date_from"], date_to=rng["date_to"],
+        today_label=datetime.now(local_tz()).strftime("%-d %b %Y"),
+        total_count=total_count, has_more=len(txns) < total_count, next_limit=limit + 25,
+        export_qs=export_qs, weekly=(rng["chart_end"] - rng["chart_start"]).days > 31,
+    )
+
+
+def _csv_safe(value) -> str:
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+@app.get("/sales/export.csv")
+def sales_export(
+    period: str = "today",
+    source: str = "all",
+    date_from: str = Query("", alias="from"),
+    date_to: str = Query("", alias="to"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    rng = _sales_query(period, date_from, date_to)
+    rows = export_rows(
+        ctx.merchant_id, rng["since"], rng["until"], None if source == "all" else source
+    )
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["sale_id", "date", "time", "source", "payment_type", "status", "cashier",
+                "item", "quantity", "unit_price", "line_subtotal", "sale_total"])
+    dollars = lambda c: f"{c / 100:.2f}"
+    for r in rows:
+        local = to_local(r["occurred_at"])
+        sign = -1 if r["status"] == "refunded" else 1
+        qty, unit = r["quantity"], r["unit_price_cents"]
+        w.writerow([
+            r["sale_id"], local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S"),
+            r["source"], r["payment_type"] or "", r["status"], r["cashier"] or "",
+            _csv_safe(r["item"]), "" if qty is None else qty,
+            "" if unit is None else dollars(unit),
+            "" if qty is None else dollars(sign * qty * unit), dollars(r["total_cents"]),
+        ])
+    name = f"ironledger-sales-{rng['date_from']}_to_{rng['date_to']}.csv"
+    return Response(
+        buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 
