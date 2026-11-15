@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS skus (
     currency TEXT NOT NULL DEFAULT 'USD',
     active INTEGER NOT NULL DEFAULT 1,
     low_stock_threshold INTEGER NOT NULL DEFAULT 10,
+    show_in_quick_sale INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL,
     UNIQUE (merchant_id, zettle_product_uuid, zettle_variant_uuid),
     FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
@@ -155,6 +156,9 @@ def init_inventory_db() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(sales)")}
         if "payment_type" not in cols:  # added after the first schema version
             conn.execute("ALTER TABLE sales ADD COLUMN payment_type TEXT")
+        sku_cols = {r["name"] for r in conn.execute("PRAGMA table_info(skus)")}
+        if "show_in_quick_sale" not in sku_cols:
+            conn.execute("ALTER TABLE skus ADD COLUMN show_in_quick_sale INTEGER NOT NULL DEFAULT 1")
         conn.commit()
     finally:
         conn.close()

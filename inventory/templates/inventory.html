@@ -38,7 +38,7 @@
     {% for r in rows %}
       {% set desktop_meta = [r.sku_code, r.variant_name]|select|join(' · ') %}
       <tr data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
-        <td class="c-prod"><b>{{ r.name }}</b>{% if desktop_meta %}<small>{{ desktop_meta }}</small>{% endif %}</td>
+        <td class="c-prod"><b>{{ r.name }}</b>{% if desktop_meta %}<small>{{ desktop_meta }}</small>{% endif %}{% if not r.show_in_quick_sale %}<small class="muted">Hidden from Quick Sale</small>{% endif %}</td>
         <td class="c-cat">{{ r.category }}</td>
         <td class="c-price"><b>{{ r.price_cents|money }}</b></td>
         <td class="c-onhand"><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
@@ -50,7 +50,7 @@
         </td>
         <td class="c-act" style="text-align:right">
           <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
-            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }})'>
             Update
           </button>
         </td>
@@ -70,6 +70,7 @@
           <div>
             <b class="inv-name">{{ r.name }}</b>
             {% if mobile_meta %}<small class="muted">{{ mobile_meta }}</small>{% endif %}
+            {% if not r.show_in_quick_sale %}<small class="muted">Hidden from Quick Sale</small>{% endif %}
           </div>
           <div class="inv-status">
             {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
@@ -88,7 +89,7 @@
             <span class="inv-price-val">{{ r.price_cents|money }}</span>
           </div>
           <button type="button" class="btn inv-adjust-btn"
-            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }})'>
             Update
           </button>
         </div>
@@ -130,6 +131,11 @@
     </label>
     <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Note (optional)
       <input type="text" name="note" placeholder="e.g. Initial count, Jarred batch #4, Broken jar" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <input type="hidden" name="quick_sale_present" value="1">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+      <input type="checkbox" name="show_in_quick_sale" id="sm-qs" value="1" style="width:16px;height:16px;accent-color:var(--green)">
+      Show on Quick Sale screen
     </label>
     <div class="row" style="justify-content:flex-end;margin-top:6px">
       <button type="button" class="btn" onclick="document.getElementById('stockm').close()">Cancel</button>
@@ -174,7 +180,7 @@ function toggleAttention() {
 [q,cat,st].forEach(e=>e.addEventListener('input',filt));
 
 let currentOnHand = 0;
-function openStockModal(skuId, title, onHand, threshold) {
+function openStockModal(skuId, title, onHand, threshold, showQs) {
   currentOnHand = onHand;
   document.getElementById('sm-sku').value = skuId;
   document.getElementById('sm-title').textContent = title;
@@ -182,6 +188,7 @@ function openStockModal(skuId, title, onHand, threshold) {
   document.getElementById('sm-mode').value = 'set';
   document.getElementById('sm-qty').value = onHand;
   document.getElementById('sm-thresh').value = threshold;
+  document.getElementById('sm-qs').checked = Boolean(showQs);
   syncModeLabel();
   loadStockHistory(skuId);
   document.getElementById('stockm').showModal();

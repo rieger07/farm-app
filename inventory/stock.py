@@ -91,6 +91,21 @@ def set_low_stock_threshold(
         conn.close()
 
 
+def set_quick_sale_visibility(
+    merchant_id: int, sku_id: int, show: bool
+) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE skus SET show_in_quick_sale = ?"
+            " WHERE id = ? AND merchant_id = ?",
+            (1 if show else 0, int(sku_id), int(merchant_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_stock(merchant_id: int) -> list[dict]:
     """Active SKUs with derived on-hand quantity and status."""
     conn = get_connection()

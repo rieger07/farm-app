@@ -62,6 +62,7 @@ from inventory.stock import (
     list_sku_history,
     list_stock,
     set_low_stock_threshold,
+    set_quick_sale_visibility,
     set_stock_count,
 )
 
@@ -515,11 +516,15 @@ def inventory_update_stock(
     mode: str = Form("set"),
     quantity: int = Form(...),
     low_stock_threshold: int = Form(10),
+    quick_sale_present: str = Form(""),
+    show_in_quick_sale: bool = Form(False),
     note: str = Form(""),
     ctx: Ctx = Depends(require("inventory")),
 ):
     try:
         set_low_stock_threshold(ctx.merchant_id, sku_id, low_stock_threshold)
+        if quick_sale_present:
+            set_quick_sale_visibility(ctx.merchant_id, sku_id, show_in_quick_sale)
         if mode == "set":
             set_stock_count(
                 ctx.merchant_id, sku_id, quantity, note=note, created_by=ctx.user["id"]
@@ -650,7 +655,8 @@ def sales_export(
         qty, unit = r["quantity"], r["unit_price_cents"]
         w.writerow([
             r["sale_id"], local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S"),
-            r["source"], r["payment_type"] or "", r["status"], r["cashier"] or "",
+            r["source"], r["payment_type"] or ("cash" if r["source"] == "cash" else ""),
+            r["status"], r["cashier"] or "",
             _csv_safe(r["item"]), "" if qty is None else qty,
             "" if unit is None else dollars(unit),
             "" if qty is None else dollars(sign * qty * unit), dollars(r["total_cents"]),
@@ -669,6 +675,7 @@ def quick_sale_page(request: Request, ctx: Ctx = Depends(require("quick_sale")))
          "category": r["category"], "price_cents": r["price_cents"],
          "on_hand": r["on_hand"]}
         for r in list_stock(ctx.merchant_id)
+        if r.get("show_in_quick_sale", 1)
     ]
     return render(
         request, "quick_sale.html", ctx, "quick_sale",

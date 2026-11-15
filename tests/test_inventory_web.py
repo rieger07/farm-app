@@ -303,6 +303,7 @@ class WebTest(unittest.TestCase):
         mine = [r for r in rows if r["item"] == "Clover honey · 250 g jar" and r["quantity"] == "2"]
         self.assertEqual(len(mine), 1)
         self.assertEqual((mine[0]["line_subtotal"], mine[0]["sale_total"]), ("18.00", "18.00"))
+        self.assertEqual((mine[0]["source"], mine[0]["payment_type"]), ("cash", "cash"))
         only_cash = c.get("/sales/export.csv?period=week&source=cash").text
         self.assertNotIn(",zettle,", only_cash)
 
@@ -359,6 +360,30 @@ class WebTest(unittest.TestCase):
         staff = self.client("marty")
         r_staff = staff.get(f"/api/stock/{sku_id}/history", follow_redirects=False)
         self.assertEqual(r_staff.status_code, 403)
+
+    def test_hide_sku_from_quick_sale(self):
+        c = self.client("zach")
+        conn = get_connection()
+        row = conn.execute("SELECT id, name FROM skus LIMIT 1").fetchone()
+        conn.close()
+        sku_id, sku_name = row["id"], row["name"]
+
+        self.assertIn(f'"id": {sku_id},', c.get("/quick-sale").text)
+        r_hide = c.post(
+            "/inventory/stock",
+            data={"sku_id": str(sku_id), "mode": "set", "quantity": "5", "quick_sale_present": "1"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_hide.status_code, 303)
+        self.assertNotIn(f'"id": {sku_id},', c.get("/quick-sale").text)
+        self.assertIn("Hidden from Quick Sale", c.get("/inventory").text)
+
+        c.post(
+            "/inventory/stock",
+            data={"sku_id": str(sku_id), "mode": "set", "quantity": "5", "quick_sale_present": "1", "show_in_quick_sale": "1"},
+            follow_redirects=False,
+        )
+        self.assertIn(f'"id": {sku_id},', c.get("/quick-sale").text)
 
 
 if __name__ == "__main__":
