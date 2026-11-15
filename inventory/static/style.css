@@ -101,17 +101,56 @@ details.sale[open]{background:#faf9f3}
 @media(max-width:800px){
   details.sale summary{grid-template-columns:80px 1fr auto 16px;padding:12px}
   .detail{padding:4px 12px 14px}
-  /* Inventory table becomes a stack of cards on phones */
-  table.stock thead{display:none}
-  table.stock,table.stock tbody{display:block}
-  table.stock tr{display:grid;grid-template-columns:1fr auto;grid-template-areas:"prod status" "cat onhand" "price onhand" "act act";gap:2px 12px;padding:14px 16px;border-top:1px solid var(--line)}
-  table.stock td{display:block;border:0;padding:0}
-  table.stock .c-prod{grid-area:prod}
-  table.stock .c-status{grid-area:status;text-align:right}
-  table.stock .c-cat{grid-area:cat;color:var(--muted);font-size:13px}
-  table.stock .c-price{grid-area:price}
-  table.stock .c-onhand{grid-area:onhand;text-align:right;align-self:end}
-  table.stock .c-act{grid-area:act;margin-top:10px}
-  table.stock .c-act .btn{width:100%;padding:12px;font-size:15px!important}
-  table.stock tr.emptyrow{display:block}
+  /* Toggle desktop table off, mobile cards on */
+  .desktop-table { display: none !important; }
+  .mobile-cards { display: block !important; }
+}
+
+/* Desktop / Mobile view toggle for inventory */
+.desktop-table { display: table; }
+.mobile-cards { display: none; }
+
+.inv-card {
+  border-top: 1px solid var(--line);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--card);
+}
+.inv-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.inv-name {
+  font-size: 16px;
+  display: block;
+}
+.inv-card-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #faf9f3;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.inv-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.text-right {
+  text-align: right;
+}
+.wide-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }

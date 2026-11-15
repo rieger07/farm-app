@@ -88,10 +88,29 @@ async def lifespan(_: FastAPI):
         task.cancel()
 
 
+class RevalidatingStatic(StaticFiles):
+    """Static files that browsers and CDNs must revalidate, so CSS/JS updates ship."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+def asset(name: str) -> str:
+    """URL for a static file with a version query so a new deploy busts every cache."""
+    try:
+        version = int((BASE / "static" / name).stat().st_mtime)
+    except OSError:
+        version = 0
+    return f"/static/{name}?v={version}"
+
+
 app = FastAPI(title="iron ledger", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+app.mount("/static", RevalidatingStatic(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.filters["money"] = money
+templates.env.globals["asset"] = asset
 
 
 def local_tz() -> ZoneInfo:
@@ -652,7 +671,8 @@ async def api_cash_sale(request: Request, ctx: Ctx = Depends(require("quick_sale
 
 @app.get("/sw.js")
 def service_worker():
-    return FileResponse(BASE / "static" / "sw.js", media_type="application/javascript")
+    return FileResponse(BASE / "static" / "sw.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/manifest.webmanifest")
