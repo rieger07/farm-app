@@ -303,6 +303,7 @@ class WebTest(unittest.TestCase):
         mine = [r for r in rows if r["item"] == "Clover honey · 250 g jar" and r["quantity"] == "2"]
         self.assertEqual(len(mine), 1)
         self.assertEqual((mine[0]["line_subtotal"], mine[0]["sale_total"]), ("18.00", "18.00"))
+        self.assertEqual((mine[0]["source"], mine[0]["payment_type"]), ("cash", "cash"))
         only_cash = c.get("/sales/export.csv?period=week&source=cash").text
         self.assertNotIn(",zettle,", only_cash)
 

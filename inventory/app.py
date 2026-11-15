@@ -650,7 +650,8 @@ def sales_export(
         qty, unit = r["quantity"], r["unit_price_cents"]
         w.writerow([
             r["sale_id"], local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S"),
-            r["source"], r["payment_type"] or "", r["status"], r["cashier"] or "",
+            r["source"], r["payment_type"] or ("cash" if r["source"] == "cash" else ""),
+            r["status"], r["cashier"] or "",
             _csv_safe(r["item"]), "" if qty is None else qty,
             "" if unit is None else dollars(unit),
             "" if qty is None else dollars(sign * qty * unit), dollars(r["total_cents"]),
