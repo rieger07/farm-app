@@ -149,6 +149,11 @@ details.sale[open]{background:#faf9f3}
 .inv-onhand-val.neg {
   color: var(--redink);
 }
+.inv-price-val {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+}
 .chip-toggle {
   border: 1px solid var(--amberink);
   background: var(--amber);
@@ -165,7 +170,7 @@ details.sale[open]{background:#faf9f3}
   color: #fff;
 }
 .inv-adjust-btn {
-  background: #fff;
+  background: transparent;
   color: var(--green);
   border: 1.5px solid var(--green);
   padding: 7px 14px;
@@ -181,5 +186,5 @@ details.sale[open]{background:#faf9f3}
 @media(max-width:800px){
   .filters { padding: 10px 12px; gap: 8px; }
   .filters input { flex: 1 1 100%; max-width: none; }
-  .filters select { flex: 1 1 0; min-width: 0; padding: 8px 10px; font-size: 13px; }
+  .filters select { flex: 1 1 120px; padding: 8px 10px; font-size: 13px; }
 }

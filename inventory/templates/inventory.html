@@ -85,7 +85,7 @@
           </div>
           <div class="inv-stat">
             <small class="muted">Price</small>
-            <b>{{ r.price_cents|money }}</b>
+            <span class="inv-price-val">{{ r.price_cents|money }}</span>
           </div>
           <button type="button" class="btn inv-adjust-btn"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
