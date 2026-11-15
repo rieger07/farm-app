@@ -484,16 +484,25 @@ def invite_accept(
 
 # ---- Inventory, Sales, Quick Sale -----------------------------------------
 
+_STOCK_PRIORITY = {
+    "count_needed": 0,
+    "out_of_stock": 1,
+    "low": 2,
+    "in_stock": 3,
+}
+
+
 @app.get("/inventory")
 def inventory_page(
     request: Request, msg: str = "", ctx: Ctx = Depends(require("inventory"))
 ):
     rows = list_stock(ctx.merchant_id)
+    rows.sort(key=lambda r: _STOCK_PRIORITY.get(r["status"], 9))
     return render(
         request, "inventory.html", ctx, "inventory",
         rows=rows,
         units=sum(max(r["on_hand"], 0) for r in rows),
-        low=sum(1 for r in rows if r["status"] in ("low", "count_needed")),
+        low=sum(1 for r in rows if r["status"] in ("low", "out_of_stock", "count_needed")),
         categories=sorted({r["category"] for r in rows if r["category"]}),
         msg=msg,
     )

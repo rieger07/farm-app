@@ -18,7 +18,17 @@
   <div class="filters">
     <input id="q" type="search" placeholder="Search by name or SKU...">
     <select id="cat"><option value="">All categories</option>{% for c in categories %}<option>{{ c }}</option>{% endfor %}</select>
-    <select id="st"><option value="">Stock status</option><option value="in_stock">In stock</option><option value="low">Low stock</option><option value="count_needed">Count needed</option></select>
+    <select id="st">
+      <option value="">All statuses</option>
+      <option value="attention">Needs attention</option>
+      <option value="out_of_stock">Out of stock</option>
+      <option value="low">Low stock</option>
+      <option value="count_needed">Count needed</option>
+      <option value="in_stock">In stock</option>
+    </select>
+    {% if low %}
+    <button type="button" id="attn-btn" class="chip-toggle" onclick="toggleAttention()">Needs attention ({{ low }})</button>
+    {% endif %}
     <span class="count" id="count">{{ rows|length }} products</span>
   </div>
   <!-- Desktop table view -->
@@ -26,14 +36,16 @@
     <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>On hand</th><th>Status</th><th></th></tr></thead>
     <tbody id="rows-table">
     {% for r in rows %}
+      {% set desktop_meta = [r.sku_code, r.variant_name]|select|join(' · ') %}
       <tr data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
-        <td class="c-prod"><b>{{ r.name }}</b><small>{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}</small></td>
+        <td class="c-prod"><b>{{ r.name }}</b>{% if desktop_meta %}<small>{{ desktop_meta }}</small>{% endif %}</td>
         <td class="c-cat">{{ r.category }}</td>
         <td class="c-price"><b>{{ r.price_cents|money }}</b></td>
         <td class="c-onhand"><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
         <td class="c-status">
           {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
           {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
+          {% elif r.status == 'out_of_stock' %}<span class="pill red">Out of stock</span>
           {% else %}<span class="pill red">Count needed</span>{% endif %}
         </td>
         <td class="c-act" style="text-align:right">
@@ -52,26 +64,28 @@
   <!-- Mobile cards view -->
   <div class="mobile-cards" id="rows-cards">
     {% for r in rows %}
+      {% set mobile_meta = [r.sku_code, r.variant_name, r.category]|select|join(' · ') %}
       <div class="inv-card" data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
         <div class="inv-card-head">
           <div>
             <b class="inv-name">{{ r.name }}</b>
-            <small class="muted">{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}{% if r.category %} · {{ r.category }}{% endif %}</small>
+            {% if mobile_meta %}<small class="muted">{{ mobile_meta }}</small>{% endif %}
           </div>
           <div class="inv-status">
             {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
             {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
+            {% elif r.status == 'out_of_stock' %}<span class="pill red">Out of stock</span>
             {% else %}<span class="pill red">Count needed</span>{% endif %}
           </div>
         </div>
         <div class="inv-card-row">
           <div class="inv-stat">
-            <small class="muted">Price</small>
-            <b>{{ r.price_cents|money }}</b>
+            <small class="muted">On hand</small>
+            <b class="inv-onhand-val {{ 'neg' if r.on_hand <= 0 }}">{{ r.on_hand }} <small class="inline">units</small></b>
           </div>
           <div class="inv-stat">
-            <small class="muted">On hand</small>
-            <b>{{ r.on_hand }} <small class="inline">units</small></b>
+            <small class="muted">Price</small>
+            <b>{{ r.price_cents|money }}</b>
           </div>
           <button type="button" class="btn inv-adjust-btn"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
@@ -125,23 +139,33 @@
 </dialog>
 
 <script>
-const q=document.getElementById('q'),cat=document.getElementById('cat'),st=document.getElementById('st');
+const q=document.getElementById('q'),cat=document.getElementById('cat'),st=document.getElementById('st'),attnBtn=document.getElementById('attn-btn');
+function matchesStatus(itemSt, filterVal) {
+  if (!filterVal) return true;
+  if (filterVal === 'attention') return itemSt !== 'in_stock';
+  return itemSt === filterVal;
+}
 function filt(){
   let n=0;
   const qval = q.value.toLowerCase();
   const cval = cat.value;
   const sval = st.value;
+  if (attnBtn) attnBtn.classList.toggle('on', sval === 'attention');
   document.querySelectorAll('#rows-table tr[data-item]').forEach(el => {
-    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && (!sval || el.dataset.st === sval);
+    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && matchesStatus(el.dataset.st, sval);
     el.hidden = !ok;
     if (ok) n++;
   });
   document.querySelectorAll('#rows-cards .inv-card[data-item]').forEach(el => {
-    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && (!sval || el.dataset.st === sval);
+    const ok = el.dataset.text.includes(qval) && (!cval || el.dataset.cat === cval) && matchesStatus(el.dataset.st, sval);
     el.hidden = !ok;
   });
   document.getElementById('shown').textContent=n;
   document.getElementById('count').textContent=n+' products';
+}
+function toggleAttention() {
+  st.value = st.value === 'attention' ? '' : 'attention';
+  filt();
 }
 [q,cat,st].forEach(e=>e.addEventListener('input',filt));
 

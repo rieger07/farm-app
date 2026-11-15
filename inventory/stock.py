@@ -6,6 +6,8 @@ from inventory.db import get_connection
 def stock_status(on_hand: int, threshold: int) -> str:
     if on_hand < 0:
         return "count_needed"
+    if on_hand == 0:
+        return "out_of_stock"
     if on_hand <= threshold:
         return "low"
     return "in_stock"

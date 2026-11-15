@@ -112,10 +112,10 @@ details.sale[open]{background:#faf9f3}
 
 .inv-card {
   border-top: 1px solid var(--line);
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   background: var(--card);
 }
 .inv-card-head {
@@ -141,13 +141,34 @@ details.sale[open]{background:#faf9f3}
 .inv-stat {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+}
+.inv-onhand-val {
+  font-size: 17px;
+}
+.inv-onhand-val.neg {
+  color: var(--redink);
+}
+.chip-toggle {
+  border: 1px solid var(--amberink);
+  background: var(--amber);
+  color: var(--amberink);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font: 600 13px/1 -apple-system,Segoe UI,Roboto,sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip-toggle.on {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
 }
 .inv-adjust-btn {
   background: #fff;
   color: var(--green);
   border: 1.5px solid var(--green);
-  padding: 7px 12px;
+  padding: 7px 14px;
   font-size: 13px;
   font-weight: 600;
   border-radius: 8px;
@@ -156,4 +177,9 @@ details.sale[open]{background:#faf9f3}
 }
 .inv-adjust-btn:active {
   background: var(--sage);
+}
+@media(max-width:800px){
+  .filters { padding: 10px 12px; gap: 8px; }
+  .filters input { flex: 1 1 100%; max-width: none; }
+  .filters select { flex: 1 1 0; min-width: 0; padding: 8px 10px; font-size: 13px; }
 }

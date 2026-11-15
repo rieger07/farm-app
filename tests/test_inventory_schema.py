@@ -76,12 +76,16 @@ class InventorySchemaTest(unittest.TestCase):
 
     def test_ledger_derives_stock_and_allows_negative(self):
         sku = _add_sku(self.mid, threshold=10)
+        self.assertEqual(list_stock(self.mid)[0]["status"], "out_of_stock")
         add_ledger_entry(self.mid, sku, 20, "initial")
         self.assertEqual(list_stock(self.mid)[0]["status"], "in_stock")
         add_ledger_entry(self.mid, sku, -12, "adjustment")
         row = list_stock(self.mid)[0]
         self.assertEqual((row["on_hand"], row["status"]), (8, "low"))
-        add_ledger_entry(self.mid, sku, -20, "adjustment")
+        add_ledger_entry(self.mid, sku, -8, "adjustment")
+        row = list_stock(self.mid)[0]
+        self.assertEqual((row["on_hand"], row["status"]), (0, "out_of_stock"))
+        add_ledger_entry(self.mid, sku, -12, "adjustment")
         row = list_stock(self.mid)[0]
         self.assertEqual((row["on_hand"], row["status"]), (-12, "count_needed"))
 

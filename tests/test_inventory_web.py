@@ -318,6 +318,24 @@ class WebTest(unittest.TestCase):
         self.assertIn("desktop-table", inv)
         self.assertIn("mobile-cards", inv)
         self.assertIn("inv-card", inv)
+        self.assertIn("Needs attention", inv)
+
+        # Zero-stock item with empty sku_code should show Out of stock, no stray leading dot,
+        # and sort ahead of In stock items.
+        conn = get_connection()
+        conn.execute(
+            "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,"
+            " name, variant_name, sku_code, category, price_cents, updated_at)"
+            " VALUES (?, 'z-empty', 'z-empty-v', 'Beeswax Candle', '6in', '', 'Candles', 500, '2026-11-14')",
+            (self.mid,),
+        )
+        conn.commit()
+        conn.close()
+        inv2 = c.get("/inventory").text
+        self.assertIn("Out of stock", inv2)
+        self.assertIn("<small>6in</small>", inv2)
+        self.assertNotIn("· 6in", inv2.split("6in · Candles")[0])
+        self.assertLess(inv2.index("Beeswax Candle"), inv2.index("Wildflower honey"))
 
 
 if __name__ == "__main__":
