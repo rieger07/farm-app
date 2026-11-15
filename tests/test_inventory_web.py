@@ -158,6 +158,109 @@ class WebTest(unittest.TestCase):
         )
         self.assertEqual(login_res.status_code, 303)
         self.assertEqual(helper_client.get("/").headers["location"], "/quick-sale")
+        self.assertEqual(helper_client.get("/admin").status_code, 303)
+
+    def test_super_admin_tenants_invites_and_workspace_switcher(self):
+        # zach is the first user in seed(), so zach has is_admin=1
+        admin = self.client("zach")
+        admin_page = admin.get("/admin")
+        self.assertEqual(admin_page.status_code, 200)
+        self.assertIn("Tenants &amp; Onboarding", admin_page.text)
+
+        # 1. Create a second tenant directly via /admin/merchants/create
+        r = admin.post(
+            "/admin/merchants/create",
+            data={
+                "merchant_name": "Zach's Bees",
+                "owner_username": "zach2",
+                "owner_display_name": "Zach Owner",
+                "owner_password": "secret99",
+            },
+        )
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("Zach&#39;s Bees", admin.get("/admin").text)
+
+        # 2. Switch active workspace as Super Admin
+        conn = get_connection()
+        new_mid = conn.execute(
+            "SELECT id FROM merchants WHERE name = ?", ("Zach's Bees",)
+        ).fetchone()["id"]
+        conn.close()
+        sw = admin.post(
+            "/switch-merchant",
+            data={"merchant_id": new_mid, "next_url": "/inventory"},
+        )
+        self.assertEqual(sw.status_code, 303)
+        self.assertIn("Zach&#39;s Bees", admin.get("/inventory").text)
+
+        # 3. Generate a one-time invite link for a brand-new tenant
+        inv_res = admin.post(
+            "/admin/invites/create",
+            data={
+                "target_merchant_id": "",
+                "role": "owner",
+                "default_merchant_name": "Clover Hill Honey",
+                "note": "For new vendor",
+                "days_valid": 7,
+            },
+        )
+        self.assertEqual(inv_res.status_code, 303)
+        loc = inv_res.headers["location"]
+        token = loc.split("invite_token=")[1]
+
+        # Redeem the one-time invite link as a new user
+        anon = TestClient(self.app, follow_redirects=False)
+        self.assertEqual(anon.get(f"/invite/{token}").status_code, 200)
+        redeem = anon.post(
+            f"/invite/{token}",
+            data={
+                "merchant_name": "Clover Hill Honey",
+                "display_name": "Clover Vendor",
+                "username": "clover",
+                "password": "clover123",
+            },
+        )
+        self.assertEqual(redeem.status_code, 303)
+        self.assertIn("Clover Hill Honey", anon.get("/inventory").text)
+
+        # Reusing the same one-time invite link must fail with 404/400
+        self.assertEqual(anon.get(f"/invite/{token}").status_code, 404)
+        self.assertEqual(
+            anon.post(
+                f"/invite/{token}",
+                data={
+                    "merchant_name": "Again",
+                    "username": "again",
+                    "password": "again123",
+                },
+            ).status_code,
+            400,
+        )
+
+        # 4. Generate a staff invite link for an existing tenant (Marty flow)
+        staff_inv = admin.post(
+            "/admin/invites/create",
+            data={
+                "target_merchant_id": str(new_mid),
+                "role": "staff",
+                "note": "For Marty",
+                "days_valid": 7,
+            },
+        )
+        staff_token = staff_inv.headers["location"].split("invite_token=")[1]
+        marty2 = TestClient(self.app, follow_redirects=False)
+        self.assertEqual(
+            marty2.post(
+                f"/invite/{staff_token}",
+                data={
+                    "display_name": "Marty Stall",
+                    "username": "marty_stall",
+                    "password": "stall123",
+                },
+            ).status_code,
+            303,
+        )
+        self.assertEqual(marty2.get("/").headers["location"], "/quick-sale")
 
 
 if __name__ == "__main__":

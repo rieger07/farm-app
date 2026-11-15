@@ -115,6 +115,23 @@ CREATE TABLE IF NOT EXISTS sync_state (
     PRIMARY KEY (merchant_id, key),
     FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
 );
+
+-- One-time onboarding invite tokens (either create a new merchant, or join an existing merchant).
+CREATE TABLE IF NOT EXISTS merchant_invites (
+    token TEXT PRIMARY KEY,
+    merchant_id INTEGER,
+    default_merchant_name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'staff')),
+    note TEXT NOT NULL DEFAULT '',
+    created_by INTEGER,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    used_by INTEGER,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
+);
 """
 
 

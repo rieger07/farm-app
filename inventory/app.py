@@ -1,4 +1,4 @@
-"""FastAPI web app: Inventory, Sales and Quick sale pages."""
+"""FastAPI web app: Inventory, Sales, Quick sale, Invites, and Super Admin pages."""
 
 import asyncio
 import os
@@ -21,6 +21,7 @@ from homestead.database import (
     delete_user_session,
     get_user_by_session_token,
     get_user_by_username,
+    update_user_password,
 )
 from inventory import sync, zettle
 from inventory.db import init_inventory_db
@@ -29,11 +30,22 @@ from inventory.merchants import (
     add_member,
     can_access,
     count_merchants,
+    create_invite,
     create_merchant,
+    delete_invite,
+    delete_merchant,
+    get_invite,
     get_membership,
     home_page,
+    list_all_merchants,
+    list_all_users_with_memberships,
+    list_invites,
     list_members,
+    list_user_merchants,
+    redeem_invite,
     remove_member,
+    rename_merchant,
+    set_user_admin,
 )
 from inventory.sales import (
     money,
@@ -50,7 +62,9 @@ from inventory.stock import (
 
 BASE = Path(__file__).parent
 COOKIE = "inv_session"
+MERCHANT_COOKIE = "inv_merchant"
 SESSION_DAYS = 90  # long-lived so staff stay logged in at the stall
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -91,8 +105,18 @@ def local_day_bounds(day_offset: int = 0) -> tuple[str, str]:
 
 
 class Ctx:
-    def __init__(self, user: dict, membership: dict):
-        self.user, self.membership = user, membership
+    def __init__(self, user: dict, membership: dict | None, workspaces: list[dict]):
+        self.user = user
+        self.membership = membership or {
+            "merchant_id": 0,
+            "merchant_name": "No Workspace",
+            "role": "owner" if user.get("is_admin") else "staff",
+        }
+        self.workspaces = workspaces
+
+    @property
+    def is_admin(self) -> bool:
+        return bool(self.user.get("is_admin"))
 
     @property
     def role(self) -> str:
@@ -100,7 +124,7 @@ class Ctx:
 
     @property
     def merchant_id(self) -> int:
-        return self.membership["merchant_id"]
+        return int(self.membership["merchant_id"])
 
 
 class NeedsLogin(Exception):
@@ -130,14 +154,24 @@ def current_ctx(request: Request) -> Ctx:
     user = get_user_by_session_token(request.cookies.get(COOKIE, ""))
     if not user:
         raise NeedsLogin()
-    membership = get_membership(user["id"])
-    if not membership:
+    raw_mid = request.cookies.get(MERCHANT_COOKIE, "")
+    preferred_mid = int(raw_mid) if raw_mid.isdigit() else None
+    is_admin = bool(user.get("is_admin"))
+    membership = get_membership(user["id"], merchant_id=preferred_mid, is_admin=is_admin)
+    if not membership and not is_admin:
         raise NeedsLogin()
-    return Ctx(user, membership)
+    workspaces = list_user_merchants(user["id"], is_admin=is_admin)
+    return Ctx(user, membership, workspaces)
 
 
 def require(page: str):
     def dep(ctx: Ctx = Depends(current_ctx)) -> Ctx:
+        if page == "admin":
+            if not ctx.is_admin:
+                raise Forbidden("/" + home_page(ctx.role).replace("_", "-"))
+            return ctx
+        if ctx.merchant_id == 0 and ctx.is_admin:
+            raise Forbidden("/admin")
         if not can_access(ctx.role, page):
             raise Forbidden("/" + home_page(ctx.role).replace("_", "-"))
         return ctx
@@ -146,26 +180,48 @@ def require(page: str):
 
 
 def render(request: Request, name: str, ctx: Ctx, active: str, **extra):
+    nav = []
+    if ctx.merchant_id != 0:
+        nav.extend(
+            (k, label, path)
+            for k, label, path in (
+                ("inventory", "Inventory", "/inventory"),
+                ("sales", "Sales", "/sales"),
+                ("quick_sale", "Quick sale", "/quick-sale"),
+                ("settings", "Settings", "/settings"),
+            )
+            if can_access(ctx.role, k)
+        )
+    if ctx.is_admin:
+        nav.append(("admin", "Admin", "/admin"))
     return templates.TemplateResponse(
         request,
         name,
         {
             "ctx": ctx,
             "active": active,
-            "zettle_connected": sync.is_connected(ctx.merchant_id),
-            "nav": [
-                (k, label, path)
-                for k, label, path in (
-                    ("inventory", "Inventory", "/inventory"),
-                    ("sales", "Sales", "/sales"),
-                    ("quick_sale", "Quick sale", "/quick-sale"),
-                    ("settings", "Settings", "/settings"),
-                )
-                if can_access(ctx.role, k)
-            ],
+            "zettle_connected": sync.is_connected(ctx.merchant_id) if ctx.merchant_id else False,
+            "nav": nav,
             **extra,
         },
     )
+
+
+def _set_session_cookies(resp: RedirectResponse, user_id: int, merchant_id: int | None = None):
+    token = create_user_session(user_id, days_valid=SESSION_DAYS)
+    secure = os.environ.get("INVENTORY_COOKIE_SECURE", "0") == "1"
+    resp.set_cookie(
+        COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=secure
+    )
+    if merchant_id is not None:
+        resp.set_cookie(
+            MERCHANT_COOKIE,
+            str(merchant_id),
+            max_age=SESSION_DAYS * 86400,
+            httponly=True,
+            samesite="lax",
+            secure=secure,
+        )
 
 
 @app.get("/healthz")
@@ -175,7 +231,31 @@ def healthz():
 
 @app.get("/")
 def index(ctx: Ctx = Depends(current_ctx)):
+    if ctx.merchant_id == 0 and ctx.is_admin:
+        return RedirectResponse("/admin", status_code=303)
     return RedirectResponse("/" + home_page(ctx.role).replace("_", "-"), status_code=303)
+
+
+@app.post("/switch-merchant")
+def switch_merchant(
+    merchant_id: int = Form(...),
+    next_url: str = Form("/"),
+    ctx: Ctx = Depends(current_ctx),
+):
+    target = get_membership(ctx.user["id"], merchant_id=merchant_id, is_admin=ctx.is_admin)
+    if not target:
+        raise HTTPException(403, "Not allowed to access that workspace.")
+    dest = next_url if next_url.startswith("/") else "/"
+    resp = RedirectResponse(dest, status_code=303)
+    resp.set_cookie(
+        MERCHANT_COOKIE,
+        str(target["merchant_id"]),
+        max_age=SESSION_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=os.environ.get("INVENTORY_COOKIE_SECURE", "0") == "1",
+    )
+    return resp
 
 
 @app.get("/login")
@@ -197,6 +277,7 @@ def login(
 ):
     first_run = count_merchants() == 0
     user = authenticate_user(username, password)
+    created_mid = None
     if first_run:
         clean_merchant = merchant_name.strip() or f"{display_name.strip() or username.strip()}'s Apiary"
         if not user:
@@ -216,20 +297,16 @@ def login(
                     {"error": str(exc), "first_run": True},
                     status_code=400,
                 )
-        create_merchant(clean_merchant, user["id"])
-    elif not user or not get_membership(user["id"]):
+        created_mid = create_merchant(clean_merchant, user["id"])
+    elif not user or (not get_membership(user["id"], is_admin=bool(user.get("is_admin"))) and not user.get("is_admin")):
         return templates.TemplateResponse(
             request,
             "login.html",
             {"error": "Wrong username or password.", "first_run": False},
             status_code=401,
         )
-    token = create_user_session(user["id"], days_valid=SESSION_DAYS)
     resp = RedirectResponse("/", status_code=303)
-    resp.set_cookie(
-        COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax",
-        secure=os.environ.get("INVENTORY_COOKIE_SECURE", "0") == "1",
-    )
+    _set_session_cookies(resp, user["id"], merchant_id=created_mid)
     return resp
 
 
@@ -238,8 +315,84 @@ def logout(request: Request):
     delete_user_session(request.cookies.get(COOKIE, ""))
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE)
+    resp.delete_cookie(MERCHANT_COOKIE)
     return resp
 
+
+# ---- One-time Invite Onboarding (/invite/<token>) -------------------------
+
+@app.get("/invite/{token}")
+def invite_page(request: Request, token: str):
+    inv = get_invite(token)
+    return templates.TemplateResponse(
+        request,
+        "invite.html",
+        {"invite": inv, "token": token, "error": None},
+        status_code=200 if (inv and inv["valid"]) else 404,
+    )
+
+
+@app.post("/invite/{token}")
+def invite_accept(
+    request: Request,
+    token: str,
+    username: str = Form(...),
+    password: str = Form(...),
+    display_name: str = Form(""),
+    merchant_name: str = Form(""),
+):
+    inv = get_invite(token)
+    if not inv or not inv["valid"]:
+        return templates.TemplateResponse(
+            request,
+            "invite.html",
+            {"invite": inv, "token": token, "error": "This invite link is expired or already used."},
+            status_code=400,
+        )
+    clean_user = username.strip()
+    user = authenticate_user(clean_user, password)
+    if not user:
+        if get_user_by_username(clean_user):
+            return templates.TemplateResponse(
+                request,
+                "invite.html",
+                {
+                    "invite": inv,
+                    "token": token,
+                    "error": "That username already exists. Enter its current password to link it, or pick another username.",
+                },
+                status_code=400,
+            )
+        try:
+            user = create_user(
+                clean_user,
+                password,
+                display_name=display_name,
+                is_admin=False,
+                claim_unowned_data=False,
+            )
+        except ValueError as exc:
+            return templates.TemplateResponse(
+                request,
+                "invite.html",
+                {"invite": inv, "token": token, "error": str(exc)},
+                status_code=400,
+            )
+    try:
+        mid = redeem_invite(token, user["id"], merchant_name=merchant_name)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "invite.html",
+            {"invite": inv, "token": token, "error": str(exc)},
+            status_code=400,
+        )
+    resp = RedirectResponse("/", status_code=303)
+    _set_session_cookies(resp, user["id"], merchant_id=mid)
+    return resp
+
+
+# ---- Inventory, Sales, Quick Sale -----------------------------------------
 
 @app.get("/inventory")
 def inventory_page(
@@ -375,7 +528,6 @@ async def api_cash_sale(request: Request, ctx: Ctx = Depends(require("quick_sale
 
 @app.get("/sw.js")
 def service_worker():
-    # Served from root so its scope covers /quick-sale.
     return FileResponse(BASE / "static" / "sw.js", media_type="application/javascript")
 
 
@@ -417,7 +569,11 @@ def settings_add_member(
             uid = existing["id"]
         else:
             user = create_user(
-                clean_user, password, display_name=display_name, claim_unowned_data=False
+                clean_user,
+                password,
+                display_name=display_name,
+                is_admin=False,
+                claim_unowned_data=False,
             )
             uid = user["id"]
         add_member(ctx.merchant_id, uid, role)
@@ -473,4 +629,211 @@ def zettle_sync_now(ctx: Ctx = Depends(require("settings"))):
     result = sync.sync_merchant(ctx.merchant_id)
     msg = (f"Sync failed: {result['error']}" if result["error"] else
            f"Synced {result['products']} products, {result['purchases']} new sales.")
-    return RedirectResponse("/settings?msg=" + msg.replace(" ", "+"), 303)
+    return RedirectResponse(f"/settings?msg={quote_plus(msg)}", 303)
+
+
+# ---- Super Admin (/admin) -------------------------------------------------
+
+@app.get("/admin")
+def admin_page(
+    request: Request,
+    msg: str = "",
+    invite_token: str = "",
+    ctx: Ctx = Depends(require("admin")),
+):
+    merchants = list_all_merchants()
+    for m in merchants:
+        m["members"] = list_members(m["id"])
+    base_url = str(request.base_url).rstrip("/")
+    invite_url = f"{base_url}/invite/{invite_token}" if invite_token else ""
+    return render(
+        request,
+        "admin.html",
+        ctx,
+        "admin",
+        merchants=merchants,
+        users=list_all_users_with_memberships(),
+        invites=list_invites(),
+        roles=ROLES,
+        base_url=base_url,
+        invite_url=invite_url,
+        msg=msg,
+    )
+
+
+@app.post("/admin/merchants/create")
+def admin_create_merchant(
+    merchant_name: str = Form(...),
+    owner_username: str = Form(""),
+    owner_display_name: str = Form(""),
+    owner_password: str = Form(""),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        owner_id = None
+        clean_user = owner_username.strip()
+        if clean_user:
+            existing = get_user_by_username(clean_user)
+            if existing:
+                owner_id = existing["id"]
+            else:
+                created = create_user(
+                    clean_user,
+                    owner_password,
+                    display_name=owner_display_name,
+                    is_admin=False,
+                    claim_unowned_data=False,
+                )
+                owner_id = created["id"]
+        mid = create_merchant(merchant_name, owner_user_id=owner_id)
+        msg = f"Created workspace '{merchant_name.strip()}' (#{mid})."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/merchants/rename")
+def admin_rename_merchant(
+    merchant_id: int = Form(...),
+    name: str = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        rename_merchant(merchant_id, name)
+        msg = f"Renamed workspace to '{name.strip()}'."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/merchants/delete")
+def admin_delete_merchant(
+    merchant_id: int = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    delete_merchant(merchant_id)
+    return RedirectResponse(
+        f"/admin?msg={quote_plus('Deleted workspace.')}", status_code=303
+    )
+
+
+@app.post("/admin/merchants/sync")
+def admin_sync_merchant(
+    merchant_id: int = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    result = sync.sync_merchant(merchant_id)
+    msg = (
+        f"Sync failed: {result['error']}"
+        if result["error"]
+        else f"Synced {result['products']} products, {result['purchases']} new sales."
+    )
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/members/save")
+def admin_save_member(
+    merchant_id: int = Form(...),
+    username: str = Form(...),
+    display_name: str = Form(""),
+    password: str = Form(""),
+    role: str = Form("owner"),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        clean_user = username.strip()
+        existing = get_user_by_username(clean_user)
+        if existing:
+            uid = existing["id"]
+        else:
+            created = create_user(
+                clean_user,
+                password,
+                display_name=display_name,
+                is_admin=False,
+                claim_unowned_data=False,
+            )
+            uid = created["id"]
+        add_member(merchant_id, uid, role)
+        msg = f"Assigned {clean_user} as {role}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/members/remove")
+def admin_remove_member(
+    merchant_id: int = Form(...),
+    user_id: int = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        remove_member(merchant_id, user_id, allow_zero_owners=True)
+        msg = "Removed member from workspace."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/invites/create")
+def admin_create_invite(
+    target_merchant_id: str = Form(""),
+    role: str = Form("owner"),
+    default_merchant_name: str = Form(""),
+    note: str = Form(""),
+    days_valid: int = Form(14),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        mid = int(target_merchant_id) if target_merchant_id.strip().isdigit() else None
+        token = create_invite(
+            merchant_id=mid,
+            role=role,
+            default_merchant_name=default_merchant_name,
+            note=note,
+            created_by=ctx.user["id"],
+            days_valid=days_valid,
+        )
+        return RedirectResponse(
+            f"/admin?msg={quote_plus('Created one-time invite link.')}&invite_token={quote_plus(token)}",
+            status_code=303,
+        )
+    except ValueError as exc:
+        return RedirectResponse(f"/admin?msg={quote_plus(f'Error: {exc}')}", status_code=303)
+
+
+@app.post("/admin/invites/delete")
+def admin_delete_invite(
+    token: str = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    delete_invite(token)
+    return RedirectResponse(f"/admin?msg={quote_plus('Deleted invite.')}", status_code=303)
+
+
+@app.post("/admin/users/password")
+def admin_reset_password(
+    user_id: int = Form(...),
+    new_password: str = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        update_user_password(user_id, new_password)
+        msg = "Updated user password."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/admin/users/admin")
+def admin_toggle_user_admin(
+    user_id: int = Form(...),
+    is_admin: int = Form(0),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        set_user_admin(user_id, bool(is_admin))
+        msg = "Updated Super Admin status."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
