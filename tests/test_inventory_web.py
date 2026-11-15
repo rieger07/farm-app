@@ -385,6 +385,16 @@ class WebTest(unittest.TestCase):
         )
         self.assertIn(f'"id": {sku_id},', c.get("/quick-sale").text)
 
+    def test_onboarding_tour_assets_and_button(self):
+        c = self.client("zach")
+        inv = c.get("/inventory").text
+        self.assertIn("startIronLedgerTour", inv)
+        self.assertIn("tour.js", inv)
+        self.assertEqual(c.get("/static/tour.js").status_code, 200)
+
+        staff = self.client("marty")
+        self.assertNotIn("? Tour", staff.get("/quick-sale").text)
+
 
 if __name__ == "__main__":
     unittest.main()
