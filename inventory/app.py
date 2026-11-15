@@ -59,6 +59,7 @@ from inventory.sales import (
 )
 from inventory.stock import (
     add_ledger_entry,
+    list_sku_history,
     list_stock,
     set_low_stock_threshold,
     set_stock_count,
@@ -551,6 +552,19 @@ def inventory_update_stock(
     return RedirectResponse(f"/inventory?msg={quote_plus(msg)}", status_code=303)
 
 
+@app.get("/api/stock/{sku_id}/history")
+def api_stock_history(sku_id: int, ctx: Ctx = Depends(require("inventory"))):
+    rows = list_sku_history(ctx.merchant_id, sku_id, limit=8)
+    for r in rows:
+        r["local_time"] = (
+            to_local(r["created_at"])
+            .strftime("%b %-d · %-I:%M %p")
+            .replace("AM", "am")
+            .replace("PM", "pm")
+        )
+    return {"entries": rows}
+
+
 def _sales_query(period: str, date_from: str, date_to: str) -> dict:
     rng = resolve_range(period, date_from, date_to)
     rng["since"], rng["until"] = utc_bounds(rng["start"], rng["end"])
@@ -652,7 +666,8 @@ def sales_export(
 def quick_sale_page(request: Request, ctx: Ctx = Depends(require("quick_sale"))):
     skus = [
         {"id": r["id"], "name": r["name"], "variant": r["variant_name"],
-         "category": r["category"], "price_cents": r["price_cents"]}
+         "category": r["category"], "price_cents": r["price_cents"],
+         "on_hand": r["on_hand"]}
         for r in list_stock(ctx.merchant_id)
     ]
     return render(

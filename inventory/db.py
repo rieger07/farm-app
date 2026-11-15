@@ -26,8 +26,7 @@ CREATE TABLE IF NOT EXISTS merchant_members (
 );
 CREATE INDEX IF NOT EXISTS idx_members_user ON merchant_members(user_id);
 
--- One Zettle connection per merchant (not per user).
--- TODO: encrypt tokens at rest before connecting a real account.
+-- One Zettle connection per merchant (not per user). Tokens are encrypted at rest.
 CREATE TABLE IF NOT EXISTS zettle_connections (
     merchant_id INTEGER PRIMARY KEY,
     zettle_org_uuid TEXT,

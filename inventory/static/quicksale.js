@@ -28,7 +28,15 @@
       el.className = 'tile' + (q ? ' sel' : '');
       el.innerHTML = `<b></b><small></small><div class="pr"><span>${money(s.price_cents)}</span></div>`;
       el.querySelector('b').textContent = s.name;
-      el.querySelector('small').textContent = s.variant;
+      const sub = el.querySelector('small');
+      const parts = [];
+      if (s.variant) parts.push(s.variant);
+      if (typeof s.on_hand === 'number') {
+        const left = s.on_hand - q;
+        parts.push(left <= 0 ? '0 left' : `${left} left`);
+        if (left <= 0) sub.classList.add('lowhint');
+      }
+      sub.textContent = parts.join(' · ');
       const pr = el.querySelector('.pr');
       const step = document.createElement('div'); step.className = 'step';
       const plus = Object.assign(document.createElement('button'), {textContent: '+'});

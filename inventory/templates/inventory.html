@@ -85,7 +85,7 @@
           </div>
           <div class="inv-stat">
             <small class="muted">Price</small>
-            <b>{{ r.price_cents|money }}</b>
+            <span class="inv-price-val">{{ r.price_cents|money }}</span>
           </div>
           <button type="button" class="btn inv-adjust-btn"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
@@ -136,6 +136,10 @@
       <button type="submit" class="btn primary">Save stock</button>
     </div>
   </form>
+  <div class="hist-box">
+    <small class="muted" style="font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">Recent activity</small>
+    <div id="sm-hist" class="hist-list"><small class="muted">Loading...</small></div>
+  </div>
 </dialog>
 
 <script>
@@ -179,7 +183,40 @@ function openStockModal(skuId, title, onHand, threshold) {
   document.getElementById('sm-qty').value = onHand;
   document.getElementById('sm-thresh').value = threshold;
   syncModeLabel();
+  loadStockHistory(skuId);
   document.getElementById('stockm').showModal();
+}
+async function loadStockHistory(skuId) {
+  const box = document.getElementById('sm-hist');
+  box.innerHTML = '<small class="muted">Loading...</small>';
+  try {
+    const r = await fetch('/api/stock/' + skuId + '/history');
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    if (!data.entries || !data.entries.length) {
+      box.innerHTML = '<small class="muted">No stock activity recorded yet.</small>';
+      return;
+    }
+    box.innerHTML = '';
+    data.entries.forEach(e => {
+      const row = document.createElement('div');
+      row.className = 'hist-row';
+      const left = document.createElement('div');
+      const title = document.createElement('span');
+      const noteText = e.note ? ' · ' + e.note : '';
+      title.textContent = e.reason + noteText;
+      const meta = document.createElement('small');
+      meta.textContent = e.local_time + ' · ' + e.actor;
+      left.append(title, meta);
+      const delta = document.createElement('b');
+      delta.className = e.delta >= 0 ? 'pos' : 'neg';
+      delta.textContent = (e.delta >= 0 ? '+' : '') + e.delta;
+      row.append(left, delta);
+      box.append(row);
+    });
+  } catch (_) {
+    box.innerHTML = '<small class="muted">Could not load history.</small>';
+  }
 }
 function syncModeLabel() {
   const mode = document.getElementById('sm-mode').value;

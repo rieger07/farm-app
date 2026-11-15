@@ -7,6 +7,7 @@ import httpx
 
 from homestead.database import create_user
 from inventory import sync, zettle
+from inventory.crypto import PREFIX, decrypt_token, encrypt_token
 from inventory.db import get_connection, init_inventory_db
 from inventory.merchants import create_merchant
 from inventory.stock import list_stock
@@ -144,9 +145,20 @@ class SyncTest(unittest.TestCase):
         sync.sync_merchant(self.mid, self.http)
         self.assertEqual(self.fake.token_calls, 1)
         conn = get_connection()
-        self.assertEqual(conn.execute("SELECT access_token FROM zettle_connections").fetchone()[0],
-                         "tok1")
+        stored = conn.execute("SELECT access_token FROM zettle_connections").fetchone()[0]
         conn.close()
+        self.assertTrue(stored.startswith(PREFIX))
+        self.assertEqual(decrypt_token(stored), "tok1")
+
+    def test_token_encryption_roundtrip_and_legacy_plaintext(self):
+        enc = encrypt_token("secret-oauth-token")
+        self.assertIsNotNone(enc)
+        self.assertTrue(enc.startswith(PREFIX))
+        self.assertNotIn("secret-oauth-token", enc)
+        self.assertEqual(decrypt_token(enc), "secret-oauth-token")
+        self.assertEqual(decrypt_token("legacy-plaintext-tok"), "legacy-plaintext-tok")
+        self.assertIsNone(encrypt_token(None))
+        self.assertIsNone(decrypt_token(None))
 
     def test_failure_is_recorded_not_raised(self):
         bad = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500)))

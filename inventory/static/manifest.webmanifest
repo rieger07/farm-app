@@ -1,9 +1,20 @@
 {
   "name": "iron ledger",
-  "short_name": "Quick sale",
+  "short_name": "iron ledger",
   "start_url": "/quick-sale",
   "display": "standalone",
   "background_color": "#f6f4ec",
   "theme_color": "#2d5a43",
-  "icons": []
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
