@@ -199,3 +199,16 @@ details.sale[open]{background:#faf9f3}
 .hist-row b.pos { color: var(--green); }
 .hist-row b.neg { color: var(--redink); }
 .tile small.lowhint { color: var(--redink); font-weight: 600; }
+.tour-btn { border: 1px solid var(--line); background: #fff; color: var(--green); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.tour-focus { outline: 3px solid var(--green); outline-offset: 4px; border-radius: 10px; box-shadow: 0 0 0 6px rgba(45,90,67,.16); position: relative; z-index: 20; }
+.tour-card { position: fixed; right: 20px; bottom: 20px; width: 340px; max-width: calc(100vw - 24px); background: #fff; border: 2px solid var(--green); border-radius: 14px; padding: 16px; box-shadow: 0 14px 36px rgba(31,58,45,.2); z-index: 50; }
+.tour-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.tour-step { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--green); }
+.tour-close { background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; padding: 0; }
+.tour-title { margin: 0 0 6px; font: 600 17px/1.25 Georgia, serif; }
+.tour-body { margin: 0 0 14px; font-size: 13px; color: var(--ink); line-height: 1.45; }
+.tour-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tour-actions .btn { padding: 7px 14px; font-size: 13px; }
+@media(max-width:800px){
+  .tour-card { left: 12px; right: 12px; bottom: 72px; width: auto; max-width: none; }
+}

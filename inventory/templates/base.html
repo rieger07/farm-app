@@ -40,7 +40,12 @@
   <main class="main">
     <header class="topbar">
       <span>{{ ctx.membership.merchant_name }}</span>
-      {% if zettle_connected %}<span class="pill green">Zettle connected</span>{% else %}<span class="pill amber">Zettle not connected</span>{% endif %}
+      <div class="row" style="align-items:center">
+        {% if ctx.role in ('owner', 'manager') %}
+        <button type="button" class="tour-btn" onclick="window.startIronLedgerTour && window.startIronLedgerTour()">? Tour</button>
+        {% endif %}
+        {% if zettle_connected %}<span class="pill green">Zettle connected</span>{% else %}<span class="pill amber">Zettle not connected</span>{% endif %}
+      </div>
     </header>
     <div class="content">{% block content %}{% endblock %}</div>
   </main>
@@ -50,6 +55,8 @@
   <a href="{{ path }}" class="{{ 'on' if key == active }}">{{ label }}</a>
   {% endfor %}
 </nav>
+<div id="tour-root" data-user-id="{{ ctx.user.id }}" data-role="{{ ctx.role }}" hidden></div>
+<script src="{{ asset('tour.js') }}"></script>
 {% endblock %}
 </body>
 </html>
