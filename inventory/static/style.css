@@ -128,10 +128,11 @@ details.sale[open]{background:#faf9f3}
   font-size: 16px;
   display: block;
 }
-.inv-card-stats {
+.inv-card-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   background: #faf9f3;
   padding: 8px 12px;
   border-radius: 8px;
@@ -142,15 +143,17 @@ details.sale[open]{background:#faf9f3}
   flex-direction: column;
   gap: 2px;
 }
-.text-right {
-  text-align: right;
-}
-.wide-btn {
-  width: 100%;
-  padding: 12px;
-  font-size: 15px;
+.inv-adjust-btn {
+  background: #fff;
+  color: var(--green);
+  border: 1.5px solid var(--green);
+  padding: 7px 12px;
+  font-size: 13px;
   font-weight: 600;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inv-adjust-btn:active {
+  background: var(--sage);
 }
