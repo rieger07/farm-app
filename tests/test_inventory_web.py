@@ -337,6 +337,29 @@ class WebTest(unittest.TestCase):
         self.assertNotIn("· 6in", inv2.split("6in · Candles")[0])
         self.assertLess(inv2.index("Beeswax Candle"), inv2.index("Wildflower honey"))
 
+    def test_stock_history_endpoint_and_pwa_assets(self):
+        c = self.client("zach")
+        conn = get_connection()
+        sku_id = conn.execute("SELECT id FROM skus LIMIT 1").fetchone()[0]
+        conn.close()
+        r_set = c.post("/inventory/stock", data={"sku_id": str(sku_id), "mode": "set", "quantity": "12", "note": "Shelf count"}, follow_redirects=False)
+        self.assertEqual(r_set.status_code, 303)
+        hist = c.get(f"/api/stock/{sku_id}/history")
+        self.assertEqual(hist.status_code, 200)
+        entries = hist.json()["entries"]
+        self.assertTrue(any(e["note"] == "Shelf count" and "local_time" in e for e in entries))
+
+        qs = c.get("/quick-sale").text
+        self.assertIn('"on_hand":', qs)
+
+        self.assertEqual(c.get("/manifest.webmanifest").status_code, 200)
+        self.assertEqual(c.get("/static/icon-192.png").status_code, 200)
+        self.assertEqual(c.get("/static/icon-512.png").status_code, 200)
+
+        staff = self.client("marty")
+        r_staff = staff.get(f"/api/stock/{sku_id}/history", follow_redirects=False)
+        self.assertEqual(r_staff.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

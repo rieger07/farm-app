@@ -187,4 +187,15 @@ details.sale[open]{background:#faf9f3}
   .filters { padding: 10px 12px; gap: 8px; }
   .filters input { flex: 1 1 100%; max-width: none; }
   .filters select { flex: 1 1 120px; padding: 8px 10px; font-size: 13px; }
+  .cards.three { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .cards.three .card { padding: 10px; }
+  .cards.three .big { font-size: 22px; margin: 2px 0; }
+  .cards.three .card > small:last-child, .cards.three .pill.right { display: none; }
 }
+.hist-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.hist-list { display: flex; flex-direction: column; gap: 6px; max-height: 170px; overflow-y: auto; }
+.hist-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.hist-row:last-child { border-bottom: 0; }
+.hist-row b.pos { color: var(--green); }
+.hist-row b.neg { color: var(--redink); }
+.tile small.lowhint { color: var(--redink); font-weight: 600; }

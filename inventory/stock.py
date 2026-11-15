@@ -110,3 +110,24 @@ def list_stock(merchant_id: int) -> list[dict]:
         d["status"] = stock_status(d["on_hand"], d["low_stock_threshold"])
         out.append(d)
     return out
+
+
+def list_sku_history(merchant_id: int, sku_id: int, limit: int = 8) -> list[dict]:
+    """Recent ledger entries for a single SKU, newest first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT l.id, l.delta, l.reason, l.note, l.created_at,
+                   COALESCE(u.display_name, u.username, 'Zettle sync') AS actor
+            FROM stock_ledger l
+            LEFT JOIN users u ON u.id = l.created_by
+            WHERE l.merchant_id = ? AND l.sku_id = ?
+            ORDER BY l.id DESC
+            LIMIT ?
+            """,
+            (int(merchant_id), int(sku_id), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()

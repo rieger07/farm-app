@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from inventory import zettle
+from inventory.crypto import decrypt_token, encrypt_token
 from inventory.db import get_connection
 
 log = logging.getLogger(__name__)
@@ -73,8 +74,8 @@ def save_connection(merchant_id: int, tokens: dict) -> None:
             " expires_at = excluded.expires_at, scopes = excluded.scopes",
             (
                 merchant_id,
-                tokens.get("access_token"),
-                tokens.get("refresh_token"),
+                encrypt_token(tokens.get("access_token")),
+                encrypt_token(tokens.get("refresh_token")),
                 _iso(expires),
                 zettle.SCOPES,
                 _iso(_now_dt()),
@@ -125,8 +126,8 @@ def _valid_token(merchant_id: int, http: httpx.Client | None) -> str:
     if not row:
         raise zettle.ZettleError("Zettle is not connected.")
     if row["expires_at"] and row["expires_at"] > _iso(_now_dt() + timedelta(seconds=60)):
-        return row["access_token"]
-    tokens = zettle.refresh_access_token(row["refresh_token"], http)
+        return decrypt_token(row["access_token"])
+    tokens = zettle.refresh_access_token(decrypt_token(row["refresh_token"]), http)
     save_connection(merchant_id, tokens)
     return tokens["access_token"]
 
