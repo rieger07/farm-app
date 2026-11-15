@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Accept Invite · iron ledger{% endblock %}
+{% block body %}
+<div class="login">
+  <div class="card" style="width:100%;max-width:400px">
+    <div class="brand">iron ledger</div>
+    {% if not invite or not invite.valid %}
+      <h1>Invite unavailable</h1>
+      <p class="err">This invite link has expired or has already been used. Ask your administrator for a fresh link.</p>
+      <a href="/login" class="btn primary" style="text-align:center;text-decoration:none;display:block">Go to sign in</a>
+    {% else %}
+      {% if invite.merchant_id %}
+        <h1>Join {{ invite.merchant_name }}</h1>
+        <p class="sub" style="margin:0 0 12px">You've been invited as <b>{{ invite.role }}</b>. Choose your username and password below.</p>
+      {% else %}
+        <h1>Set up your workspace</h1>
+        <p class="sub" style="margin:0 0 12px">Create your workspace and owner account below.</p>
+      {% endif %}
+      {% if error %}<p class="err" style="margin-bottom:10px">{{ error }}</p>{% endif %}
+      <form method="post" action="/invite/{{ token }}" style="display:flex;flex-direction:column;gap:12px">
+        {% if not invite.merchant_id %}
+          <label>Business name
+            <input name="merchant_name" value="{{ invite.default_merchant_name }}" placeholder="Your business name" required autofocus>
+          </label>
+        {% endif %}
+        <label>Your display name
+          <input name="display_name" placeholder="Zach" {{ 'autofocus' if invite.merchant_id }}>
+        </label>
+        <label>Username
+          <input name="username" autocomplete="username" autocapitalize="none" placeholder="zach" required>
+        </label>
+        <label>Password (at least 4 characters)
+          <input name="password" type="password" autocomplete="new-password" required>
+        </label>
+        <button class="btn primary">{{ 'Join workspace' if invite.merchant_id else 'Create workspace & sign in' }}</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

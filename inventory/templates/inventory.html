@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Inventory · Hive &amp; Harvest{% endblock %}
+{% block title %}Inventory · iron ledger{% endblock %}
 {% block content %}
-<div class="eyebrow">YOUR FARM, AT A GLANCE</div>
+<div class="eyebrow">YOUR STOCK, AT A GLANCE</div>
 <div class="pagehead">
   <div><h1>Inventory</h1><p class="sub">Know what's on the shelf before you head to market.</p></div>
   <button class="btn primary" onclick="document.getElementById('addp').showModal()">+ Add product</button>
@@ -21,21 +21,21 @@
     <select id="st"><option value="">Stock status</option><option value="in_stock">In stock</option><option value="low">Low stock</option><option value="count_needed">Count needed</option></select>
     <span class="count" id="count">{{ rows|length }} products</span>
   </div>
-  <table>
+  <table class="stock">
     <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>On hand</th><th>Status</th><th></th></tr></thead>
     <tbody id="rows">
     {% for r in rows %}
       <tr data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
-        <td><b>{{ r.name }}</b><small>{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}</small></td>
-        <td>{{ r.category }}</td>
-        <td><b>{{ r.price_cents|money }}</b></td>
-        <td><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
-        <td>
+        <td class="c-prod"><b>{{ r.name }}</b><small>{{ r.sku_code }}{% if r.variant_name %} · {{ r.variant_name }}{% endif %}</small></td>
+        <td class="c-cat">{{ r.category }}</td>
+        <td class="c-price"><b>{{ r.price_cents|money }}</b></td>
+        <td class="c-onhand"><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
+        <td class="c-status">
           {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
           {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
           {% else %}<span class="pill red">Count needed</span>{% endif %}
         </td>
-        <td style="text-align:right">
+        <td class="c-act" style="text-align:right">
           <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }})'>
             Count / Adjust
@@ -43,7 +43,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="empty">No products synced yet. Connect Zettle and click Sync now in Settings.</td></tr>
+      <tr class="emptyrow"><td colspan="6" class="empty">No products synced yet. Connect Zettle and click Sync now in Settings.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -68,7 +68,7 @@
     <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Action
       <select name="mode" id="sm-mode" onchange="syncModeLabel()">
         <option value="set">Set exact on-hand count</option>
-        <option value="restock">Add restock / harvest (+ units)</option>
+        <option value="restock">Add restock / production (+ units)</option>
         <option value="adjust">Relative adjustment (+ or − units)</option>
       </select>
     </label>

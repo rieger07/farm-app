@@ -1,21 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Sales · Hive &amp; Harvest{% endblock %}
+{% block title %}Sales · iron ledger{% endblock %}
 {% block content %}
-<div class="eyebrow">A GOOD DAY AT THE MARKET</div>
+<div class="eyebrow">EVERY SALE, IN ONE PLACE</div>
 <div class="pagehead">
-  <div><h1>Sales</h1><p class="sub">Every sale, in one place. A little less bookkeeping.</p></div>
-  <form method="get" class="row">
-    <select name="period" onchange="this.form.submit()">
-      <option value="today" {{ 'selected' if period=='today' }}>Today</option>
-      <option value="yesterday" {{ 'selected' if period=='yesterday' }}>Yesterday</option>
-      <option value="week" {{ 'selected' if period=='week' }}>Last 7 days</option>
-    </select>
-    <input type="hidden" name="source" value="{{ source }}">
-  </form>
+  <div><h1>Sales</h1><p class="sub">{{ period_label }} · {{ total_count }} transaction{{ '' if total_count == 1 else 's' }}</p></div>
+  <a class="btn" href="/sales/export.csv?{{ export_qs }}" style="text-decoration:none">Export CSV</a>
 </div>
 
+<div class="chips" style="margin-bottom:10px">
+  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
+  <a class="chip {{ 'on' if period == key }}" href="/sales?period={{ key }}&source={{ source }}" style="text-decoration:none">{{ label }}</a>
+  {% endfor %}
+  <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('customrange').hidden = !document.getElementById('customrange').hidden">Custom</button>
+</div>
+<form id="customrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
+  <input type="hidden" name="period" value="custom">
+  <input type="hidden" name="source" value="{{ source }}">
+  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">From<input type="date" name="from" value="{{ date_from }}" required class="datein"></label>
+  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">To<input type="date" name="to" value="{{ date_to }}" required class="datein"></label>
+  <button class="btn primary">Apply</button>
+</form>
+
 <div class="cards four">
-  <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }} · {{ today_label }}</small></div>
+  <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}</small></div>
   <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.zettle_count }} Zettle · {{ summary.cash_count }} cash</small></div>
   <div class="card"><small>Average sale</small><div class="big">{{ summary.avg_cents|money }}</div><small>Per transaction</small></div>
   <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across all products</small></div>
@@ -23,24 +30,26 @@
 
 <div class="cards two">
   <div class="card">
-    <div class="legend"><b>Sales this week</b><span><i class="dot g"></i>Zettle <i class="dot y"></i>Cash</span></div>
-    <div class="chart">
-      {% for d in days %}
-      {% set tot = d.zettle_cents + d.cash_cents %}
-      <div class="barcol">
-        <div class="bar" title="{{ tot|money }}" style="height: {{ (tot / peak * 100)|round|int }}%">
-          <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
-          <div class="seg g" style="flex: {{ d.zettle_cents }}"></div>
+    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Zettle <i class="dot y"></i>Cash</span></div>
+    <div class="chartwrap">
+      <div class="chart" style="min-width: {{ days|length * 26 }}px">
+        {% for d in days %}
+        {% set tot = d.zettle_cents + d.cash_cents %}
+        <div class="barcol">
+          <div class="bar" title="{{ d.title }}: {{ tot|money }}" style="height: {{ (tot / peak * 100)|round|int }}%">
+            <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
+            <div class="seg g" style="flex: {{ d.zettle_cents }}"></div>
+          </div>
+          <small>{{ d.label }}</small>
         </div>
-        <small>{{ d.label }}</small>
+        {% endfor %}
       </div>
-      {% endfor %}
     </div>
-    <small class="muted">{{ best.label }} is your strongest market day this week.</small>
+    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.zettle_cents + best.cash_cents)|money }}).</small>
   </div>
   <div class="card">
     <b>Cash or card. All accounted for.</b>
-    <small class="muted block">{{ period_label|upper }} SALES BY SOURCE</small>
+    <small class="muted block">{{ period_label|upper }} · SALES BY SOURCE</small>
     {% set tot = (summary.zettle_cents + summary.cash_cents) or 1 %}
     <div class="split"><div class="g" style="width: {{ (summary.zettle_cents / tot * 100)|round|int }}%"></div><div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div></div>
     <div class="srcrow"><div><b>Zettle</b><small>{{ summary.zettle_count }} sales · Card</small></div><b>{{ summary.zettle_cents|money }}</b></div>
@@ -50,9 +59,10 @@
 
 <div class="card table-card">
   <div class="filters">
-    <b>Recent transactions</b>
+    <b>Transactions</b>
     <form method="get" class="right">
       <input type="hidden" name="period" value="{{ period }}">
+      {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
       <select name="source" onchange="this.form.submit()">
         <option value="all">All sources</option>
         <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle</option>
@@ -60,22 +70,51 @@
       </select>
     </form>
   </div>
-  <table>
-    <thead><tr><th>Sale</th><th>Time</th><th>Source</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
-    <tbody>
-    {% for t in txns %}
-      <tr>
-        <td>#{{ t.id }}</td><td>{{ t.local_time }}</td>
-        <td class="src {{ t.source }}">{{ t.source|capitalize }}</td>
-        <td>{{ t.units }} unit{{ '' if t.units == 1 else 's' }}</td>
-        <td><b>{{ t.total_cents|money }}</b></td>
-        <td>{{ t.status|capitalize }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="6" class="empty">No sales in this period yet.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  <div class="foot"><span>Zettle transactions appear here automatically. Cash sales are recorded in Quick sale.</span></div>
+
+  <div id="sales-list">
+  {% for t in txns %}
+    <details class="sale">
+      <summary>
+        <div class="when"><b>{{ t.date_label }}</b><small>{{ t.time_label }}</small></div>
+        <div class="what">
+          <span class="src {{ t.source }}">{{ t.source|capitalize }}</span>
+          <small>#{{ t.id }} · {{ t.units }} unit{{ '' if t.units == 1 else 's' }}{% if t.status != 'completed' %} · {{ t.status }}{% endif %}</small>
+        </div>
+        <b class="amt {{ 'neg' if t.total_cents < 0 }}">{{ t.total_cents|money }}</b>
+        <span class="chev" aria-hidden="true">▾</span>
+      </summary>
+      <div class="detail">
+        <small class="muted">{{ t.full_label }}{% if t.payment_type %} · paid by {{ t.payment_type }}{% endif %}</small>
+        {% for it in t['items'] %}
+        <div class="line"><span>{{ it.quantity }} × {{ it.name_snapshot }} <small class="inline">@ {{ it.unit_price_cents|money }}</small></span><b>{{ it.subtotal_cents|money }}</b></div>
+        {% else %}
+        <div class="line"><small class="muted">No item details recorded.</small></div>
+        {% endfor %}
+        <div class="line tot"><span>Total</span><b>{{ t.total_cents|money }}</b></div>
+        {% if t.cash_received_cents is not none %}
+        <div class="line"><span>Cash received</span><span>{{ t.cash_received_cents|money }}</span></div>
+        <div class="line"><span>Change given</span><span>{{ t.change_cents|money }}</span></div>
+        {% endif %}
+      </div>
+    </details>
+  {% else %}
+    <div class="empty" style="padding:24px">No sales in this period.</div>
+  {% endfor %}
+  </div>
+
+  <div class="foot">
+    <span>Showing {{ txns|length }} of {{ total_count }}. Zettle sales appear automatically. Cash sales come from Quick sale.</span>
+    {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
+  </div>
 </div>
+
+<script>
+// Accordion: opening one sale closes all the others.
+document.querySelectorAll('#sales-list details.sale').forEach(d => {
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    document.querySelectorAll('#sales-list details.sale[open]').forEach(o => { if (o !== d) o.open = false; });
+  });
+});
+</script>
 {% endblock %}

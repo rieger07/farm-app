@@ -1,5 +1,5 @@
 // Minimal service worker: lets /quick-sale load offline.
-const CACHE = 'hh-v1';
+const CACHE = 'il-v2';
 const SHELL = ['/static/style.css', '/static/quicksale.js'];
 
 self.addEventListener('install', e => {
