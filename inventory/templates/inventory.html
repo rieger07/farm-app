@@ -11,7 +11,7 @@
 <div class="cards three">
   <div class="card"><small>Units on hand</small><div class="big">{{ units }}</div><small>Across all your products</small></div>
   <div class="card"><small>Active products</small><div class="big">{{ rows|length }}</div><small>{{ categories|join(', ')|lower }}</small></div>
-  <div class="card"><small>Running low</small>{% if low %}<span class="pill amber right">Needs attention</span>{% endif %}<div class="big">{{ low }}</div><small>Time to top up for market</small></div>
+  <div class="card"><small>Running low</small><div class="big">{{ low }}</div><small>Time to top up for market</small></div>
 </div>
 
 <div class="card table-card">
