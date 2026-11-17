@@ -59,10 +59,12 @@ from inventory.sales import (
 )
 from inventory.stock import (
     add_ledger_entry,
+    fmt_qty,
     list_sku_history,
     list_stock,
     set_low_stock_threshold,
     set_quick_sale_visibility,
+    set_sell_mode,
     set_stock_count,
 )
 
@@ -503,7 +505,8 @@ def inventory_page(
     return render(
         request, "inventory.html", ctx, "inventory",
         rows=rows,
-        units=sum(max(r["on_hand"], 0) for r in rows),
+        units=fmt_qty(sum(max(r["on_hand"], 0) for r in rows if r.get("sell_mode") != "lb_stock_lb")),
+        lbs=fmt_qty(sum(max(r["on_hand"], 0) for r in rows if r.get("sell_mode") == "lb_stock_lb")),
         low=sum(1 for r in rows if r["status"] in ("low", "out_of_stock", "count_needed")),
         categories=sorted({r["category"] for r in rows if r["category"]}),
         msg=msg,
@@ -514,8 +517,9 @@ def inventory_page(
 def inventory_update_stock(
     sku_id: int = Form(...),
     mode: str = Form("set"),
-    quantity: int = Form(...),
-    low_stock_threshold: int = Form(10),
+    quantity: float = Form(...),
+    low_stock_threshold: float = Form(10),
+    sell_mode: str = Form(""),
     quick_sale_present: str = Form(""),
     show_in_quick_sale: bool = Form(False),
     note: str = Form(""),
@@ -523,35 +527,39 @@ def inventory_update_stock(
 ):
     try:
         set_low_stock_threshold(ctx.merchant_id, sku_id, low_stock_threshold)
+        if sell_mode:
+            set_sell_mode(ctx.merchant_id, sku_id, sell_mode)
         if quick_sale_present:
             set_quick_sale_visibility(ctx.merchant_id, sku_id, show_in_quick_sale)
+        qty = fmt_qty(quantity)
+        unit_lbl = "lb" if sell_mode == "lb_stock_lb" else "units"
         if mode == "set":
             set_stock_count(
-                ctx.merchant_id, sku_id, quantity, note=note, created_by=ctx.user["id"]
+                ctx.merchant_id, sku_id, qty, note=note, created_by=ctx.user["id"]
             )
-            msg = f"Set stock count to {quantity} units."
+            msg = f"Set stock count to {qty} {unit_lbl}."
         elif mode == "restock":
-            if quantity != 0:
+            if qty != 0:
                 add_ledger_entry(
                     ctx.merchant_id,
                     sku_id,
-                    abs(quantity),
+                    abs(qty),
                     "restock",
                     note=note or "Restock",
                     created_by=ctx.user["id"],
                 )
-            msg = f"Added {abs(quantity)} units to stock."
+            msg = f"Added {abs(qty)} {unit_lbl} to stock."
         else:
-            if quantity != 0:
+            if qty != 0:
                 add_ledger_entry(
                     ctx.merchant_id,
                     sku_id,
-                    quantity,
+                    qty,
                     "adjustment",
                     note=note or "Adjustment",
                     created_by=ctx.user["id"],
                 )
-            msg = f"Adjusted stock by {quantity:+d} units."
+            msg = f"Adjusted stock by {qty:+} {unit_lbl}."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(f"/inventory?msg={quote_plus(msg)}", status_code=303)
@@ -657,9 +665,9 @@ def sales_export(
             r["sale_id"], local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S"),
             r["source"], r["payment_type"] or ("cash" if r["source"] == "cash" else ""),
             r["status"], r["cashier"] or "",
-            _csv_safe(r["item"]), "" if qty is None else qty,
+            _csv_safe(r["item"]), "" if qty is None else fmt_qty(qty),
             "" if unit is None else dollars(unit),
-            "" if qty is None else dollars(sign * qty * unit), dollars(r["total_cents"]),
+            "" if qty is None else dollars(round(sign * qty * unit)), dollars(r["total_cents"]),
         ])
     name = f"ironledger-sales-{rng['date_from']}_to_{rng['date_to']}.csv"
     return Response(
@@ -673,7 +681,7 @@ def quick_sale_page(request: Request, ctx: Ctx = Depends(require("quick_sale")))
     skus = [
         {"id": r["id"], "name": r["name"], "variant": r["variant_name"],
          "category": r["category"], "price_cents": r["price_cents"],
-         "on_hand": r["on_hand"]}
+         "on_hand": r["on_hand"], "sell_mode": r.get("sell_mode", "unit")}
         for r in list_stock(ctx.merchant_id)
         if r.get("show_in_quick_sale", 1)
     ]

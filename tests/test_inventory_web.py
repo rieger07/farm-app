@@ -395,6 +395,64 @@ class WebTest(unittest.TestCase):
         staff = self.client("marty")
         self.assertNotIn("? Tour", staff.get("/quick-sale").text)
 
+    def test_sell_by_lb_whole_bird_and_bulk(self):
+        c = self.client("zach")
+        conn = get_connection()
+        conn.execute(
+            "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,"
+            " name, variant_name, sku_code, category, price_cents, updated_at)"
+            " VALUES (?, 'z-chk', 'z-chk-v', 'Whole Chicken', '', 'CHK', 'Poultry', 550, '2026-11-16')",
+            (self.mid,),
+        )
+        chk_id = conn.execute("SELECT id FROM skus WHERE sku_code='CHK'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,"
+            " name, variant_name, sku_code, category, price_cents, updated_at)"
+            " VALUES (?, 'z-beef', 'z-beef-v', 'Ground Beef', '', 'BEF', 'Beef', 800, '2026-11-16')",
+            (self.mid,),
+        )
+        beef_id = conn.execute("SELECT id FROM skus WHERE sku_code='BEF'").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        c.post("/inventory/stock", data={
+            "sku_id": str(chk_id), "mode": "set", "quantity": "25",
+            "low_stock_threshold": "5", "sell_mode": "lb_stock_unit",
+            "quick_sale_present": "1", "show_in_quick_sale": "1",
+        }, follow_redirects=False)
+        c.post("/inventory/stock", data={
+            "sku_id": str(beef_id), "mode": "set", "quantity": "10.5",
+            "low_stock_threshold": "3", "sell_mode": "lb_stock_lb",
+            "quick_sale_present": "1", "show_in_quick_sale": "1",
+        }, follow_redirects=False)
+
+        inv = c.get("/inventory").text
+        self.assertIn("/lb", inv)
+        self.assertIn("10.5", inv)
+        qs = c.get("/quick-sale").text
+        self.assertIn("weightm", qs)
+        self.assertIn('"sell_mode": "lb_stock_unit"', qs)
+
+        r = c.post("/api/cash-sale", json={
+            "client_uuid": "lb-sale-1",
+            "items": [
+                {"sku_id": chk_id, "quantity": 4.85},
+                {"sku_id": chk_id, "quantity": 5.15},
+                {"sku_id": beef_id, "quantity": 2.25},
+            ],
+        })
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["total_cents"], round(550 * 4.85) + round(550 * 5.15) + round(800 * 2.25))
+
+        from inventory.stock import list_stock
+        by_id = {s["id"]: s for s in list_stock(self.mid)}
+        self.assertEqual(by_id[chk_id]["on_hand"], 23)
+        self.assertEqual(by_id[beef_id]["on_hand"], 8.25)
+
+        csv_text = c.get("/sales/export.csv?period=all").text
+        self.assertIn(",4.85,", csv_text)
+        self.assertIn(",2.25,", csv_text)
+
 
 if __name__ == "__main__":
     unittest.main()

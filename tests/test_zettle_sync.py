@@ -166,6 +166,48 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(res["error"])
         self.assertTrue(sync.connection_status(self.mid)["last_error"])
 
+    def test_weight_based_catalog_and_purchase_sync(self):
+        from inventory.stock import set_sell_mode, set_stock_count
+
+        self.fake.catalog.append({
+            "uuid": "p-lb",
+            "name": "Whole Chicken",
+            "unitName": "lb",
+            "category": {"name": "Poultry"},
+            "variants": [{"uuid": "v-lb", "name": "", "sku": "CHK-1",
+                          "price": {"amount": 550, "currencyId": "USD"}}],
+        })
+        sync.sync_merchant(self.mid, self.http)
+        chicken = [r for r in list_stock(self.mid) if r["name"] == "Whole Chicken"][0]
+        self.assertEqual(chicken["sell_mode"], "lb_stock_lb")
+        set_stock_count(self.mid, chicken["id"], 25)
+
+        # Bulk lb mode: 1.75 lb purchase decrements 1.75
+        self.fake.purchases.append({
+            "purchaseUUID": "pur-lb-1",
+            "timestamp": _ts(),
+            "amount": 963,
+            "products": [{"productUuid": "p-lb", "variantUuid": "v-lb",
+                          "name": "Whole Chicken", "quantity": "1.75", "unitPrice": 550}],
+        })
+        sync.sync_merchant(self.mid, self.http)
+        chicken = [r for r in list_stock(self.mid) if r["name"] == "Whole Chicken"][0]
+        self.assertEqual(chicken["on_hand"], 23.25)
+
+        # Whole-bird mode (sell by lb, stock by unit): 4.85 lb purchase decrements 1 unit
+        set_sell_mode(self.mid, chicken["id"], "lb_stock_unit")
+        set_stock_count(self.mid, chicken["id"], 25)
+        self.fake.purchases.append({
+            "purchaseUUID": "pur-lb-2",
+            "timestamp": _ts(),
+            "amount": 2668,
+            "products": [{"productUuid": "p-lb", "variantUuid": "v-lb",
+                          "name": "Whole Chicken", "quantity": "4.85", "unitPrice": 550}],
+        })
+        sync.sync_merchant(self.mid, self.http)
+        chicken = [r for r in list_stock(self.mid) if r["name"] == "Whole Chicken"][0]
+        self.assertEqual(chicken["on_hand"], 24)
+
 
 if __name__ == "__main__":
     unittest.main()

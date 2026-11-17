@@ -3,12 +3,20 @@
 from inventory.db import get_connection
 
 
-def stock_status(on_hand: int, threshold: int) -> str:
-    if on_hand < 0:
+SELL_MODES = ("unit", "lb_stock_unit", "lb_stock_lb")
+
+
+def fmt_qty(val: float | int) -> int | float:
+    r = round(float(val or 0), 3)
+    return int(r) if r == int(r) else r
+
+
+def stock_status(on_hand: float, threshold: float) -> str:
+    if on_hand < -1e-6:
         return "count_needed"
-    if on_hand == 0:
+    if abs(on_hand) <= 1e-6:
         return "out_of_stock"
-    if on_hand <= threshold:
+    if on_hand <= threshold + 1e-6:
         return "low"
     return "in_stock"
 
@@ -16,7 +24,7 @@ def stock_status(on_hand: int, threshold: int) -> str:
 def add_ledger_entry(
     merchant_id: int,
     sku_id: int,
-    delta: int,
+    delta: float,
     reason: str,
     note: str = "",
     created_by: int | None = None,
@@ -32,7 +40,7 @@ def add_ledger_entry(
             (
                 int(merchant_id),
                 int(sku_id),
-                int(delta),
+                fmt_qty(delta),
                 reason,
                 note,
                 created_by,
@@ -47,10 +55,10 @@ def add_ledger_entry(
 def set_stock_count(
     merchant_id: int,
     sku_id: int,
-    new_on_hand: int,
+    new_on_hand: float,
     note: str = "",
     created_by: int | None = None,
-) -> int:
+) -> int | float:
     """Set exact on-hand count for a SKU by appending a delta entry. Returns delta."""
     conn = get_connection()
     try:
@@ -64,12 +72,12 @@ def set_stock_count(
         ).fetchone()
         if not row:
             raise ValueError(f"Unknown SKU {sku_id}.")
-        current = int(row["on_hand"])
+        current = float(row["on_hand"])
         reason = "initial" if int(row["entry_count"]) == 0 else "adjustment"
     finally:
         conn.close()
-    delta = int(new_on_hand) - current
-    if delta != 0 or reason == "initial":
+    delta = fmt_qty(float(new_on_hand) - current)
+    if abs(delta) > 1e-6 or reason == "initial":
         add_ledger_entry(
             merchant_id, sku_id, delta, reason, note or "Stock count", created_by
         )
@@ -77,14 +85,28 @@ def set_stock_count(
 
 
 def set_low_stock_threshold(
-    merchant_id: int, sku_id: int, threshold: int
+    merchant_id: int, sku_id: int, threshold: float
 ) -> None:
     conn = get_connection()
     try:
         conn.execute(
             "UPDATE skus SET low_stock_threshold = ?"
             " WHERE id = ? AND merchant_id = ?",
-            (max(0, int(threshold)), int(sku_id), int(merchant_id)),
+            (max(0, fmt_qty(threshold)), int(sku_id), int(merchant_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_sell_mode(merchant_id: int, sku_id: int, sell_mode: str) -> None:
+    if sell_mode not in SELL_MODES:
+        raise ValueError(f"Invalid sell mode: {sell_mode}")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE skus SET sell_mode = ? WHERE id = ? AND merchant_id = ?",
+            (sell_mode, int(sku_id), int(merchant_id)),
         )
         conn.commit()
     finally:
@@ -122,6 +144,10 @@ def list_stock(merchant_id: int) -> list[dict]:
     out = []
     for r in rows:
         d = dict(r)
+        d["on_hand"] = fmt_qty(d["on_hand"])
+        d["low_stock_threshold"] = fmt_qty(d["low_stock_threshold"])
+        d["sell_mode"] = d.get("sell_mode") or "unit"
+        d["stock_unit"] = "lb" if d["sell_mode"] == "lb_stock_lb" else "units"
         d["status"] = stock_status(d["on_hand"], d["low_stock_threshold"])
         out.append(d)
     return out
@@ -143,6 +169,11 @@ def list_sku_history(merchant_id: int, sku_id: int, limit: int = 8) -> list[dict
             """,
             (int(merchant_id), int(sku_id), int(limit)),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["delta"] = fmt_qty(d["delta"])
+            out.append(d)
+        return out
     finally:
         conn.close()

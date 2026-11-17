@@ -212,3 +212,6 @@ details.sale[open]{background:#faf9f3}
 @media(max-width:800px){
   .tour-card { left: 12px; right: 12px; bottom: 72px; width: auto; max-width: none; }
 }
+.wm-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.wm-preview { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #faf9f3; border-radius: 8px; border: 1px solid var(--line); }
+.wm-preview b { font: 600 18px Georgia, serif; color: var(--green); }
