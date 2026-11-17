@@ -27,6 +27,27 @@
   </div>
 </div>
 
+<dialog id="weightm" class="card" style="width:100%;max-width:360px">
+  <h2 id="wm-title" style="margin-bottom:2px">Enter weight</h2>
+  <small id="wm-rate" style="margin-bottom:12px"></small>
+  <div class="wm-presets">
+    <button type="button" class="chip" data-lb="0.5">0.5 lb</button>
+    <button type="button" class="chip" data-lb="1">1 lb</button>
+    <button type="button" class="chip" data-lb="1.5">1.5 lb</button>
+    <button type="button" class="chip" data-lb="2">2 lb</button>
+  </div>
+  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;margin:10px 0">Weight (lb)
+    <input id="wm-lbs" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00"
+      style="padding:12px;border:1px solid var(--line);border-radius:8px;font:600 18px/1.2 inherit">
+  </label>
+  <div class="wm-preview"><span>Line total</span><b id="wm-preview">$0.00</b></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px">
+    <button type="button" id="wm-remove" class="btn" style="margin-right:auto;color:var(--redink)" hidden>Remove</button>
+    <button type="button" class="btn" onclick="document.getElementById('weightm').close()">Cancel</button>
+    <button type="button" id="wm-save" class="btn primary">Add to sale</button>
+  </div>
+</dialog>
+
 <script id="skus" type="application/json">{{ skus|tojson }}</script>
 <script src="{{ asset('quicksale.js') }}"></script>
 {% endblock %}

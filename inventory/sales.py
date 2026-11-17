@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 
 from inventory.db import get_connection
+from inventory.stock import fmt_qty
 
 
 def _now() -> str:
@@ -27,9 +28,9 @@ def record_cash_sale(
     if not client_uuid:
         raise ValueError("client_uuid is required.")
     clean = [
-        {"sku_id": int(i["sku_id"]), "quantity": int(i["quantity"])}
+        {"sku_id": int(i["sku_id"]), "quantity": fmt_qty(i["quantity"])}
         for i in items
-        if int(i.get("quantity", 0)) > 0
+        if float(i.get("quantity", 0) or 0) > 0
     ]
     if not clean:
         raise ValueError("A sale needs at least one item.")
@@ -51,7 +52,7 @@ def record_cash_sale(
         skus = {}
         for it in clean:
             row = conn.execute(
-                "SELECT id, name, variant_name, price_cents FROM skus"
+                "SELECT id, name, variant_name, price_cents, sell_mode FROM skus"
                 " WHERE id = ? AND merchant_id = ?",
                 (it["sku_id"], int(merchant_id)),
             ).fetchone()
@@ -59,7 +60,7 @@ def record_cash_sale(
                 raise ValueError(f"Unknown SKU {it['sku_id']}.")
             skus[it["sku_id"]] = row
 
-        total = sum(skus[i["sku_id"]]["price_cents"] * i["quantity"] for i in clean)
+        total = sum(round(skus[i["sku_id"]]["price_cents"] * i["quantity"]) for i in clean)
         now = _now()
         cur = conn.execute(
             "INSERT INTO sales (merchant_id, source, external_id, occurred_at,"
@@ -84,6 +85,7 @@ def record_cash_sale(
                 " unit_price_cents) VALUES (?, ?, ?, ?, ?)",
                 (sale_id, it["sku_id"], label, it["quantity"], sku["price_cents"]),
             )
+            stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -it["quantity"]
             conn.execute(
                 "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"
                 " sale_item_id, created_by, created_at)"
@@ -91,7 +93,7 @@ def record_cash_sale(
                 (
                     int(merchant_id),
                     it["sku_id"],
-                    -it["quantity"],
+                    stock_delta,
                     int(item_cur.lastrowid),
                     created_by,
                     now,
@@ -210,9 +212,11 @@ def recent_sales(
     by_sale: dict[int, list[dict]] = {}
     for it in items:
         d = dict(it)
-        d["subtotal_cents"] = d["quantity"] * d["unit_price_cents"]
+        d["quantity"] = fmt_qty(d["quantity"])
+        d["subtotal_cents"] = round(d["quantity"] * d["unit_price_cents"])
         by_sale.setdefault(d["sale_id"], []).append(d)
     for s in sales:
+        s["units"] = fmt_qty(s["units"])
         s["items"] = by_sale.get(s["id"], [])
         rec = s["cash_received_cents"]
         s["change_cents"] = (rec - s["total_cents"]) if rec is not None else None

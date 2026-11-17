@@ -8,6 +8,7 @@ import httpx
 from inventory import zettle
 from inventory.crypto import decrypt_token, encrypt_token
 from inventory.db import get_connection
+from inventory.stock import fmt_qty
 
 log = logging.getLogger(__name__)
 INITIAL_LOOKBACK_DAYS = 30
@@ -151,10 +152,12 @@ def sync_catalog(merchant_id: int, api: zettle.ZettleClient) -> int:
                 vname = v.get("name") or ""
                 if vname == p.get("name"):
                     vname = ""
+                unit_name = str(p.get("unitName") or v.get("unitName") or "").strip().lower()
+                default_mode = "lb_stock_lb" if unit_name in ("lb", "lbs", "pound", "pounds") else "unit"
                 conn.execute(
                     "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,"
                     " name, variant_name, sku_code, category, price_cents, currency, active,"
-                    " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+                    " sell_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"
                     " ON CONFLICT(merchant_id, zettle_product_uuid, zettle_variant_uuid)"
                     " DO UPDATE SET name = excluded.name, variant_name = excluded.variant_name,"
                     " sku_code = excluded.sku_code, category = excluded.category,"
@@ -163,7 +166,7 @@ def sync_catalog(merchant_id: int, api: zettle.ZettleClient) -> int:
                     (
                         merchant_id, puid, vuid, p.get("name", "Unnamed"), vname,
                         v.get("sku") or "", category, int(price.get("amount") or 0),
-                        price.get("currencyId") or "USD", now,
+                        price.get("currencyId") or "USD", default_mode, now,
                     ),
                 )
                 seen.add((puid, vuid))
@@ -216,9 +219,9 @@ def import_purchase(conn, merchant_id: int, purchase: dict, tracking_start: str)
     )
     sale_id = int(cur.lastrowid)
     for line in purchase.get("products") or []:
-        qty = int(float(line.get("quantity") or 1))
+        qty = fmt_qty(float(line.get("quantity") or 1))
         sku = conn.execute(
-            "SELECT id FROM skus WHERE merchant_id = ? AND zettle_product_uuid = ?"
+            "SELECT id, sell_mode FROM skus WHERE merchant_id = ? AND zettle_product_uuid = ?"
             " AND zettle_variant_uuid = ?",
             (merchant_id, line.get("productUuid", ""), line.get("variantUuid") or ""),
         ).fetchone()
@@ -234,10 +237,11 @@ def import_purchase(conn, merchant_id: int, purchase: dict, tracking_start: str)
         # Refunds are reported only. Whether a returned jar goes back on the
         # shelf is a human call, so Zach makes it with a manual adjustment.
         if sku and not refund and occurred >= tracking_start:
+            stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -qty
             conn.execute(
                 "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"
                 " sale_item_id, created_at) VALUES (?, ?, ?, 'sale', ?, ?)",
-                (merchant_id, sku["id"], -qty, int(item.lastrowid), now),
+                (merchant_id, sku["id"], stock_delta, int(item.lastrowid), now),
             )
     return True
 

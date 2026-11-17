@@ -9,7 +9,7 @@
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
 <div class="cards three">
-  <div class="card"><small>Units on hand</small><div class="big">{{ units }}</div><small>Across all your products</small></div>
+  <div class="card"><small>Units on hand</small><div class="big">{{ units }}</div><small>Across all your products{% if lbs %} · + {{ lbs }} lb{% endif %}</small></div>
   <div class="card"><small>Active products</small><div class="big">{{ rows|length }}</div><small>{{ categories|join(', ')|lower }}</small></div>
   <div class="card"><small>Running low</small><div class="big">{{ low }}</div><small>Time to top up for market</small></div>
 </div>
@@ -40,8 +40,8 @@
       <tr data-item data-text="{{ (r.name ~ ' ' ~ r.variant_name ~ ' ' ~ r.sku_code)|lower }}" data-cat="{{ r.category }}" data-st="{{ r.status }}">
         <td class="c-prod"><b>{{ r.name }}</b>{% if desktop_meta %}<small>{{ desktop_meta }}</small>{% endif %}{% if not r.show_in_quick_sale %}<small class="muted">Hidden from Quick Sale</small>{% endif %}</td>
         <td class="c-cat">{{ r.category }}</td>
-        <td class="c-price"><b>{{ r.price_cents|money }}</b></td>
-        <td class="c-onhand"><b>{{ r.on_hand }}</b> <small class="inline">units</small></td>
+        <td class="c-price"><b>{{ r.price_cents|money }}</b>{% if r.sell_mode in ('lb_stock_unit', 'lb_stock_lb') %}<small class="inline">/lb</small>{% endif %}</td>
+        <td class="c-onhand"><b>{{ r.on_hand }}</b> <small class="inline">{{ r.stock_unit }}</small></td>
         <td class="c-status">
           {% if r.status == 'in_stock' %}<span class="pill green">In stock</span>
           {% elif r.status == 'low' %}<span class="pill amber">Low stock</span>
@@ -50,7 +50,7 @@
         </td>
         <td class="c-act" style="text-align:right">
           <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
-            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }})'>
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }}, {{ r.sell_mode|tojson }})'>
             Update
           </button>
         </td>
@@ -82,14 +82,14 @@
         <div class="inv-card-row">
           <div class="inv-stat">
             <small class="muted">On hand</small>
-            <b class="inv-onhand-val {{ 'neg' if r.on_hand <= 0 }}">{{ r.on_hand }} <small class="inline">units</small></b>
+            <b class="inv-onhand-val {{ 'neg' if r.on_hand <= 0 }}">{{ r.on_hand }} <small class="inline">{{ r.stock_unit }}</small></b>
           </div>
           <div class="inv-stat">
             <small class="muted">Price</small>
-            <span class="inv-price-val">{{ r.price_cents|money }}</span>
+            <span class="inv-price-val">{{ r.price_cents|money }}{% if r.sell_mode in ('lb_stock_unit', 'lb_stock_lb') %}<small class="inline">/lb</small>{% endif %}</span>
           </div>
           <button type="button" class="btn inv-adjust-btn"
-            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }})'>
+            onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }}, {{ r.sell_mode|tojson }})'>
             Update
           </button>
         </div>
@@ -126,8 +126,15 @@
     <label style="display:flex;flex-direction:column;gap:4px;font-size:13px"><span id="sm-qlabel">New on-hand count</span>
       <input type="number" name="quantity" id="sm-qty" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
     </label>
-    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Low-stock alert threshold (units)
-      <input type="number" name="low_stock_threshold" id="sm-thresh" min="0" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Low-stock alert threshold (<span id="sm-tunit">units</span>)
+      <input type="number" name="low_stock_threshold" id="sm-thresh" min="0" step="1" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">How it's sold &amp; stocked
+      <select name="sell_mode" id="sm-sellmode" onchange="syncSellMode()">
+        <option value="unit">By unit (e.g. jars, candles)</option>
+        <option value="lb_stock_unit">Sold by lb · stock by unit (e.g. whole chicken)</option>
+        <option value="lb_stock_lb">Sold by lb · stock by lb (e.g. bulk meat/produce)</option>
+      </select>
     </label>
     <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Note (optional)
       <input type="text" name="note" placeholder="e.g. Initial count, Jarred batch #4, Broken jar" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
@@ -180,18 +187,28 @@ function toggleAttention() {
 [q,cat,st].forEach(e=>e.addEventListener('input',filt));
 
 let currentOnHand = 0;
-function openStockModal(skuId, title, onHand, threshold, showQs) {
+function openStockModal(skuId, title, onHand, threshold, showQs, sellMode) {
   currentOnHand = onHand;
   document.getElementById('sm-sku').value = skuId;
   document.getElementById('sm-title').textContent = title;
-  document.getElementById('sm-current').textContent = 'Currently on hand: ' + onHand + ' units';
   document.getElementById('sm-mode').value = 'set';
   document.getElementById('sm-qty').value = onHand;
   document.getElementById('sm-thresh').value = threshold;
   document.getElementById('sm-qs').checked = Boolean(showQs);
+  document.getElementById('sm-sellmode').value = sellMode || 'unit';
+  syncSellMode();
   syncModeLabel();
   loadStockHistory(skuId);
   document.getElementById('stockm').showModal();
+}
+function syncSellMode() {
+  const isLbStock = document.getElementById('sm-sellmode').value === 'lb_stock_lb';
+  const unit = isLbStock ? 'lb' : 'units';
+  document.getElementById('sm-current').textContent = 'Currently on hand: ' + currentOnHand + ' ' + unit;
+  document.getElementById('sm-tunit').textContent = unit;
+  document.getElementById('sm-qty').step = isLbStock ? 'any' : '1';
+  document.getElementById('sm-thresh').step = isLbStock ? 'any' : '1';
+  syncModeLabel();
 }
 async function loadStockHistory(skuId) {
   const box = document.getElementById('sm-hist');
@@ -229,14 +246,15 @@ function syncModeLabel() {
   const mode = document.getElementById('sm-mode').value;
   const lbl = document.getElementById('sm-qlabel');
   const qty = document.getElementById('sm-qty');
+  const unit = document.getElementById('sm-sellmode').value === 'lb_stock_lb' ? 'lb' : 'units';
   if (mode === 'set') {
-    lbl.textContent = 'New exact on-hand count';
+    lbl.textContent = 'New exact on-hand count (' + unit + ')';
     qty.value = currentOnHand;
   } else if (mode === 'restock') {
-    lbl.textContent = 'Units to add';
+    lbl.textContent = (unit === 'lb' ? 'Pounds' : 'Units') + ' to add';
     qty.value = '';
   } else {
-    lbl.textContent = 'Change in units (e.g. -2 for spoilage)';
+    lbl.textContent = 'Change in ' + unit + ' (e.g. -2 for spoilage)';
     qty.value = '';
   }
 }
