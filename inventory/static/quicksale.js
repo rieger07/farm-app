@@ -70,7 +70,9 @@
   });
   document.querySelectorAll('#weightm [data-lb]').forEach(btn => {
     btn.onclick = () => {
-      $('wm-lbs').value = btn.dataset.lb;
+      const cur = parseFloat(($('wm-lbs').value || '').replace(',', '.')) || 0;
+      const add = parseFloat(btn.dataset.lb);
+      $('wm-lbs').value = String(round3(cur + add));
       syncWeightPreview();
       $('wm-lbs').focus();
     };
