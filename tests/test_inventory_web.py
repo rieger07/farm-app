@@ -482,6 +482,19 @@ class WebTest(unittest.TestCase):
         self.assertEqual(res_sub, {"handled": True, "action": "updated_active"})
         self.assertTrue(get_subscription(self.mid)["current_period_end"])
 
+        # Login page shows /signup link only when Stripe billing is configured
+        from fastapi.testclient import TestClient
+        from inventory.app import app
+        anon = TestClient(app)
+        self.assertNotIn('href="/signup"', anon.get("/login").text)
+        os.environ["STRIPE_SECRET_KEY"] = "sk_test_123"
+        os.environ["STRIPE_PRICE_MONTHLY"] = "price_123"
+        try:
+            self.assertIn('href="/signup"', anon.get("/login").text)
+        finally:
+            os.environ.pop("STRIPE_SECRET_KEY", None)
+            os.environ.pop("STRIPE_PRICE_MONTHLY", None)
+
 
 if __name__ == "__main__":
     unittest.main()
