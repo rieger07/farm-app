@@ -31,8 +31,8 @@
     <div class="card">
       <h2>Send a message</h2>
       <div id="form-status" class="notice" style="margin-bottom:14px" hidden></div>
-      <!-- Optional: add data-endpoint="https://formspree.io/f/YOUR_ID" (or Web3Forms) to submit directly in-page -->
-      <form id="contact-form" class="stack" data-endpoint="">
+      <form id="contact-form" class="stack">
+        <input name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
         <label>Your name<input name="name" placeholder="Jane Doe" required></label>
         <label>Your email<input name="email" type="email" placeholder="you@company.com" required></label>
         <label>Inquiry type
