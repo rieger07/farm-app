@@ -495,6 +495,33 @@ class WebTest(unittest.TestCase):
             os.environ.pop("STRIPE_SECRET_KEY", None)
             os.environ.pop("STRIPE_PRICE_MONTHLY", None)
 
+    def test_contact_api_honeypot_and_resend(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from inventory.app import app
+
+        anon = TestClient(app)
+        # Honeypot silently succeeds without calling Resend
+        with patch("inventory.app._send_resend_email") as mock_send:
+            r_bot = anon.post("/api/contact", json={
+                "name": "Bot", "email": "bot@example.com", "message": "spam", "website": "http://spam",
+            })
+            self.assertEqual(r_bot.status_code, 200)
+            mock_send.assert_not_called()
+
+        # Validation rejects missing fields
+        r_bad = anon.post("/api/contact", json={"name": "", "email": "bad", "message": ""})
+        self.assertEqual(r_bad.status_code, 400)
+
+        # Valid submission calls Resend helper
+        with patch("inventory.app._send_resend_email") as mock_send:
+            r_ok = anon.post("/api/contact", json={
+                "name": "Alice", "email": "alice@example.com",
+                "engagement": "C2C / B2B Contracting", "message": "Need backend help.",
+            })
+            self.assertEqual(r_ok.status_code, 200)
+            mock_send.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

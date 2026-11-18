@@ -333,6 +333,75 @@ def healthz():
     return {"status": "ok"}
 
 
+_CONTACT_BUCKETS: dict[str, list[float]] = {}
+
+
+def _send_resend_email(payload: dict) -> None:
+    import httpx
+
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("RESEND_API_KEY is not configured.")
+    from_addr = os.environ.get(
+        "CONTACT_FROM_EMAIL", "Ironclad Systems <onboarding@resend.dev>"
+    ).strip()
+    to_addr = os.environ.get("CONTACT_TO_EMAIL", "steve.rieger.dev@gmail.com").strip()
+    resp = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "from": from_addr,
+            "to": [to_addr],
+            "reply_to": payload["email"],
+            "subject": f"[Ironclad Systems] {payload['engagement']} inquiry from {payload['name']}",
+            "text": (
+                f"Name: {payload['name']}\n"
+                f"Email: {payload['email']}\n"
+                f"Inquiry: {payload['engagement']}\n\n"
+                f"{payload['message']}\n"
+            ),
+        },
+        timeout=10,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Email delivery failed ({resp.status_code}).")
+
+
+@app.post("/api/contact")
+async def api_contact(request: Request):
+    import time
+
+    body = await request.json()
+    if str(body.get("website") or "").strip():  # honeypot triggered
+        return {"ok": True}
+
+    name = str(body.get("name") or "").strip()
+    email = str(body.get("email") or "").strip()
+    engagement = str(body.get("engagement") or "Consulting").strip()
+    message = str(body.get("message") or "").strip()
+    if not name or "@" not in email or not message:
+        raise HTTPException(400, "Please fill in your name, a valid email, and a message.")
+
+    ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    now = time.monotonic()
+    recent = [t for t in _CONTACT_BUCKETS.get(ip, []) if now - t < 600]
+    if len(recent) >= 5:
+        raise HTTPException(429, "Too many inquiries. Please email steve.rieger.dev@gmail.com directly.")
+    recent.append(now)
+    _CONTACT_BUCKETS[ip] = recent
+
+    try:
+        _send_resend_email({
+            "name": name[:120],
+            "email": email[:160],
+            "engagement": engagement[:80],
+            "message": message[:4000],
+        })
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+    return {"ok": True}
+
+
 @app.get("/")
 def index(ctx: Ctx = Depends(current_ctx)):
     if ctx.merchant_id == 0 and ctx.is_admin:
