@@ -21,6 +21,24 @@
   <small style="margin-top:12px">Redirect URL to register in the Zettle developer portal: <code>{{ redirect_uri }}</code></small>
 </div>
 
+<div class="card" style="margin-bottom:20px">
+  <h2>Plan &amp; Billing</h2>
+  {% if sub.status == 'comp' %}
+    <p><span class="pill green">Lifetime access (Complimentary)</span></p>
+    <small>This workspace has complimentary lifetime access — no recurring charges.</small>
+  {% else %}
+    <p>
+      <span class="pill {{ 'green' if sub.status in ('active', 'trialing') else ('amber' if sub.status == 'past_due' else 'red') }}">{{ sub.status|replace('_', ' ')|title }}</span>
+      <small class="inline" style="margin-left:8px">{{ sub.plan_key|title }}{% if sub.current_period_end %} · Renews {{ sub.current_period_end[:10] }}{% endif %}</small>
+    </p>
+    {% if sub.stripe_customer_id and stripe_configured %}
+    <form method="post" action="/billing/portal" style="margin-top:10px">
+      <button class="btn">Manage billing &amp; invoices</button>
+    </form>
+    {% endif %}
+  {% endif %}
+</div>
+
 <div class="card table-card" style="margin-bottom:20px">
   <div class="filters"><b>Members ({{ ctx.membership.merchant_name }})</b></div>
   <table>

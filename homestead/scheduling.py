@@ -2,7 +2,6 @@
 
 from datetime import date, timedelta
 import math
-import pandas as pd
 
 from homestead.calendar_export import create_gcal_link
 from homestead.config import (
@@ -685,16 +684,15 @@ def _batch_feed_on_day(s: dict, d: date) -> tuple[float, float]:
 
 def compute_combined_feed_schedule(
     schedules: list[dict], barrel_capacity: int = DEFAULT_BARREL_CAPACITY
-) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+) -> tuple[list[dict], list[dict], dict]:
     """
     Build weekly and monthly time-phased feed demand across active batches,
     accounting for Starter vs. Grower/Finisher phases and dated batch losses.
     """
     if not schedules:
-        empty_df = pd.DataFrame()
         return (
-            empty_df,
-            empty_df,
+            [],
+            [],
             {
                 "peak_weekly_lbs": 0.0,
                 "peak_concurrent_lbs": 0.0,
@@ -784,11 +782,10 @@ def compute_combined_feed_schedule(
         records.append(row)
         curr_week_start = curr_week_end
 
-    weekly_df = pd.DataFrame(records)
-    if weekly_df.empty:
+    if not records:
         return (
-            weekly_df,
-            pd.DataFrame(),
+            [],
+            [],
             {
                 "peak_weekly_lbs": 0.0,
                 "peak_concurrent_lbs": 0.0,
@@ -796,48 +793,51 @@ def compute_combined_feed_schedule(
             },
         )
 
-    monthly_df = weekly_df.copy()
-    monthly_df["Month"] = monthly_df["Week Starting"].str.slice(0, 7)
-    monthly_summary = (
-        monthly_df.groupby("Month", as_index=False)
-        .agg(
-            Starter_Feed_lbs=("Starter Feed (lbs)", "sum"),
-            Grower_Feed_lbs=("Grower/Finisher Feed (lbs)", "sum"),
-            Monthly_Feed_lbs=("Total Weekly Feed (lbs)", "sum"),
-            Peak_Concurrent_Barrels=(
-                "Concurrent Barrels Needed (Remaining Active)",
-                "max",
-            ),
+    by_month: dict[str, dict] = {}
+    for r in records:
+        m = str(r["Week Starting"])[:7]
+        acc = by_month.setdefault(
+            m,
+            {
+                "Month": m,
+                "Starter Feed (lbs)": 0.0,
+                "Grower/Finisher Feed (lbs)": 0.0,
+                "Monthly Feed Consumed (lbs)": 0.0,
+                "Peak Concurrent Barrels in Month": 0,
+            },
         )
-        .rename(
-            columns={
-                "Starter_Feed_lbs": "Starter Feed (lbs)",
-                "Grower_Feed_lbs": "Grower/Finisher Feed (lbs)",
-                "Monthly_Feed_lbs": "Monthly Feed Consumed (lbs)",
-                "Peak_Concurrent_Barrels": "Peak Concurrent Barrels in Month",
-            }
+        acc["Starter Feed (lbs)"] += float(r["Starter Feed (lbs)"])
+        acc["Grower/Finisher Feed (lbs)"] += float(r["Grower/Finisher Feed (lbs)"])
+        acc["Monthly Feed Consumed (lbs)"] += float(r["Total Weekly Feed (lbs)"])
+        acc["Peak Concurrent Barrels in Month"] = max(
+            acc["Peak Concurrent Barrels in Month"],
+            int(r["Concurrent Barrels Needed (Remaining Active)"]),
         )
-    )
-    for col in [
-        "Starter Feed (lbs)",
-        "Grower/Finisher Feed (lbs)",
-        "Monthly Feed Consumed (lbs)",
-    ]:
-        monthly_summary[col] = monthly_summary[col].round(1)
-    monthly_summary["Barrels Consumed in Month"] = monthly_summary[
-        "Monthly Feed Consumed (lbs)"
-    ].apply(lambda lbs: round(lbs / max(1, barrel_capacity), 2))
+
+    monthly_summary = []
+    for m in sorted(by_month):
+        acc = by_month[m]
+        for col in (
+            "Starter Feed (lbs)",
+            "Grower/Finisher Feed (lbs)",
+            "Monthly Feed Consumed (lbs)",
+        ):
+            acc[col] = round(acc[col], 1)
+        acc["Barrels Consumed in Month"] = round(
+            acc["Monthly Feed Consumed (lbs)"] / max(1, barrel_capacity), 2
+        )
+        monthly_summary.append(acc)
 
     stats = {
-        "peak_weekly_lbs": float(weekly_df["Total Weekly Feed (lbs)"].max()),
-        "peak_concurrent_lbs": float(
-            weekly_df["Remaining Active Batch Feed (lbs)"].max()
+        "peak_weekly_lbs": max(float(r["Total Weekly Feed (lbs)"]) for r in records),
+        "peak_concurrent_lbs": max(
+            float(r["Remaining Active Batch Feed (lbs)"]) for r in records
         ),
-        "peak_concurrent_barrels": int(
-            weekly_df["Concurrent Barrels Needed (Remaining Active)"].max()
+        "peak_concurrent_barrels": max(
+            int(r["Concurrent Barrels Needed (Remaining Active)"]) for r in records
         ),
     }
-    return weekly_df, monthly_summary, stats
+    return records, monthly_summary, stats
 
 
 def _format_relative_days_badge(

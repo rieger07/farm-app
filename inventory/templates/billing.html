@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Billing · iron ledger{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div><h1>Plan &amp; Billing</h1><p class="sub">Subscription status for {{ ctx.membership.merchant_name }}.</p></div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card">
+  <h2>Current status:
+    {% if sub.status == 'comp' %}<span class="pill green">Lifetime (Complimentary)</span>
+    {% elif sub.status in ('active', 'trialing') %}<span class="pill green">{{ sub.status|title }}</span>
+    {% elif sub.status == 'past_due' %}<span class="pill amber">Past due</span>
+    {% else %}<span class="pill red">Paused / Canceled</span>{% endif %}
+  </h2>
+  <p class="sub">Plan: <b>{{ sub.plan_key|title }}</b>{% if sub.current_period_end %} · Period ends {{ sub.current_period_end[:10] }}{% endif %}</p>
+
+  {% if not allowed %}
+    <p class="err" style="margin-top:10px">
+      {% if ctx.role in ('owner', 'manager') or ctx.is_admin %}
+        Your subscription is paused. Update your payment method below to restore access to Inventory, Sales, and Quick Sale.
+      {% else %}
+        This workspace's subscription is paused. Please ask your farm owner to update the payment method.
+      {% endif %}
+    </p>
+  {% elif grace %}
+    <p class="err" style="margin-top:10px">Payment failed — you are in a grace period until {{ sub.grace_until[:10] }}. Please update your card soon to avoid interruption.</p>
+  {% endif %}
+
+  {% if can_portal and (ctx.role in ('owner', 'manager') or ctx.is_admin) %}
+  <form method="post" action="/billing/portal" style="margin-top:14px">
+    <button class="btn primary">Manage billing &amp; invoices in Stripe</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,19 +1,17 @@
 """Financials, shopping schedule, ROI summary, and harvest/freezer reconciliation tables."""
 
-import pandas as pd
-
 from homestead.config import DEFAULT_BAG_WEIGHT
 
 
 def compute_purchasing_schedule(
     schedules: list[dict], bag_weight: int = DEFAULT_BAG_WEIGHT
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[list[dict], list[dict]]:
     """
     Build an itemized chronological Purchasing & Cash-Flow Schedule and a Monthly Cash-Flow Summary
     showing when to buy animals, Starter feed bags, Grower/Finisher feed bags, and pay processing fees.
     """
     if not schedules:
-        return pd.DataFrame(), pd.DataFrame()
+        return [], []
 
     events = []
     for s in schedules:
@@ -84,38 +82,39 @@ def compute_purchasing_schedule(
                 }
             )
 
-    events_df = pd.DataFrame(events)
-    if events_df.empty:
-        return events_df, pd.DataFrame()
+    if not events:
+        return [], []
 
-    events_df = events_df.sort_values(
-        by=["Date", "Batch", "Category"]
-    ).reset_index(drop=True)
+    events.sort(key=lambda e: (e["Date"], e["Batch"], e["Category"]))
 
-    monthly_cash_df = (
-        events_df.groupby("Month", as_index=False)
-        .agg(
-            Total_Bags=("Feed Bags", "sum"),
-            Total_Feed_lbs=("Feed (lbs)", "sum"),
-            Total_Cost=("Cost ($)", "sum"),
+    bags_col = f"Feed Bags Purchased ({bag_weight}lb)"
+    by_month: dict[str, dict] = {}
+    for e in events:
+        m = e["Month"]
+        acc = by_month.setdefault(
+            m,
+            {
+                "Month": m,
+                bags_col: 0,
+                "Feed Purchased (lbs)": 0.0,
+                "Total Monthly Outlay ($)": 0.0,
+            },
         )
-        .rename(
-            columns={
-                "Total_Bags": f"Feed Bags Purchased ({bag_weight}lb)",
-                "Total_Feed_lbs": "Feed Purchased (lbs)",
-                "Total_Cost": "Total Monthly Outlay ($)",
-            }
+        acc[bags_col] += int(e["Feed Bags"])
+        acc["Feed Purchased (lbs)"] = round(
+            acc["Feed Purchased (lbs)"] + float(e["Feed (lbs)"]), 1
         )
-    )
-    monthly_cash_df["Total Monthly Outlay ($)"] = monthly_cash_df[
-        "Total Monthly Outlay ($)"
-    ].round(2)
-    return events_df, monthly_cash_df
+        acc["Total Monthly Outlay ($)"] = round(
+            acc["Total Monthly Outlay ($)"] + float(e["Cost ($)"]), 2
+        )
+
+    monthly_rows = [by_month[m] for m in sorted(by_month)]
+    return events, monthly_rows
 
 
-def compute_roi_summary_table(schedules: list[dict]) -> pd.DataFrame:
+def compute_roi_summary_table(schedules: list[dict]) -> list[dict]:
     if not schedules:
-        return pd.DataFrame()
+        return []
 
     rows = []
     for s in schedules:
@@ -143,13 +142,13 @@ def compute_roi_summary_table(schedules: list[dict]) -> pd.DataFrame:
                 "ROI (%)": f"{s['roi_margin_pct']:.1f}%",
             }
         )
-    return pd.DataFrame(rows)
+    return rows
 
 
-def compute_reconciliation_table(schedules: list[dict]) -> pd.DataFrame:
+def compute_reconciliation_table(schedules: list[dict]) -> list[dict]:
     """Build an Estimated vs. Actual Harvest, Home Freezer & Sales Reconciliation summary table."""
     if not schedules:
-        return pd.DataFrame()
+        return []
 
     rows = []
     for s in schedules:
@@ -181,13 +180,13 @@ def compute_reconciliation_table(schedules: list[dict]) -> pd.DataFrame:
                 ),
             }
         )
-    return pd.DataFrame(rows)
+    return rows
 
 
-def compute_unified_financials_table(schedules: list[dict]) -> pd.DataFrame:
+def compute_unified_financials_table(schedules: list[dict]) -> list[dict]:
     """Build a clean 8-column Batch Economics & Freezer table."""
     if not schedules:
-        return pd.DataFrame()
+        return []
 
     rows = []
     for s in schedules:
@@ -216,4 +215,4 @@ def compute_unified_financials_table(schedules: list[dict]) -> pd.DataFrame:
                 "Effective Freezer $/lb": freezer_cost_str,
             }
         )
-    return pd.DataFrame(rows)
+    return rows

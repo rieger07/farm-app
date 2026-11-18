@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Batches · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">FLOCKS &amp; LIVESTOCK</div>
+<div class="pagehead">
+  <div><h1>Batches</h1><p class="sub">Manage active and archived batches, logs, and calendar exports.</p></div>
+  <div class="row">
+    <a href="/calendar.ics" class="btn">Export .ics</a>
+    <button class="btn primary" onclick="openNewBatchModal()">+ New batch</button>
+  </div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card table-card">
+  <table>
+    <thead><tr><th>Batch</th><th>Species</th><th>Start</th><th>Process</th><th class="num">Surviving</th><th class="num">Harvested</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for s in schedules %}
+      {% set b = s.batch %}
+      <tr>
+        <td><a href="/batches/{{ b.id }}"><b>{{ b.name }}</b></a></td>
+        <td>{{ b.species|title }}</td>
+        <td>{{ b.start_date }}</td>
+        <td>{{ s.proc_date }}</td>
+        <td class="num">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</td>
+        <td class="num">{{ s.harvested_head }}</td>
+        <td><span class="pill {{ 'green' if b.active else 'gray' }}">{{ s.status_badge if b.active else 'Archived' }}</span></td>
+        <td class="num">
+          <div class="row" style="justify-content:flex-end">
+            <a href="/batches/{{ b.id }}" class="btn sm">Logs</a>
+            <button type="button" class="btn sm" onclick='openEditBatchModal({{ b|tojson }})'>Edit</button>
+            <form method="post" action="/batches/{{ b.id }}/toggle-active" style="display:inline">
+              <button class="btn sm">{{ 'Archive' if b.active else 'Restore' }}</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty">No batches found. Click <b>+ New batch</b> to create one.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "_batch_modal.html" %}
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Subscribe · iron ledger{% endblock %}
+{% block body %}
+<div class="card login" style="max-width:480px">
+  <div class="brand sm">iron ledger</div>
+  <h1 style="font-size:26px;margin-top:8px">Start your farm POS &amp; inventory</h1>
+  <p class="sub">Zettle sync, offline Quick Sale, and stock ledger for your stand. Unlimited staff logins included.</p>
+  {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+  {% if stripe_configured %}
+  <form method="post" action="/signup/checkout" style="display:flex;flex-direction:column;gap:12px;margin-top:16px">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Farm / business name
+      <input name="merchant_name" placeholder="e.g. Willow Creek Apiary" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Email for receipts
+      <input name="email" type="email" placeholder="you@example.com" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Plan
+      <select name="plan_key" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+        {% for key, p in plans.items() %}
+        <option value="{{ key }}">{{ p.label }} — {{ p.price_display }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if trial_days %}<small class="muted">Includes a {{ trial_days }}-day free trial. Cancel anytime.</small>{% endif %}
+    <button class="btn primary wide">Continue to Stripe Checkout</button>
+  </form>
+  {% else %}
+  <p class="muted" style="margin-top:16px">Online signup is not configured yet. Ask your platform admin for an invite link.</p>
+  {% endif %}
+  <p style="margin-top:16px;text-align:center"><small><a href="/login">Already have an account? Sign in</a></small></p>
+</div>
+{% endblock %}

@@ -17,6 +17,16 @@
 </div>
 {% endif %}
 
+{% if checkout_url %}
+<div class="card" style="margin-bottom:20px;background:var(--sage);border-color:#9bb8a5">
+  <b>Stripe Checkout link ready to send:</b>
+  <div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap">
+    <input id="chk-url" value="{{ checkout_url }}" readonly style="flex:1;min-width:260px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit">
+    <button type="button" class="btn primary" onclick="navigator.clipboard.writeText(document.getElementById('chk-url').value);this.textContent='Copied!'">Copy checkout link</button>
+  </div>
+</div>
+{% endif %}
+
 <div class="cards two even">
   <div class="card">
     <h2>1. Create tenant workspace directly</h2>
@@ -55,10 +65,34 @@
   </div>
 </div>
 
+<div class="card" style="margin-bottom:20px">
+  <div class="row" style="justify-content:space-between;flex-wrap:wrap">
+    <div>
+      <h2 style="margin-bottom:4px">Stripe Billing</h2>
+      <small>
+        API: {% if stripe_configured %}<span class="pill green">Configured</span>{% else %}<span class="pill amber">Not configured</span>{% endif %}
+        · Webhook: {% if stripe_webhook_configured %}<span class="pill green">Configured</span>{% else %}<span class="pill amber">Missing STRIPE_WEBHOOK_SECRET</span>{% endif %}
+      </small>
+    </div>
+    {% if stripe_configured %}
+    <form method="post" action="/admin/billing/checkout-link" class="row" style="flex-wrap:wrap">
+      <input name="merchant_name" placeholder="Farm name" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="email" type="email" placeholder="Farmer email (optional)" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <select name="plan_key" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+        {% for key, p in price_catalog.items() %}
+        <option value="{{ key }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn primary">Create Checkout link</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
 <div class="card table-card" style="margin-bottom:20px">
   <div class="filters"><b>Tenant workspaces ({{ merchants|length }})</b></div>
   <table>
-    <thead><tr><th>Workspace</th><th>Zettle</th><th>Catalog &amp; Sales</th><th>Members</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Workspace</th><th>Billing</th><th>Zettle</th><th>Catalog &amp; Sales</th><th>Members</th><th>Actions</th></tr></thead>
     <tbody>
     {% for m in merchants %}
       <tr>
@@ -69,6 +103,24 @@
             <input name="name" value="{{ m.name }}" style="padding:4px 8px;font-size:12px;max-width:150px">
             <button class="btn" style="padding:4px 8px;font-size:12px">Rename</button>
           </form>
+        </td>
+        <td>
+          {% if m.billing_status == 'comp' %}<span class="pill green">Lifetime</span>
+          {% elif m.billing_status in ('active', 'trialing') %}<span class="pill green">{{ m.billing_status|title }}</span>
+          {% elif m.billing_status == 'past_due' %}<span class="pill amber">Past due</span>
+          {% else %}<span class="pill red">Paused</span>{% endif %}
+          <small>{{ m.plan_key }}</small>
+          <div class="row" style="margin-top:4px;gap:4px">
+            {% if m.billing_status != 'comp' %}
+            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="comp"><button class="link" style="font-size:11px">Grant lifetime</button></form>
+            {% endif %}
+            {% if m.billing_status != 'canceled' %}
+            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="grace"><button class="link" style="font-size:11px">+7d grace</button></form>
+            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="suspend"><button class="link" style="color:var(--redink);font-size:11px">Pause</button></form>
+            {% else %}
+            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="activate"><button class="link" style="font-size:11px">Reactivate</button></form>
+            {% endif %}
+          </div>
         </td>
         <td>
           {% if m.zettle_connected %}<span class="pill green">Connected</span>{% else %}<span class="pill amber">Not connected</span>{% endif %}
