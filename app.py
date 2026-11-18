@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
+    acknowledge_milestone,
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
@@ -35,6 +36,7 @@ from homestead.database import (
     import_backup_json,
     init_db,
     is_public_registration_enabled,
+    list_acknowledged_milestones,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
@@ -265,7 +267,11 @@ def _build_timeline(schedules: list[dict]) -> dict | None:
 @app.get("/")
 def radar_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     schedules = _schedules_for_user(user["id"], include_archived=False)
-    milestones = [m for m in compute_upcoming_milestones(schedules) if m["days_away"] <= 14]
+    acked = list_acknowledged_milestones([s["batch"]["id"] for s in schedules])
+    milestones = [
+        m for m in compute_upcoming_milestones(schedules)
+        if m["days_away"] <= 14 and (int(m["batch_id"]), str(m["task"])) not in acked
+    ]
     return _render(
         request, "radar.html", user, "radar",
         schedules=schedules,
@@ -276,6 +282,17 @@ def radar_page(request: Request, msg: str = "", user: dict = Depends(current_use
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
+
+
+@app.post("/milestones/ack")
+def milestone_ack_submit(
+    batch_id: int = Form(...),
+    task: str = Form(...),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    acknowledge_milestone(batch_id, task, done=True)
+    return RedirectResponse("/?msg=" + quote_plus(f"Checked off: {task}"), status_code=303)
 
 
 @app.get("/batches")

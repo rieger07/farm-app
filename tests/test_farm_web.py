@@ -51,6 +51,12 @@ class FarmWebTest(unittest.TestCase):
         radar = self.c.get("/").text
         self.assertIn("Spring Broilers", radar)
         self.assertIn("Batch lifecycle timeline", radar)
+        self.assertIn("Arrival Window", radar)
+
+        # Check off a milestone and verify it disappears from Radar
+        r_ack = self.c.post("/milestones/ack", data={"batch_id": "1", "task": "Arrival Window"}, follow_redirects=False)
+        self.assertEqual(r_ack.status_code, 303)
+        self.assertNotIn('value="Arrival Window"', self.c.get("/").text)
 
         # Grab batch id from /batches
         batches_html = self.c.get("/batches").text

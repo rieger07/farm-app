@@ -46,7 +46,7 @@
 
 {% if milestones %}
 <div class="card">
-  <h2>Upcoming milestones (14 days)</h2>
+  <h2>Due &amp; upcoming milestones (14 days)</h2>
   <div class="ms-list">
     {% for m in milestones %}
     <div class="ms-row">
@@ -54,7 +54,14 @@
         <b>{{ m.task }}</b>
         <small>{{ m.batch_name }} · {{ m.date_display }}{% if m.details %} · {{ m.details }}{% endif %}</small>
       </div>
-      <span class="pill {{ 'amber' if m.days_away <= 3 else 'green' }}">{{ m.badge }}</span>
+      <div class="row">
+        <span class="pill {{ 'amber' if m.days_away <= 3 else 'green' }}">{{ m.badge }}</span>
+        <form method="post" action="/milestones/ack" style="display:inline">
+          <input type="hidden" name="batch_id" value="{{ m.batch_id }}">
+          <input type="hidden" name="task" value="{{ m.task }}">
+          <button class="btn sm" title="Mark done">✓ Done</button>
+        </form>
+      </div>
     </div>
     {% endfor %}
   </div>

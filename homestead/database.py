@@ -308,6 +308,17 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_telemetry_created ON telemetry_events(id DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_milestones_ack (
+                batch_id INTEGER NOT NULL,
+                task TEXT NOT NULL,
+                done_at TEXT NOT NULL,
+                PRIMARY KEY (batch_id, task),
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
 
 
@@ -1527,6 +1538,37 @@ def set_batch_active(batch_id: int, active: bool) -> None:
             "UPDATE batches SET active = ? WHERE id = ?",
             (1 if active else 0, int(batch_id)),
         )
+        conn.commit()
+
+
+def list_acknowledged_milestones(batch_ids: list[int]) -> set[tuple[int, str]]:
+    if not batch_ids:
+        return set()
+    marks = ",".join("?" * len(batch_ids))
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            f"SELECT batch_id, task FROM batch_milestones_ack WHERE batch_id IN ({marks})",
+            [int(b) for b in batch_ids],
+        ).fetchall()
+    return {(int(r["batch_id"]), str(r["task"])) for r in rows}
+
+
+def acknowledge_milestone(batch_id: int, task: str, done: bool = True) -> None:
+    with get_db_connection() as conn:
+        if done:
+            conn.execute(
+                """
+                INSERT INTO batch_milestones_ack (batch_id, task, done_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(batch_id, task) DO UPDATE SET done_at = excluded.done_at
+                """,
+                (int(batch_id), str(task), datetime.utcnow().isoformat(timespec="seconds")),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM batch_milestones_ack WHERE batch_id = ? AND task = ?",
+                (int(batch_id), str(task)),
+            )
         conn.commit()
 
 
