@@ -308,6 +308,33 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_telemetry_created ON telemetry_events(id DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_milestones_ack (
+                batch_id INTEGER NOT NULL,
+                task TEXT NOT NULL,
+                done_at TEXT NOT NULL,
+                PRIMARY KEY (batch_id, task),
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_feed_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                feed_date TEXT NOT NULL,
+                feed_type TEXT NOT NULL DEFAULT 'grower',
+                bags REAL NOT NULL DEFAULT 0,
+                feed_lbs REAL NOT NULL DEFAULT 0,
+                cost_total REAL NOT NULL DEFAULT 0,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
 
 
@@ -1264,6 +1291,52 @@ def delete_batch_sale(sale_id: int) -> None:
         conn.commit()
 
 
+def list_batch_feed_logs(batch_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM batch_feed_logs WHERE batch_id = ? ORDER BY feed_date DESC, id DESC",
+            (int(batch_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_batch_feed_log(
+    batch_id: int,
+    feed_date: str,
+    feed_type: str,
+    bags: float,
+    feed_lbs: float,
+    cost_total: float,
+    notes: str = "",
+) -> int:
+    ft = "starter" if str(feed_type).strip().lower() == "starter" else "grower"
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO batch_feed_logs (batch_id, feed_date, feed_type, bags, feed_lbs, cost_total, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(batch_id),
+                str(feed_date),
+                ft,
+                max(0.0, float(bags)),
+                max(0.0, float(feed_lbs)),
+                max(0.0, float(cost_total)),
+                str(notes or "").strip(),
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_batch_feed_log(log_id: int) -> None:
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM batch_feed_logs WHERE id = ?", (int(log_id),))
+        conn.commit()
+
+
 def set_batch_actual_feed(
     batch_id: int,
     actual_feed_lbs: float | None,
@@ -1527,6 +1600,37 @@ def set_batch_active(batch_id: int, active: bool) -> None:
             "UPDATE batches SET active = ? WHERE id = ?",
             (1 if active else 0, int(batch_id)),
         )
+        conn.commit()
+
+
+def list_acknowledged_milestones(batch_ids: list[int]) -> set[tuple[int, str]]:
+    if not batch_ids:
+        return set()
+    marks = ",".join("?" * len(batch_ids))
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            f"SELECT batch_id, task FROM batch_milestones_ack WHERE batch_id IN ({marks})",
+            [int(b) for b in batch_ids],
+        ).fetchall()
+    return {(int(r["batch_id"]), str(r["task"])) for r in rows}
+
+
+def acknowledge_milestone(batch_id: int, task: str, done: bool = True) -> None:
+    with get_db_connection() as conn:
+        if done:
+            conn.execute(
+                """
+                INSERT INTO batch_milestones_ack (batch_id, task, done_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(batch_id, task) DO UPDATE SET done_at = excluded.done_at
+                """,
+                (int(batch_id), str(task), datetime.utcnow().isoformat(timespec="seconds")),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM batch_milestones_ack WHERE batch_id = ? AND task = ?",
+                (int(batch_id), str(task)),
+            )
         conn.commit()
 
 

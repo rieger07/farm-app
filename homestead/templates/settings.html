@@ -101,21 +101,23 @@
   <form method="post" action="/settings/species" class="fgrid">
     <label class="full">Species name<input name="species" id="pm-sp" required></label>
     <label>Lifecycle
-      <select name="lifecycle_type" id="pm-life">
-        <option value="live_arrival">Live arrival</option>
-        <option value="incubation">Incubation</option>
+      <select name="lifecycle_type" id="pm-life" onchange="syncPresetLifecycle()">
+        <option value="direct_arrival">Live arrival (chicks / poults)</option>
+        <option value="poultry_incubation">Incubation (eggs)</option>
+        <option value="mammal_breeding">Breeding / gestation (mammals)</option>
       </select>
     </label>
-    <label>Growth days<input type="number" name="growth_days" id="pm-days" min="1" value="56" required></label>
-    <label>Starter days<input type="number" name="starter_days" id="pm-sdays" min="0" value="21" required></label>
-    <label>Starter lb/day<input type="number" name="starter_lbs_per_day" id="pm-slbs" step="0.01" min="0" value="0.12" required></label>
-    <label>Grower lb/day<input type="number" name="grower_lbs_per_day" id="pm-glbs" step="0.01" min="0" value="0.30" required></label>
+    <label><span id="pm-birth-lbl">Incubation / gestation days</span><input type="number" name="days_to_birth" id="pm-birth" min="0" value="0" required></label>
+    <label>Starter weeks<input type="number" name="starter_weeks" id="pm-swks" min="0" value="3" required></label>
+    <label>Grower weeks<input type="number" name="grower_weeks" id="pm-gwks" min="0" value="5" required></label>
+    <label>Starter feed (lb/head)<input type="number" name="starter_feed_lbs" id="pm-slbs" step="0.1" min="0" value="3.0" required></label>
+    <label>Grower feed (lb/head)<input type="number" name="grower_feed_lbs" id="pm-glbs" step="0.1" min="0" value="12.0" required></label>
     <label>Cost / head ($)<input type="number" name="unit_cost" id="pm-ucost" step="0.01" min="0" value="3.50" required></label>
-    <label>Est. dressed wt (lb)<input type="number" name="avg_dressed_weight" id="pm-wt" step="0.1" min="0" value="4.5" required></label>
+    <label>Est. dressed wt (lb)<input type="number" name="expected_yield_lbs" id="pm-wt" step="0.1" min="0" value="4.5" required></label>
     <label>Sale price ($/lb)<input type="number" name="sale_price_per_lb" id="pm-sprice" step="0.01" min="0" value="5.50" required></label>
     <label>Processing ($/head)<input type="number" name="processing_cost" id="pm-pcost" step="0.01" min="0" value="5.00" required></label>
-    <label>Starter $/bag<input type="number" name="starter_bag_price" id="pm-sbag" step="0.01" min="0" value="28.00" required></label>
-    <label>Grower $/bag<input type="number" name="grower_bag_price" id="pm-gbag" step="0.01" min="0" value="24.00" required></label>
+    <label>Starter $/bag<input type="number" name="starter_bag_price" id="pm-sbag" step="0.01" min="0" value="24.00" required></label>
+    <label>Grower $/bag<input type="number" name="grower_bag_price" id="pm-gbag" step="0.01" min="0" value="22.00" required></label>
     <label class="full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="apply_active" value="1"> Apply changes to active batches</label>
     <div class="row full" style="justify-content:flex-end;margin-top:6px">
       <button type="button" class="btn" onclick="document.getElementById('presetm').close()">Cancel</button>
@@ -124,22 +126,42 @@
   </form>
 </dialog>
 <script>
+function syncPresetLifecycle() {
+  const lc = document.getElementById('pm-life').value;
+  const birth = document.getElementById('pm-birth');
+  const lbl = document.getElementById('pm-birth-lbl');
+  if (lc === 'direct_arrival') {
+    lbl.textContent = 'Pre-arrival days (0 for live)';
+    birth.value = 0;
+  } else if (lc === 'poultry_incubation') {
+    lbl.textContent = 'Incubation days';
+    if (!Number(birth.value)) birth.value = 21;
+  } else {
+    lbl.textContent = 'Gestation days';
+    if (!Number(birth.value)) birth.value = 116;
+  }
+}
 function openPresetModal(sp, cfg) {
   document.getElementById('pm-title').textContent = sp ? ('Edit ' + sp) : 'Add species preset';
   document.getElementById('pm-sp').value = sp || '';
   if (cfg) {
-    document.getElementById('pm-life').value = cfg.lifecycle_type || 'live_arrival';
-    document.getElementById('pm-days').value = cfg.growth_days || 56;
-    document.getElementById('pm-sdays').value = cfg.starter_days || 21;
-    document.getElementById('pm-slbs').value = cfg.starter_lbs_per_day || 0.12;
-    document.getElementById('pm-glbs').value = cfg.grower_lbs_per_day || 0.30;
-    document.getElementById('pm-ucost').value = cfg.unit_cost || 0;
-    document.getElementById('pm-wt').value = cfg.avg_dressed_weight || 0;
-    document.getElementById('pm-sprice').value = cfg.sale_price_per_lb || 0;
-    document.getElementById('pm-pcost').value = cfg.processing_cost || 0;
-    document.getElementById('pm-sbag').value = cfg.starter_bag_price || 0;
-    document.getElementById('pm-gbag').value = cfg.grower_bag_price || 0;
+    document.getElementById('pm-life').value = cfg.lifecycle_type || 'direct_arrival';
+    document.getElementById('pm-birth').value = cfg.days_to_birth ?? 0;
+    document.getElementById('pm-swks').value = cfg.starter_weeks ?? 3;
+    document.getElementById('pm-gwks').value = cfg.grower_weeks ?? 5;
+    document.getElementById('pm-slbs').value = cfg.starter_feed_lbs ?? 3.0;
+    document.getElementById('pm-glbs').value = cfg.grower_feed_lbs ?? 12.0;
+    document.getElementById('pm-ucost').value = cfg.unit_cost ?? 0;
+    document.getElementById('pm-wt').value = cfg.expected_yield_lbs ?? 0;
+    document.getElementById('pm-sprice').value = cfg.sale_price_per_lb ?? 0;
+    document.getElementById('pm-pcost').value = cfg.processing_cost ?? 0;
+    document.getElementById('pm-sbag').value = cfg.starter_bag_price ?? 0;
+    document.getElementById('pm-gbag').value = cfg.grower_bag_price ?? 0;
+  } else {
+    document.getElementById('pm-life').value = 'direct_arrival';
+    document.getElementById('pm-birth').value = 0;
   }
+  syncPresetLifecycle();
   document.getElementById('presetm').showModal();
 }
 </script>

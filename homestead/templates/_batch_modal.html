@@ -25,6 +25,18 @@
       </select>
     </label>
     <label class="full">Notes<input name="notes" id="bm-notes" placeholder="Hatchery, breed, pasture notes..."></label>
+    <details class="full" style="border-top:1px solid var(--line);padding-top:10px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--green)">Customize feed &amp; timeline</summary>
+      <div class="fgrid" style="margin-top:10px">
+        <label>Incubation / gestation days<input type="number" name="days_to_birth" id="bm-birth" min="0"></label>
+        <label>Starter weeks<input type="number" name="starter_weeks" id="bm-swks" min="0"></label>
+        <label>Grower weeks<input type="number" name="grower_weeks" id="bm-gwks" min="0"></label>
+        <label>Starter feed (lb/head)<input type="number" name="starter_feed_lbs" id="bm-sf" step="0.1" min="0"></label>
+        <label>Grower feed (lb/head)<input type="number" name="grower_feed_lbs" id="bm-gf" step="0.1" min="0"></label>
+        <label>Starter $/bag<input type="number" name="starter_bag_price" id="bm-sbp" step="0.01" min="0"></label>
+        <label>Grower $/bag<input type="number" name="grower_bag_price" id="bm-gbp" step="0.01" min="0"></label>
+      </div>
+    </details>
     <div class="row full" style="justify-content:flex-end;margin-top:6px">
       <button type="button" class="btn" onclick="document.getElementById('batchm').close()">Cancel</button>
       <button type="submit" class="btn primary">Save batch</button>
@@ -43,6 +55,13 @@ function fillSpeciesDefaults() {
   if (cfg.sale_price_per_lb !== undefined) document.getElementById('bm-sprice').value = cfg.sale_price_per_lb;
   if (cfg.processing_cost !== undefined) document.getElementById('bm-pcost').value = cfg.processing_cost;
   if (cfg.lifecycle_type) document.getElementById('bm-life').value = cfg.lifecycle_type;
+  if (cfg.days_to_birth !== undefined) document.getElementById('bm-birth').value = cfg.days_to_birth;
+  if (cfg.starter_weeks !== undefined) document.getElementById('bm-swks').value = cfg.starter_weeks;
+  if (cfg.grower_weeks !== undefined) document.getElementById('bm-gwks').value = cfg.grower_weeks;
+  if (cfg.starter_feed_lbs !== undefined) document.getElementById('bm-sf').value = cfg.starter_feed_lbs;
+  if (cfg.grower_feed_lbs !== undefined) document.getElementById('bm-gf').value = cfg.grower_feed_lbs;
+  if (cfg.starter_bag_price !== undefined) document.getElementById('bm-sbp').value = cfg.starter_bag_price;
+  if (cfg.grower_bag_price !== undefined) document.getElementById('bm-gbp').value = cfg.grower_bag_price;
 }
 function openNewBatchModal() {
   document.getElementById('bm-title').textContent = 'New batch';
@@ -66,7 +85,21 @@ function openEditBatchModal(b) {
   document.getElementById('bm-sprice').value = b.sale_price_per_lb;
   document.getElementById('bm-pcost').value = b.processing_cost;
   document.getElementById('bm-life').value = b.lifecycle_type || 'direct_arrival';
+  document.getElementById('bm-birth').value = b.days_to_birth ?? 0;
+  document.getElementById('bm-swks').value = b.starter_weeks ?? 3;
+  document.getElementById('bm-gwks').value = b.grower_weeks ?? 5;
+  document.getElementById('bm-sf').value = b.starter_feed_lbs ?? 3.0;
+  document.getElementById('bm-gf').value = b.grower_feed_lbs ?? 12.0;
+  document.getElementById('bm-sbp').value = b.starter_bag_price ?? 24.0;
+  document.getElementById('bm-gbp').value = b.grower_bag_price ?? 22.0;
   document.getElementById('bm-notes').value = b.notes || '';
   document.getElementById('batchm').showModal();
+}
+function openDuplicateBatchModal(b) {
+  openEditBatchModal(b);
+  document.getElementById('bm-title').textContent = 'Duplicate batch';
+  document.getElementById('bm-id').value = '';
+  document.getElementById('bm-name').value = (b.name || 'Batch') + ' (Copy)';
+  document.getElementById('bm-start').value = '{{ today_iso }}';
 }
 </script>

@@ -50,21 +50,34 @@ class FarmWebTest(unittest.TestCase):
 
         radar = self.c.get("/").text
         self.assertIn("Spring Broilers", radar)
+        self.assertIn("Batch lifecycle timeline", radar)
+        self.assertIn("Hatch Window", radar)
+
+        # Check off a milestone and verify it disappears from Radar
+        r_ack = self.c.post("/milestones/ack", data={"batch_id": "1", "task": "Hatch Window"}, follow_redirects=False)
+        self.assertEqual(r_ack.status_code, 303)
+        self.assertNotIn('value="Hatch Window"', self.c.get("/").text)
 
         # Grab batch id from /batches
         batches_html = self.c.get("/batches").text
         self.assertIn("Spring Broilers", batches_html)
+        self.assertIn("openDuplicateBatchModal", batches_html)
 
         # Log loss, harvest, sale, feed on batch 1
         self.c.post("/batches/log-loss", data={"batch_id": "1", "loss_date": "2026-11-05", "count": "2", "reason": "Runt", "next_url": "/batches/1"}, follow_redirects=False)
         self.c.post("/batches/log-harvest", data={"batch_id": "1", "harvest_date": "2026-11-16", "head_count": "10", "dressed_lbs": "46.5", "processing_cost_total": "50.0", "next_url": "/batches/1"}, follow_redirects=False)
         self.c.post("/batches/log-sale", data={"batch_id": "1", "entry_date": "2026-11-17", "allocation_type": "sale", "weight_lbs": "20", "revenue": "110", "next_url": "/batches/1"}, follow_redirects=False)
-        self.c.post("/batches/log-feed", data={"batch_id": "1", "actual_feed_lbs": "180", "actual_feed_cost": "95", "next_url": "/batches/1"}, follow_redirects=False)
+        self.c.post("/batches/log-feed", data={
+            "batch_id": "1", "feed_date": "2026-11-17", "feed_type": "grower",
+            "bags": "4", "feed_lbs": "200", "cost_total": "88", "notes": "Tractor Supply",
+            "next_url": "/batches/1",
+        }, follow_redirects=False)
 
         detail = self.c.get("/batches/1").text
         self.assertIn("28 / 30", detail)
         self.assertIn("46.5 lb", detail)
         self.assertIn("110.00", detail)
+        self.assertIn("200.0 lb ($88.00)", detail)
 
         # Feed, Financials, ICS, Backup, Settings
         self.c.post("/feed/settings", data={"barrel_capacity": "300", "bag_weight": "50"}, follow_redirects=False)
@@ -82,9 +95,21 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(bak.status_code, 200)
         self.assertTrue(json.loads(bak.text)["batches"])
 
-        self.c.post("/settings/species", data={"species": "ducks", "lifecycle_type": "live_arrival", "growth_days": "49"}, follow_redirects=False)
+        self.c.post("/settings/species", data={
+            "species": "berkshire pigs",
+            "lifecycle_type": "mammal_breeding",
+            "days_to_birth": "114",
+            "starter_weeks": "6",
+            "grower_weeks": "20",
+            "starter_feed_lbs": "45",
+            "grower_feed_lbs": "520",
+            "expected_yield_lbs": "165",
+        }, follow_redirects=False)
         settings = self.c.get("/settings").text
-        self.assertIn("Ducks", settings)
+        self.assertIn("Berkshire Pigs", settings)
+        self.assertIn("Breeding", settings)
+        self.assertIn("26w", settings)
+        self.assertIn("165.0 lb", settings)
 
 
 if __name__ == "__main__":

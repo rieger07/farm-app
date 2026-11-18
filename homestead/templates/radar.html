@@ -14,9 +14,39 @@
   <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
 </div>
 
+{% if timeline %}
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:6px">
+    <h2 style="margin:0">Batch lifecycle timeline</h2>
+    <div class="tl-legend" style="margin:0">
+      <span><i class="tl-dot tl-incub"></i>Incubation / Gestation</span>
+      <span><i class="tl-dot tl-starter"></i>Starter</span>
+      <span><i class="tl-dot tl-grower"></i>Grower</span>
+      {% if timeline.today_pct is not none %}<span><i class="tl-dot" style="background:var(--redink)"></i>Today</span>{% endif %}
+    </div>
+  </div>
+  <div class="tl-months">
+    {% for m in timeline.months %}<span style="left:{{ m.pct }}%">{{ m.label }}</span>{% endfor %}
+  </div>
+  <div class="tl-rows">
+    {% if timeline.today_pct is not none %}<div class="tl-today" style="left:calc(160px + (100% - 160px) * {{ timeline.today_pct / 100 }})"></div>{% endif %}
+    {% for r in timeline.rows %}
+    <div class="tl-row">
+      <a href="/batches/{{ r.id }}" class="tl-name" title="{{ r.name }} ({{ r.span_label }})">{{ r.name }}</a>
+      <div class="tl-track" title="{{ r.span_label }}">
+        {% if r.incub_w > 0 %}<div class="tl-seg tl-incub" style="left:{{ r.incub_left }}%;width:{{ r.incub_w }}%"></div>{% endif %}
+        {% if r.start_w > 0 %}<div class="tl-seg tl-starter" style="left:{{ r.start_left }}%;width:{{ r.start_w }}%"></div>{% endif %}
+        {% if r.grow_w > 0 %}<div class="tl-seg tl-grower" style="left:{{ r.grow_left }}%;width:{{ r.grow_w }}%"></div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {% if milestones %}
 <div class="card">
-  <h2>Upcoming milestones (14 days)</h2>
+  <h2>Due &amp; upcoming milestones (14 days)</h2>
   <div class="ms-list">
     {% for m in milestones %}
     <div class="ms-row">
@@ -24,7 +54,14 @@
         <b>{{ m.task }}</b>
         <small>{{ m.batch_name }} · {{ m.date_display }}{% if m.details %} · {{ m.details }}{% endif %}</small>
       </div>
-      <span class="pill {{ 'amber' if m.days_away <= 3 else 'green' }}">{{ m.badge }}</span>
+      <div class="row">
+        <span class="pill {{ 'amber' if m.days_away <= 3 else 'green' }}">{{ m.badge }}</span>
+        <form method="post" action="/milestones/ack" style="display:inline">
+          <input type="hidden" name="batch_id" value="{{ m.batch_id }}">
+          <input type="hidden" name="task" value="{{ m.task }}">
+          <button class="btn sm" title="Mark done">✓ Done</button>
+        </form>
+      </div>
     </div>
     {% endfor %}
   </div>
@@ -51,7 +88,7 @@
     <div class="batch-actions">
       <button type="button" class="btn sm" onclick='openQuickLog("loss", {{ b.id }}, {{ b.name|tojson }})'>− Loss</button>
       <button type="button" class="btn sm" onclick='openQuickLog("harvest", {{ b.id }}, {{ b.name|tojson }})'>+ Harvest</button>
-      <button type="button" class="btn sm" onclick='openQuickLog("feed", {{ b.id }}, {{ b.name|tojson }}, {{ b.actual_feed_lbs or "" }}, {{ b.actual_feed_cost or "" }})'>Feed log</button>
+      <button type="button" class="btn sm" onclick='openQuickLog("feed", {{ b.id }}, {{ b.name|tojson }}, {{ b.starter_bag_price or 24 }}, {{ b.grower_bag_price or 22 }})'>+ Feed</button>
       <a href="/batches/{{ b.id }}" class="btn sm right">Details →</a>
     </div>
   </div>
@@ -96,13 +133,22 @@
 </dialog>
 
 <dialog id="feedm">
-  <h2 id="fm-title">Log actual feed</h2>
-  <form method="post" action="/batches/log-feed" class="stack">
+  <h2 id="fm-title">Log feed purchase</h2>
+  <form method="post" action="/batches/log-feed" class="fgrid">
     <input type="hidden" name="batch_id" id="fm-bid">
     <input type="hidden" name="next_url" value="/">
-    <label>Actual feed used (lb)<input type="number" name="actual_feed_lbs" id="fm-lbs" step="0.1" min="0"></label>
-    <label>Actual feed cost ($)<input type="number" name="actual_feed_cost" id="fm-cost" step="0.01" min="0"></label>
-    <div class="row" style="justify-content:flex-end">
+    <label>Date<input type="date" name="feed_date" value="{{ today_iso }}" required></label>
+    <label>Feed type
+      <select name="feed_type" id="fm-type" onchange="syncFeedCalc()">
+        <option value="starter">Starter</option>
+        <option value="grower" selected>Grower / Finisher</option>
+      </select>
+    </label>
+    <label>Bags ({{ bag_weight }} lb/bag)<input type="number" name="bags" id="fm-bags" step="0.5" min="0" value="1" oninput="syncFeedCalc()"></label>
+    <label>Feed (lb)<input type="number" name="feed_lbs" id="fm-lbs" step="0.1" min="0" required></label>
+    <label>Total cost ($)<input type="number" name="cost_total" id="fm-cost" step="0.01" min="0" required></label>
+    <label>Notes (optional)<input name="notes" placeholder="Feed store, receipt..."></label>
+    <div class="row full" style="justify-content:flex-end">
       <button type="button" class="btn" onclick="document.getElementById('feedm').close()">Cancel</button>
       <button type="submit" class="btn primary">Save feed</button>
     </div>
@@ -110,7 +156,15 @@
 </dialog>
 
 <script>
-function openQuickLog(kind, bid, name, lbs, cost) {
+let fmStarterPrice = 24, fmGrowerPrice = 22;
+const BAG_WT = {{ bag_weight }};
+function syncFeedCalc() {
+  const bags = parseFloat(document.getElementById('fm-bags').value || '0') || 0;
+  const price = document.getElementById('fm-type').value === 'starter' ? fmStarterPrice : fmGrowerPrice;
+  document.getElementById('fm-lbs').value = (bags * BAG_WT).toFixed(1).replace(/\.0$/, '');
+  document.getElementById('fm-cost').value = (bags * price).toFixed(2);
+}
+function openQuickLog(kind, bid, name, pStarter, pGrower) {
   if (kind === 'loss') {
     document.getElementById('lm-bid').value = bid;
     document.getElementById('lm-title').textContent = 'Log loss · ' + name;
@@ -121,9 +175,11 @@ function openQuickLog(kind, bid, name, lbs, cost) {
     document.getElementById('harvm').showModal();
   } else {
     document.getElementById('fm-bid').value = bid;
-    document.getElementById('fm-title').textContent = 'Actual feed · ' + name;
-    document.getElementById('fm-lbs').value = lbs || '';
-    document.getElementById('fm-cost').value = cost || '';
+    document.getElementById('fm-title').textContent = 'Log feed · ' + name;
+    fmStarterPrice = Number(pStarter || 24);
+    fmGrowerPrice = Number(pGrower || 22);
+    document.getElementById('fm-bags').value = '1';
+    syncFeedCalc();
     document.getElementById('feedm').showModal();
   }
 }

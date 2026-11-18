@@ -13,6 +13,8 @@ from fastapi.templating import Jinja2Templates
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
+    acknowledge_milestone,
+    add_batch_feed_log,
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
@@ -21,6 +23,7 @@ from homestead.database import (
     create_user,
     create_user_session,
     delete_batch,
+    delete_batch_feed_log,
     delete_batch_harvest,
     delete_batch_loss,
     delete_batch_sale,
@@ -35,6 +38,8 @@ from homestead.database import (
     import_backup_json,
     init_db,
     is_public_registration_enabled,
+    list_acknowledged_milestones,
+    list_batch_feed_logs,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
@@ -101,6 +106,8 @@ def _asset(name: str) -> str:
 
 
 templates.env.globals["asset"] = _asset
+templates.env.filters["money"] = lambda v: f"${float(v or 0):,.2f}"
+templates.env.filters["money0"] = lambda v: f"${float(v or 0):,.0f}"
 
 
 @app.exception_handler(_LoginRedirect)
@@ -225,19 +232,71 @@ def logout_submit(request: Request):
     return resp
 
 
+def _build_timeline(schedules: list[dict]) -> dict | None:
+    if not schedules:
+        return None
+    min_d = min(s["start_date"] for s in schedules)
+    max_d = max(s["proc_date"] for s in schedules)
+    span = max(1, (max_d - min_d).days)
+    pct = lambda d: round(max(0.0, min(100.0, (d - min_d).days / span * 100)), 2)
+
+    today = date.today()
+    today_pct = pct(today) if min_d <= today <= max_d else None
+
+    months = []
+    cur = min_d.replace(day=1)
+    while cur <= max_d:
+        if cur >= min_d:
+            months.append({"label": cur.strftime("%b '%y"), "pct": pct(cur)})
+        cur = date(cur.year + (cur.month // 12), (cur.month % 12) + 1, 1)
+
+    rows = []
+    for s in schedules:
+        b = s["batch"]
+        rows.append({
+            "id": b["id"],
+            "name": b["name"],
+            "span_label": f"{s['start_date'].strftime('%b %-d')} → {s['proc_date'].strftime('%b %-d')}",
+            "incub_left": pct(s["start_date"]),
+            "incub_w": round(max(0.0, pct(s["proc_base"]) - pct(s["start_date"])), 2),
+            "start_left": pct(s["proc_base"]),
+            "start_w": round(max(0.0, pct(s["transition_date"]) - pct(s["proc_base"])), 2),
+            "grow_left": pct(s["transition_date"]),
+            "grow_w": round(max(0.0, pct(s["proc_date"]) - pct(s["transition_date"])), 2),
+        })
+    return {"rows": rows, "months": months, "today_pct": today_pct}
+
+
 @app.get("/")
 def radar_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     schedules = _schedules_for_user(user["id"], include_archived=False)
-    milestones = [m for m in compute_upcoming_milestones(schedules) if m["days_away"] <= 14]
+    acked = list_acknowledged_milestones([s["batch"]["id"] for s in schedules])
+    milestones = [
+        m for m in compute_upcoming_milestones(schedules)
+        if m["days_away"] <= 14 and (int(m["batch_id"]), str(m["task"])) not in acked
+    ]
     return _render(
         request, "radar.html", user, "radar",
         schedules=schedules,
         milestones=milestones,
+        timeline=_build_timeline(schedules),
         total_head=sum(s["surviving_quantity"] for s in schedules),
         total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in schedules),
+        bag_weight=get_bag_weight(user_id=user["id"]),
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
+
+
+@app.post("/milestones/ack")
+def milestone_ack_submit(
+    batch_id: int = Form(...),
+    task: str = Form(...),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    acknowledge_milestone(batch_id, task, done=True)
+    return RedirectResponse("/?msg=" + quote_plus(f"Checked off: {task}"), status_code=303)
 
 
 @app.get("/batches")
@@ -269,6 +328,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         losses=list_batch_losses(batch_id),
         harvests=list_batch_harvests(batch_id),
         sales=list_batch_sales(batch_id),
+        feed_logs=list_batch_feed_logs(batch_id),
+        bag_weight=bag_weight,
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -285,7 +346,14 @@ def batch_save_submit(
     avg_dressed_weight: float = Form(0.0),
     sale_price_per_lb: float = Form(0.0),
     processing_cost: float = Form(0.0),
-    lifecycle_type: str = Form("live_arrival"),
+    lifecycle_type: str = Form("direct_arrival"),
+    days_to_birth: str = Form(""),
+    starter_weeks: str = Form(""),
+    grower_weeks: str = Form(""),
+    starter_feed_lbs: str = Form(""),
+    grower_feed_lbs: str = Form(""),
+    starter_bag_price: str = Form(""),
+    grower_bag_price: str = Form(""),
     notes: str = Form(""),
     next_url: str = Form("/batches"),
     user: dict = Depends(current_user),
@@ -293,7 +361,7 @@ def batch_save_submit(
     bid = int(batch_id) if batch_id.strip() else None
     if bid is not None:
         _get_owned_batch(bid, user)
-    payload = {
+    payload: dict = {
         "name": name.strip(),
         "species": species.strip().lower(),
         "start_date": start_date,
@@ -305,6 +373,17 @@ def batch_save_submit(
         "lifecycle_type": lifecycle_type,
         "notes": notes.strip(),
     }
+    for k, raw, cast in (
+        ("days_to_birth", days_to_birth, int),
+        ("starter_weeks", starter_weeks, int),
+        ("grower_weeks", grower_weeks, int),
+        ("starter_feed_lbs", starter_feed_lbs, float),
+        ("grower_feed_lbs", grower_feed_lbs, float),
+        ("starter_bag_price", starter_bag_price, float),
+        ("grower_bag_price", grower_bag_price, float),
+    ):
+        if raw.strip():
+            payload[k] = cast(raw)
     save_batch(payload, batch_id=bid, user_id=user["id"])
     target = next_url if next_url.startswith("/") else "/batches"
     return RedirectResponse(f"{target}?msg=" + quote_plus(f"Saved {name.strip()}."), status_code=303)
@@ -397,17 +476,27 @@ def batch_sale_delete(batch_id: int, sale_id: int, user: dict = Depends(current_
 @app.post("/batches/log-feed")
 def batch_log_feed(
     batch_id: int = Form(...),
-    actual_feed_lbs: str = Form(""),
-    actual_feed_cost: str = Form(""),
+    feed_date: str = Form(""),
+    feed_type: str = Form("grower"),
+    bags: float = Form(0.0),
+    feed_lbs: float = Form(0.0),
+    cost_total: float = Form(0.0),
+    notes: str = Form(""),
     next_url: str = Form("/"),
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
-    lbs = float(actual_feed_lbs) if actual_feed_lbs.strip() else None
-    cost = float(actual_feed_cost) if actual_feed_cost.strip() else None
-    set_batch_actual_feed(batch_id, lbs, cost)
+    fdate = feed_date.strip() or date.today().isoformat()
+    add_batch_feed_log(batch_id, fdate, feed_type, bags, feed_lbs, cost_total, notes)
     target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus("Saved actual feed."), status_code=303)
+    return RedirectResponse(f"{target}?msg=" + quote_plus("Logged feed purchase."), status_code=303)
+
+
+@app.post("/batches/{batch_id}/feed-logs/{log_id}/delete")
+def batch_feed_log_delete(batch_id: int, log_id: int, user: dict = Depends(current_user)):
+    _get_owned_batch(batch_id, user)
+    delete_batch_feed_log(log_id)
+    return RedirectResponse(f"/batches/{batch_id}?msg=" + quote_plus("Feed entry removed."), status_code=303)
 
 
 @app.get("/calendar.ics")
@@ -504,17 +593,18 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
 @app.post("/settings/species")
 def settings_species_save(
     species: str = Form(...),
-    lifecycle_type: str = Form("live_arrival"),
-    growth_days: int = Form(56),
-    starter_days: int = Form(21),
-    starter_lbs_per_day: float = Form(0.12),
-    grower_lbs_per_day: float = Form(0.30),
+    lifecycle_type: str = Form("direct_arrival"),
+    days_to_birth: int = Form(0),
+    starter_weeks: int = Form(3),
+    grower_weeks: int = Form(5),
+    starter_feed_lbs: float = Form(3.0),
+    grower_feed_lbs: float = Form(12.0),
     unit_cost: float = Form(3.5),
-    avg_dressed_weight: float = Form(4.5),
+    expected_yield_lbs: float = Form(4.5),
     sale_price_per_lb: float = Form(5.5),
     processing_cost: float = Form(5.0),
-    starter_bag_price: float = Form(28.0),
-    grower_bag_price: float = Form(24.0),
+    starter_bag_price: float = Form(24.0),
+    grower_bag_price: float = Form(22.0),
     apply_active: str = Form(""),
     user: dict = Depends(current_user),
 ):
@@ -522,12 +612,13 @@ def settings_species_save(
         species,
         {
             "lifecycle_type": lifecycle_type,
-            "growth_days": growth_days,
-            "starter_days": starter_days,
-            "starter_lbs_per_day": starter_lbs_per_day,
-            "grower_lbs_per_day": grower_lbs_per_day,
+            "days_to_birth": days_to_birth,
+            "starter_weeks": starter_weeks,
+            "grower_weeks": grower_weeks,
+            "starter_feed_lbs": starter_feed_lbs,
+            "grower_feed_lbs": grower_feed_lbs,
             "unit_cost": unit_cost,
-            "avg_dressed_weight": avg_dressed_weight,
+            "expected_yield_lbs": expected_yield_lbs,
             "sale_price_per_lb": sale_price_per_lb,
             "processing_cost": processing_cost,
             "starter_bag_price": starter_bag_price,
