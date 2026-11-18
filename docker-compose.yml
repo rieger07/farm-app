@@ -29,5 +29,13 @@ services:
       - ZETTLE_POLL_SECONDS=${ZETTLE_POLL_SECONDS:-300}
     restart: unless-stopped
 
+  site:
+    build:
+      context: .
+      dockerfile: Dockerfile.site
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
 volumes:
   farm-data:
