@@ -2,7 +2,7 @@
 {% block title %}Sign in · Homestead Planner{% endblock %}
 {% block body %}
 <div class="card login">
-  <div class="brand sm">homestead</div>
+  <div class="brand sm" style="display:flex;align-items:center;gap:8px"><img src="/static/logo.png" alt="Homestead Planner" style="width:28px;height:28px;border-radius:6px"><span>homestead</span></div>
   <h1 style="font-size:26px;margin-top:8px">{{ 'Create your account' if first_setup else 'Sign in' }}</h1>
   <p class="sub">{{ 'Set up the first admin account to get started.' if first_setup else 'Track batches, feed runs, and harvests.' }}</p>
   {% if msg %}<div class="notice err">{{ msg }}</div>{% endif %}
