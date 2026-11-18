@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Radar · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">TODAY ON THE FARM</div>
+<div class="pagehead">
+  <div><h1>Radar</h1><p class="sub">Active flocks, upcoming milestones, and 1-tap barn logs.</p></div>
+  <button class="btn primary" onclick="openNewBatchModal()">+ New batch</button>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards three">
+  <div class="card"><small>Active batches</small><div class="big">{{ schedules|length }}</div><small>Currently running</small></div>
+  <div class="card"><small>Surviving head</small><div class="big">{{ total_head }}</div><small>{{ total_losses }} recorded losses</small></div>
+  <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
+</div>
+
+{% if milestones %}
+<div class="card">
+  <h2>Upcoming milestones (14 days)</h2>
+  <div class="ms-list">
+    {% for m in milestones %}
+    <div class="ms-row">
+      <div>
+        <b>{{ m.task }}</b>
+        <small>{{ m.batch_name }} · {{ m.date_display }}{% if m.details %} · {{ m.details }}{% endif %}</small>
+      </div>
+      <span class="pill {{ 'amber' if m.days_away <= 3 else 'green' }}">{{ m.badge }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if schedules %}
+<div class="batch-grid">
+  {% for s in schedules %}
+  {% set b = s.batch %}
+  <div class="batch-card">
+    <div class="batch-head">
+      <div>
+        <a href="/batches/{{ b.id }}" class="batch-title">{{ b.name }}</a>
+        <small>{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</small>
+      </div>
+      <span class="pill green">{{ s.status_badge }}</span>
+    </div>
+    <div class="batch-stats">
+      <div><small>Surviving</small><b>{{ s.surviving_quantity }} / {{ s.initial_quantity }}</b></div>
+      <div><small>Harvested</small><b>{{ s.harvested_head }} head</b></div>
+      <div><small>Est. Profit</small><b>${{ '%.0f'|format(s.estimated_profit) }}</b></div>
+    </div>
+    <div class="batch-actions">
+      <button type="button" class="btn sm" onclick='openQuickLog("loss", {{ b.id }}, {{ b.name|tojson }})'>− Loss</button>
+      <button type="button" class="btn sm" onclick='openQuickLog("harvest", {{ b.id }}, {{ b.name|tojson }})'>+ Harvest</button>
+      <button type="button" class="btn sm" onclick='openQuickLog("feed", {{ b.id }}, {{ b.name|tojson }}, {{ b.actual_feed_lbs or "" }}, {{ b.actual_feed_cost or "" }})'>Feed log</button>
+      <a href="/batches/{{ b.id }}" class="btn sm right">Details →</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">
+  <p>No active batches yet. Tap <b>+ New batch</b> to start planning your first flock.</p>
+</div>
+{% endif %}
+
+<dialog id="lossm">
+  <h2 id="lm-title">Log loss</h2>
+  <form method="post" action="/batches/log-loss" class="stack">
+    <input type="hidden" name="batch_id" id="lm-bid">
+    <input type="hidden" name="next_url" value="/">
+    <label>Date<input type="date" name="loss_date" value="{{ today_iso }}" required></label>
+    <label>Count<input type="number" name="count" min="1" value="1" required></label>
+    <label>Reason (optional)<input name="reason" placeholder="e.g. Predator, runt, culled"></label>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="document.getElementById('lossm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save loss</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="harvm">
+  <h2 id="hm-title">Log harvest</h2>
+  <form method="post" action="/batches/log-harvest" class="stack">
+    <input type="hidden" name="batch_id" id="hm-bid">
+    <input type="hidden" name="next_url" value="/">
+    <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
+    <label>Head processed<input type="number" name="head_count" min="1" value="1" required></label>
+    <label>Total dressed weight (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
+    <label>Processing cost total ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
+    <label>Notes (optional)<input name="notes" placeholder="Butcher batch, pack notes..."></label>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="document.getElementById('harvm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save harvest</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="feedm">
+  <h2 id="fm-title">Log actual feed</h2>
+  <form method="post" action="/batches/log-feed" class="stack">
+    <input type="hidden" name="batch_id" id="fm-bid">
+    <input type="hidden" name="next_url" value="/">
+    <label>Actual feed used (lb)<input type="number" name="actual_feed_lbs" id="fm-lbs" step="0.1" min="0"></label>
+    <label>Actual feed cost ($)<input type="number" name="actual_feed_cost" id="fm-cost" step="0.01" min="0"></label>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="document.getElementById('feedm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save feed</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+function openQuickLog(kind, bid, name, lbs, cost) {
+  if (kind === 'loss') {
+    document.getElementById('lm-bid').value = bid;
+    document.getElementById('lm-title').textContent = 'Log loss · ' + name;
+    document.getElementById('lossm').showModal();
+  } else if (kind === 'harvest') {
+    document.getElementById('hm-bid').value = bid;
+    document.getElementById('hm-title').textContent = 'Log harvest · ' + name;
+    document.getElementById('harvm').showModal();
+  } else {
+    document.getElementById('fm-bid').value = bid;
+    document.getElementById('fm-title').textContent = 'Actual feed · ' + name;
+    document.getElementById('fm-lbs').value = lbs || '';
+    document.getElementById('fm-cost').value = cost || '';
+    document.getElementById('feedm').showModal();
+  }
+}
+</script>
+{% include "_batch_modal.html" %}
+{% endblock %}

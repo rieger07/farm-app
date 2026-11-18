@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Feed · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">FEED &amp; PURCHASING</div>
+<div class="pagehead">
+  <div><h1>Feed schedule</h1><p class="sub">When to buy bags, barrel storage demand, and weekly burn.</p></div>
+  <form method="post" action="/feed/settings" class="row">
+    <label style="font-size:12px">Barrel (lb)<input type="number" name="barrel_capacity" min="1" value="{{ barrel_capacity }}" style="width:84px"></label>
+    <label style="font-size:12px">Bag (lb)<input type="number" name="bag_weight" min="1" value="{{ bag_weight }}" style="width:78px"></label>
+    <button class="btn sm primary" style="align-self:flex-end">Update</button>
+  </form>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards three">
+  <div class="card"><small>Next feed buy</small><div class="big">{{ next_feed.Date if next_feed else '—' }}</div><small>{{ next_feed.Details if next_feed else 'No upcoming feed purchases' }}</small></div>
+  <div class="card"><small>Peak weekly feed</small><div class="big">{{ '%.1f'|format(feed_stats.peak_weekly_lbs) }} lb</div><small>Across active batches</small></div>
+  <div class="card"><small>Peak barrels needed</small><div class="big">{{ feed_stats.peak_concurrent_barrels }}</div><small>At {{ barrel_capacity }} lb/barrel</small></div>
+</div>
+
+<div class="card table-card">
+  <div style="padding:14px 16px 8px"><h2>Purchasing schedule</h2></div>
+  <table>
+    <thead><tr><th>Date</th><th>Batch</th><th>Category</th><th>Details</th><th class="num">Bags</th><th class="num">Cost</th></tr></thead>
+    <tbody>
+    {% for e in purchase_events %}
+      <tr>
+        <td>{{ e.Date }}</td><td>{{ e.Batch }}</td><td>{{ e.Category }}</td><td>{{ e.Details }}</td>
+        <td class="num">{{ e['Feed Bags'] or '—' }}</td><td class="num">${{ '%.2f'|format(e['Cost ($)']) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No scheduled purchases yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if monthly_feed %}
+<div class="card table-card">
+  <div style="padding:14px 16px 8px"><h2>Monthly feed &amp; barrels</h2></div>
+  <table>
+    <thead><tr><th>Month</th><th class="num">Starter (lb)</th><th class="num">Grower (lb)</th><th class="num">Total (lb)</th><th class="num">Peak Barrels</th></tr></thead>
+    <tbody>
+    {% for m in monthly_feed %}
+      <tr>
+        <td><b>{{ m.Month }}</b></td>
+        <td class="num">{{ m['Starter Feed (lbs)'] }}</td>
+        <td class="num">{{ m['Grower/Finisher Feed (lbs)'] }}</td>
+        <td class="num">{{ m['Monthly Feed Consumed (lbs)'] }}</td>
+        <td class="num">{{ m['Peak Concurrent Barrels in Month'] }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if weekly_feed %}
+<details class="card table-card">
+  <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Weekly feed breakdown ({{ weekly_feed|length }} weeks)</summary>
+  <table>
+    <thead><tr><th>Week Starting</th><th class="num">Starter (lb)</th><th class="num">Grower (lb)</th><th class="num">Weekly Total (lb)</th><th class="num">Barrels Needed</th></tr></thead>
+    <tbody>
+    {% for w in weekly_feed %}
+      <tr>
+        <td>{{ w['Week Starting'] }}</td>
+        <td class="num">{{ w['Starter Feed (lbs)'] }}</td>
+        <td class="num">{{ w['Grower/Finisher Feed (lbs)'] }}</td>
+        <td class="num">{{ w['Total Weekly Feed (lbs)'] }}</td>
+        <td class="num">{{ w['Concurrent Barrels Needed (Remaining Active)'] }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+{% endblock %}

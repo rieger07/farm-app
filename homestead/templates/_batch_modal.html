@@ -1,0 +1,72 @@
+<dialog id="batchm">
+  <h2 id="bm-title">New batch</h2>
+  <form method="post" action="/batches/save" class="fgrid" id="bm-form">
+    <input type="hidden" name="batch_id" id="bm-id">
+    <input type="hidden" name="next_url" value="{{ request.url.path }}">
+    <label class="full">Batch name<input name="name" id="bm-name" placeholder="e.g. Spring Broilers #1" required></label>
+    <label>Species
+      <select name="species" id="bm-species" onchange="fillSpeciesDefaults()">
+        {% for sp, cfg in species_catalog.items() %}
+        <option value="{{ sp }}">{{ sp|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Start date<input type="date" name="start_date" id="bm-start" value="{{ today_iso }}" required></label>
+    <label>Initial quantity<input type="number" name="initial_quantity" id="bm-qty" min="1" value="25" required></label>
+    <label>Cost / head ($)<input type="number" name="unit_cost" id="bm-ucost" step="0.01" min="0"></label>
+    <label>Est. dressed wt (lb)<input type="number" name="avg_dressed_weight" id="bm-wt" step="0.1" min="0"></label>
+    <label>Sale price ($/lb)<input type="number" name="sale_price_per_lb" id="bm-sprice" step="0.01" min="0"></label>
+    <label>Processing ($/head)<input type="number" name="processing_cost" id="bm-pcost" step="0.01" min="0"></label>
+    <label>Lifecycle
+      <select name="lifecycle_type" id="bm-life">
+        <option value="direct_arrival">Live arrival (chicks / poults)</option>
+        <option value="poultry_incubation">Incubation (eggs)</option>
+        <option value="mammal_breeding">Mammal breeding</option>
+      </select>
+    </label>
+    <label class="full">Notes<input name="notes" id="bm-notes" placeholder="Hatchery, breed, pasture notes..."></label>
+    <div class="row full" style="justify-content:flex-end;margin-top:6px">
+      <button type="button" class="btn" onclick="document.getElementById('batchm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save batch</button>
+    </div>
+  </form>
+</dialog>
+<script id="sp-catalog" type="application/json">{{ species_catalog|tojson }}</script>
+<script>
+const SP_CATALOG = JSON.parse(document.getElementById('sp-catalog').textContent || '{}');
+function fillSpeciesDefaults() {
+  if (document.getElementById('bm-id').value) return;
+  const sp = document.getElementById('bm-species').value;
+  const cfg = SP_CATALOG[sp] || {};
+  if (cfg.unit_cost !== undefined) document.getElementById('bm-ucost').value = cfg.unit_cost;
+  if (cfg.expected_yield_lbs !== undefined) document.getElementById('bm-wt').value = cfg.expected_yield_lbs;
+  if (cfg.sale_price_per_lb !== undefined) document.getElementById('bm-sprice').value = cfg.sale_price_per_lb;
+  if (cfg.processing_cost !== undefined) document.getElementById('bm-pcost').value = cfg.processing_cost;
+  if (cfg.lifecycle_type) document.getElementById('bm-life').value = cfg.lifecycle_type;
+}
+function openNewBatchModal() {
+  document.getElementById('bm-title').textContent = 'New batch';
+  document.getElementById('bm-id').value = '';
+  document.getElementById('bm-name').value = '';
+  document.getElementById('bm-start').value = '{{ today_iso }}';
+  document.getElementById('bm-qty').value = '25';
+  document.getElementById('bm-notes').value = '';
+  fillSpeciesDefaults();
+  document.getElementById('batchm').showModal();
+}
+function openEditBatchModal(b) {
+  document.getElementById('bm-title').textContent = 'Edit batch';
+  document.getElementById('bm-id').value = b.id;
+  document.getElementById('bm-name').value = b.name;
+  document.getElementById('bm-species').value = b.species;
+  document.getElementById('bm-start').value = b.start_date;
+  document.getElementById('bm-qty').value = b.quantity ?? b.initial_quantity;
+  document.getElementById('bm-ucost').value = b.unit_cost;
+  document.getElementById('bm-wt').value = b.expected_yield_lbs ?? b.avg_dressed_weight;
+  document.getElementById('bm-sprice').value = b.sale_price_per_lb;
+  document.getElementById('bm-pcost').value = b.processing_cost;
+  document.getElementById('bm-life').value = b.lifecycle_type || 'direct_arrival';
+  document.getElementById('bm-notes').value = b.notes || '';
+  document.getElementById('batchm').showModal();
+}
+</script>

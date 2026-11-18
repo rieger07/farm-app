@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Financials · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">BATCH ECONOMICS</div>
+<div class="pagehead">
+  <div><h1>Financials</h1><p class="sub">Planned ROI, actual harvest yield, cash sales, and home freezer cost.</p></div>
+  <a href="/backup.json" class="btn">Export JSON backup</a>
+</div>
+
+<div class="cards four">
+  <div class="card"><small>Est. revenue</small><div class="big">${{ '%.0f'|format(totals.est_rev) }}</div><small>Across active batches</small></div>
+  <div class="card"><small>Total budget cost</small><div class="big">${{ '%.0f'|format(totals.total_cost) }}</div><small>Chicks, feed &amp; processing</small></div>
+  <div class="card"><small>Est. profit</small><div class="big">${{ '%.0f'|format(totals.est_profit) }}</div><small>Projected net</small></div>
+  <div class="card"><small>Cash sales</small><div class="big">${{ '%.0f'|format(totals.cash_sales) }}</div><small>Realized revenue</small></div>
+</div>
+
+{% if schedules %}
+<div class="card">
+  <h2>Cost vs. estimated revenue by batch</h2>
+  <div class="bar-wrap">
+    {% for s in schedules %}
+    {% set maxv = [s.total_budget_cost, s.estimated_revenue, 1]|max %}
+    <div class="bar-item">
+      <div class="bar-labels">
+        <b>{{ s.batch.name }}</b>
+        <small class="inline">Cost ${{ '%.0f'|format(s.total_budget_cost) }} · Est. Rev ${{ '%.0f'|format(s.estimated_revenue) }}</small>
+      </div>
+      <div class="bar-track" title="Cost vs Revenue">
+        <div class="bar-cost" style="width:{{ (s.total_budget_cost / chart_peak * 100)|round(1) }}%"></div>
+        <div class="bar-rev" style="width:{{ (s.estimated_revenue / chart_peak * 100)|round(1) }}%"></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card table-card">
+  <div style="padding:14px 16px 8px"><h2>Unified batch economics &amp; freezer</h2></div>
+  <table>
+    <thead><tr><th>Batch</th><th>Head</th><th class="num">Reconciled Cost</th><th class="num">Meat (lb)</th><th class="num">Cost/lb</th><th class="num">Cash Sales</th><th class="num">Freezer (lb)</th><th>Freezer $/lb</th></tr></thead>
+    <tbody>
+    {% for r in unified_rows %}
+      <tr>
+        <td><b>{{ r.Batch }}</b></td>
+        <td>{{ r['Head (Surviving / Harvested)'] }}</td>
+        <td class="num">${{ '%.2f'|format(r['Reconciled Cost ($)']) }}</td>
+        <td class="num">{{ r['Meat Yield (lbs)'] }}</td>
+        <td class="num">${{ '%.2f'|format(r['Cost / lb ($)']) }}</td>
+        <td class="num">${{ '%.2f'|format(r['Cash Sales ($)']) }}</td>
+        <td class="num">{{ r['Freezer (lbs)'] }}</td>
+        <td>{{ r['Effective Freezer $/lb'] }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty">No active batches yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if roi_rows %}
+<details class="card table-card">
+  <summary style="padding:14px 16px;cursor:pointer;font-weight:600">ROI breakdown ({{ roi_rows|length }} batches)</summary>
+  <table>
+    <thead><tr><th>Batch</th><th>Species</th><th class="num">Acq $</th><th class="num">Feed $</th><th class="num">Proc $</th><th class="num">Total $</th><th class="num">Est. Profit</th><th>ROI</th></tr></thead>
+    <tbody>
+    {% for r in roi_rows %}
+      <tr>
+        <td><b>{{ r.Batch }}</b></td><td>{{ r.Species }}</td>
+        <td class="num">${{ '%.2f'|format(r['Acquisition ($)']) }}</td>
+        <td class="num">${{ '%.2f'|format(r['Feed Cost - Bags ($)']) }}</td>
+        <td class="num">${{ '%.2f'|format(r['Processing ($)']) }}</td>
+        <td class="num">${{ '%.2f'|format(r['Total Cost ($)']) }}</td>
+        <td class="num">${{ '%.2f'|format(r['Est. Profit ($)']) }}</td>
+        <td>{{ r['ROI (%)'] }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+{% endblock %}

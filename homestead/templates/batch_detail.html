@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ b.name }} · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
+<div class="pagehead">
+  <div>
+    <h1>{{ b.name }}</h1>
+    <p class="sub">{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</p>
+  </div>
+  <div class="row">
+    {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">Google Calendar</a>{% endif %}
+    <button type="button" class="btn" onclick='openEditBatchModal({{ b|tojson }})'>Edit batch</button>
+    <form method="post" action="/batches/{{ b.id }}/delete" onsubmit="return confirm('Delete this batch and all its logs?')">
+      <button class="btn danger">Delete</button>
+    </form>
+  </div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards four">
+  <div class="card"><small>Surviving / Initial</small><div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div><small>{{ s.initial_quantity - s.surviving_quantity }} losses</small></div>
+  <div class="card"><small>Harvested</small><div class="big">{{ s.harvested_head }}</div><small>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb dressed</small></div>
+  <div class="card"><small>Sold / Freezer</small><div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div><small>${{ '%.2f'|format(s.actual_sales_revenue) }} sales</small></div>
+  <div class="card"><small>Reconciled Cost</small><div class="big">${{ '%.2f'|format(s.reconciled_total_cost) }}</div><small>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb meat</small></div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <h2>Losses &amp; Mortality</h2>
+    <form method="post" action="/batches/log-loss" class="fgrid" style="margin-bottom:14px">
+      <input type="hidden" name="batch_id" value="{{ b.id }}">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <label>Date<input type="date" name="loss_date" value="{{ today_iso }}" required></label>
+      <label>Count<input type="number" name="count" min="1" value="1" required></label>
+      <label class="full">Reason<input name="reason" placeholder="Predator, runt, culled..."></label>
+      <div class="full"><button class="btn primary sm">+ Add loss</button></div>
+    </form>
+    <table>
+      <thead><tr><th>Date</th><th class="num">Count</th><th>Reason</th><th></th></tr></thead>
+      <tbody>
+      {% for l in losses %}
+        <tr>
+          <td>{{ l.loss_date }}</td><td class="num">{{ l.count }}</td><td>{{ l.reason or '—' }}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/losses/{{ l.id }}/delete"><button class="link">Remove</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No losses recorded.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Harvests &amp; Processing</h2>
+    <form method="post" action="/batches/log-harvest" class="fgrid" style="margin-bottom:14px">
+      <input type="hidden" name="batch_id" value="{{ b.id }}">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
+      <label>Head<input type="number" name="head_count" min="1" value="1" required></label>
+      <label>Dressed wt (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
+      <label>Processing ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
+      <label class="full">Notes<input name="notes" placeholder="Optional"></label>
+      <div class="full"><button class="btn primary sm">+ Add harvest</button></div>
+    </form>
+    <table>
+      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th class="num">Proc $</th><th></th></tr></thead>
+      <tbody>
+      {% for h in harvests %}
+        <tr>
+          <td>{{ h.harvest_date }}</td><td class="num">{{ h.head_count }}</td>
+          <td class="num">{{ '%.1f'|format(h.dressed_lbs) }}</td><td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No harvests recorded.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <h2>Batch Sales &amp; Home Freezer</h2>
+    <form method="post" action="/batches/log-sale" class="fgrid" style="margin-bottom:14px">
+      <input type="hidden" name="batch_id" value="{{ b.id }}">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <label>Date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
+      <label>Type
+        <select name="allocation_type">
+          <option value="sale">Customer sale</option>
+          <option value="freezer">Home freezer</option>
+        </select>
+      </label>
+      <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
+      <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
+      <label class="full">Notes<input name="notes" placeholder="Buyer or pack notes"></label>
+      <div class="full"><button class="btn primary sm">+ Add entry</button></div>
+    </form>
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th class="num">Weight</th><th class="num">Revenue</th><th></th></tr></thead>
+      <tbody>
+      {% for sa in sales %}
+        <tr>
+          <td>{{ sa.entry_date }}</td><td>{{ sa.allocation_type|title }}</td>
+          <td class="num">{{ '%.1f'|format(sa.weight_lbs) }} lb</td><td class="num">${{ '%.2f'|format(sa.revenue) }}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/delete"><button class="link">Remove</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No sales or freezer entries yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Actual Feed Override</h2>
+    <p class="sub" style="margin-bottom:12px">Planned feed: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (est. ${{ '%.2f'|format(s.total_feed_cost_bags) }})</p>
+    <form method="post" action="/batches/log-feed" class="stack">
+      <input type="hidden" name="batch_id" value="{{ b.id }}">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <label>Actual feed used (lb)<input type="number" name="actual_feed_lbs" step="0.1" min="0" value="{{ b.actual_feed_lbs if b.actual_feed_lbs is not none else '' }}"></label>
+      <label>Actual feed cost ($)<input type="number" name="actual_feed_cost" step="0.01" min="0" value="{{ b.actual_feed_cost if b.actual_feed_cost is not none else '' }}"></label>
+      <div><button class="btn primary sm">Save actual feed</button></div>
+    </form>
+  </div>
+</div>
+
+{% include "_batch_modal.html" %}
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Settings · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">PREFERENCES &amp; DATA</div>
+<div class="pagehead">
+  <div><h1>Settings</h1><p class="sub">Species presets, JSON backups, password, and user accounts.</p></div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <h2>Species presets</h2>
+    <button class="btn sm primary" onclick="openPresetModal()">+ Add species</button>
+  </div>
+  <table>
+    <thead><tr><th>Species</th><th>Lifecycle</th><th class="num">Growth days</th><th class="num">Cost/head</th><th class="num">Est. lb</th><th class="num">Sale $/lb</th><th></th></tr></thead>
+    <tbody>
+    {% for sp, cfg in species_catalog.items() %}
+      <tr>
+        <td><b>{{ sp|title }}</b></td>
+        <td>{{ 'Incubation' if cfg.lifecycle_type == 'poultry_incubation' else ('Breeding' if cfg.lifecycle_type == 'mammal_breeding' else 'Live arrival') }}</td>
+        <td class="num">{{ cfg.weeks_to_proc }}w</td>
+        <td class="num">${{ '%.2f'|format(cfg.unit_cost) }}</td>
+        <td class="num">{{ cfg.expected_yield_lbs }} lb</td>
+        <td class="num">${{ '%.2f'|format(cfg.sale_price_per_lb) }}</td>
+        <td class="num">
+          <button type="button" class="btn sm" onclick='openPresetModal({{ sp|tojson }}, {{ cfg|tojson }})'>Edit</button>
+          <form method="post" action="/settings/species/delete" style="display:inline">
+            <input type="hidden" name="species" value="{{ sp }}">
+            <button class="link">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <h2>Backup &amp; restore</h2>
+    <p class="sub" style="margin-bottom:12px">Download all batches, logs, and species presets as JSON, or restore from a backup.</p>
+    <div class="row" style="margin-bottom:14px">
+      <a href="/backup.json" class="btn">Download JSON backup</a>
+    </div>
+    <form method="post" action="/settings/restore" enctype="multipart/form-data" class="stack">
+      <label>Restore JSON file<input type="file" name="backup_file" accept=".json" required></label>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="replace_existing" value="1"> Replace existing batches &amp; presets</label>
+      <div><button class="btn sm primary">Restore backup</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Change password</h2>
+    <form method="post" action="/settings/password" class="stack">
+      <label>Current password<input type="password" name="current_password" required></label>
+      <label>New password<input type="password" name="new_password" minlength="4" required></label>
+      <div><button class="btn sm primary">Update password</button></div>
+    </form>
+  </div>
+</div>
+
+{% if user.is_admin %}
+<div class="card">
+  <h2>Admin · Users &amp; registration</h2>
+  <form method="post" action="/settings/admin/registration" class="row" style="margin-bottom:14px">
+    <span>Public self-registration: <b>{{ 'Open' if reg_open else 'Closed' }}</b></span>
+    <input type="hidden" name="enabled" value="{{ '0' if reg_open else '1' }}">
+    <button class="btn sm">{{ 'Disable' if reg_open else 'Enable' }}</button>
+  </form>
+  <form method="post" action="/settings/admin/users" class="row" style="margin-bottom:14px">
+    <input name="username" placeholder="Username" required>
+    <input name="display_name" placeholder="Display name">
+    <input name="password" type="password" placeholder="Password (min 4)" minlength="4" required>
+    <button class="btn sm primary">+ Add user</button>
+  </form>
+  <table>
+    <thead><tr><th>Username</th><th>Display name</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td><b>{{ u.username }}</b></td>
+        <td>{{ u.display_name }}</td>
+        <td>{{ 'Admin' if u.is_admin else 'User' }}</td>
+        <td class="num">
+          {% if u.id != user.id %}
+          <form method="post" action="/settings/admin/users/{{ u.id }}/delete" onsubmit="return confirm('Delete user {{ u.username }}?')">
+            <button class="link">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<dialog id="presetm">
+  <h2 id="pm-title">Species preset</h2>
+  <form method="post" action="/settings/species" class="fgrid">
+    <label class="full">Species name<input name="species" id="pm-sp" required></label>
+    <label>Lifecycle
+      <select name="lifecycle_type" id="pm-life">
+        <option value="live_arrival">Live arrival</option>
+        <option value="incubation">Incubation</option>
+      </select>
+    </label>
+    <label>Growth days<input type="number" name="growth_days" id="pm-days" min="1" value="56" required></label>
+    <label>Starter days<input type="number" name="starter_days" id="pm-sdays" min="0" value="21" required></label>
+    <label>Starter lb/day<input type="number" name="starter_lbs_per_day" id="pm-slbs" step="0.01" min="0" value="0.12" required></label>
+    <label>Grower lb/day<input type="number" name="grower_lbs_per_day" id="pm-glbs" step="0.01" min="0" value="0.30" required></label>
+    <label>Cost / head ($)<input type="number" name="unit_cost" id="pm-ucost" step="0.01" min="0" value="3.50" required></label>
+    <label>Est. dressed wt (lb)<input type="number" name="avg_dressed_weight" id="pm-wt" step="0.1" min="0" value="4.5" required></label>
+    <label>Sale price ($/lb)<input type="number" name="sale_price_per_lb" id="pm-sprice" step="0.01" min="0" value="5.50" required></label>
+    <label>Processing ($/head)<input type="number" name="processing_cost" id="pm-pcost" step="0.01" min="0" value="5.00" required></label>
+    <label>Starter $/bag<input type="number" name="starter_bag_price" id="pm-sbag" step="0.01" min="0" value="28.00" required></label>
+    <label>Grower $/bag<input type="number" name="grower_bag_price" id="pm-gbag" step="0.01" min="0" value="24.00" required></label>
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="apply_active" value="1"> Apply changes to active batches</label>
+    <div class="row full" style="justify-content:flex-end;margin-top:6px">
+      <button type="button" class="btn" onclick="document.getElementById('presetm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save preset</button>
+    </div>
+  </form>
+</dialog>
+<script>
+function openPresetModal(sp, cfg) {
+  document.getElementById('pm-title').textContent = sp ? ('Edit ' + sp) : 'Add species preset';
+  document.getElementById('pm-sp').value = sp || '';
+  if (cfg) {
+    document.getElementById('pm-life').value = cfg.lifecycle_type || 'live_arrival';
+    document.getElementById('pm-days').value = cfg.growth_days || 56;
+    document.getElementById('pm-sdays').value = cfg.starter_days || 21;
+    document.getElementById('pm-slbs').value = cfg.starter_lbs_per_day || 0.12;
+    document.getElementById('pm-glbs').value = cfg.grower_lbs_per_day || 0.30;
+    document.getElementById('pm-ucost').value = cfg.unit_cost || 0;
+    document.getElementById('pm-wt').value = cfg.avg_dressed_weight || 0;
+    document.getElementById('pm-sprice').value = cfg.sale_price_per_lb || 0;
+    document.getElementById('pm-pcost').value = cfg.processing_cost || 0;
+    document.getElementById('pm-sbag').value = cfg.starter_bag_price || 0;
+    document.getElementById('pm-gbag').value = cfg.grower_bag_price || 0;
+  }
+  document.getElementById('presetm').showModal();
+}
+</script>
+{% endblock %}
