@@ -194,9 +194,29 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
     )
 
 
+def optional_user(request: Request) -> dict | None:
+    tok = request.cookies.get(COOKIE)
+    return get_user_by_session_token(tok) if tok else None
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/home")
+def public_home_page(request: Request):
+    return templates.TemplateResponse(request, "home.html", {"request": request})
+
+
+@app.get("/privacy")
+def privacy_page(request: Request):
+    return templates.TemplateResponse(request, "privacy.html", {"request": request})
+
+
+@app.get("/terms")
+def terms_page(request: Request):
+    return templates.TemplateResponse(request, "terms.html", {"request": request})
 
 
 @app.get("/login")
@@ -289,7 +309,9 @@ def _build_timeline(schedules: list[dict]) -> dict | None:
 
 
 @app.get("/")
-def radar_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
+def radar_page(request: Request, msg: str = "", user: dict | None = Depends(optional_user)):
+    if user is None:
+        return templates.TemplateResponse(request, "home.html", {"request": request})
     schedules = _schedules_for_user(user["id"], include_archived=False)
     acked = list_acknowledged_milestones([s["batch"]["id"] for s in schedules])
     milestones = [

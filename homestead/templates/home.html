@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Homestead Planner · Farm &amp; Flock Batch Planning by Ironclad Systems{% endblock %}
+{% block body %}
+<div style="max-width:960px;margin:0 auto;padding:28px 20px 48px">
+  <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:28px;padding-bottom:16px;border-bottom:1px solid var(--line)">
+    <a href="/" class="brand" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+      <img src="/static/logo.png" alt="Homestead Planner" style="width:36px;height:36px;border-radius:8px">
+      <div>homestead<small>BY IRONCLAD SYSTEMS LLC</small></div>
+    </a>
+    <div class="row">
+      <a href="/privacy" class="btn sm">Privacy</a>
+      <a href="/terms" class="btn sm">Terms</a>
+      <a href="/login" class="btn primary sm">Sign in</a>
+    </div>
+  </header>
+
+  <div class="card" style="padding:28px">
+    <div class="eyebrow">FARM &amp; LIVESTOCK OPERATIONS</div>
+    <h1 style="margin:6px 0 10px">From hatch or breeding to freezer &amp; market.</h1>
+    <p class="sub" style="font-size:16px;max-width:700px;margin-bottom:18px">
+      <strong>Homestead Planner</strong> is a web application built and operated by <strong>Ironclad Systems LLC</strong> to help small farms and homesteads schedule livestock batches, forecast feed needs, track losses and dressed yields, and organize farm expense receipts.
+    </p>
+    <div class="row">
+      <a href="/login" class="btn primary">Sign in to Homestead Planner →</a>
+      <a href="https://www.ironcladsystems.dev/contact" target="_blank" rel="noopener" class="btn">Request access / Contact</a>
+    </div>
+  </div>
+
+  <div class="cards three" style="margin-top:16px">
+    <div class="card">
+      <h3>Batch &amp; Milestone Radar</h3>
+      <p class="sub">Track poultry chicks, egg incubation, and mammal breeding lifecycles on a visual timeline with 14-day milestone reminders and <code>.ics</code> / Google Calendar links.</p>
+    </div>
+    <div class="card">
+      <h3>Feed &amp; Yield Forecasting</h3>
+      <p class="sub">Plan starter and grower bag purchases, log actual feed purchases by date, record mortality and dressed harvest weights, and compare planned vs. actual cost per pound.</p>
+    </div>
+    <div class="card">
+      <h3>Schedule F Expenses</h3>
+      <p class="sub">Record feed, processing, supplies, and equipment expenses by category, attach receipts, and export a clean Schedule F CSV for bookkeeping.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Optional Google Drive Receipt Integration &amp; Data Transparency</h2>
+    <p class="sub" style="margin-bottom:10px">
+      Homestead Planner works without connecting Google. If you choose to connect your Google account in <strong>Settings → Google Drive Receipts</strong>, we request only two minimal scopes:
+    </p>
+    <ul style="margin:0 0 12px 18px;line-height:1.6">
+      <li><code>https://www.googleapis.com/auth/drive.file</code> — Used solely to create your chosen receipt folder (for example, <em>Homestead Planner Receipts</em>) and upload receipt photos or PDFs you explicitly submit from batch or expense forms. Homestead Planner cannot view, modify, or delete any other files in your Google Drive.</li>
+      <li><code>https://www.googleapis.com/auth/userinfo.email</code> — Used solely to display which Google account is currently connected in your Settings page.</li>
+    </ul>
+    <p class="sub" style="margin:0">
+      Receipt files remain in your own Google Drive account. OAuth tokens are stored encrypted solely to perform uploads you initiate, are never sold or shared with third parties, and can be disconnected at any time in Settings. See our <a href="/privacy">Privacy Policy</a> for full details.
+    </p>
+  </div>
+
+  <footer class="row" style="justify-content:space-between;margin-top:28px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)">
+    <span>© Ironclad Systems LLC · Homestead Planner</span>
+    <div class="row" style="gap:14px">
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="https://www.ironcladsystems.dev" target="_blank" rel="noopener">Ironclad Systems</a>
+    </div>
+  </footer>
+</div>
+{% endblock %}

@@ -23,6 +23,15 @@ class FarmWebTest(unittest.TestCase):
     def test_full_farm_workflow(self):
         self.assertEqual(self.c.get("/healthz").json(), {"ok": True})
 
+        # Unauthenticated public homepage, privacy policy & terms for Google OAuth verification
+        home_resp = self.c.get("/", follow_redirects=False)
+        self.assertEqual(home_resp.status_code, 200)
+        self.assertIn("Ironclad Systems LLC", home_resp.text)
+        self.assertIn("drive.file", home_resp.text)
+        self.assertIn("/privacy", home_resp.text)
+        self.assertEqual(self.c.get("/privacy", follow_redirects=False).status_code, 200)
+        self.assertEqual(self.c.get("/terms", follow_redirects=False).status_code, 200)
+
         # First-time setup: register admin user
         login_html = self.c.get("/login").text
         self.assertIn("Create admin", login_html)
