@@ -102,8 +102,14 @@ def list_all_merchants() -> list[dict]:
                 (SELECT COUNT(*) FROM sales sl WHERE sl.merchant_id = mr.id) AS sale_count,
                 EXISTS(SELECT 1 FROM zettle_connections z WHERE z.merchant_id = mr.id) AS zettle_connected,
                 (SELECT value FROM sync_state ss WHERE ss.merchant_id = mr.id AND ss.key = 'last_sync_at') AS last_sync_at,
-                (SELECT value FROM sync_state ss WHERE ss.merchant_id = mr.id AND ss.key = 'last_error') AS last_error
+                (SELECT value FROM sync_state ss WHERE ss.merchant_id = mr.id AND ss.key = 'last_error') AS last_error,
+                COALESCE(ms.status, 'comp') AS billing_status,
+                COALESCE(ms.plan_key, 'lifetime') AS plan_key,
+                ms.stripe_customer_id,
+                ms.current_period_end,
+                ms.grace_until
             FROM merchants mr
+            LEFT JOIN merchant_subscriptions ms ON ms.merchant_id = mr.id
             ORDER BY mr.id ASC
             """
         ).fetchall()

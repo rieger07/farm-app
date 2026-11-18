@@ -133,6 +133,29 @@ CREATE TABLE IF NOT EXISTS merchant_invites (
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS merchant_subscriptions (
+    merchant_id INTEGER PRIMARY KEY,
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT,
+    plan_key TEXT NOT NULL DEFAULT 'lifetime',
+    status TEXT NOT NULL DEFAULT 'comp' CHECK (status IN ('comp', 'trialing', 'active', 'past_due', 'canceled')),
+    current_period_end TEXT,
+    grace_until TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_subs_customer ON merchant_subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_subs_sub ON merchant_subscriptions(stripe_subscription_id);
+
+CREATE TABLE IF NOT EXISTS billing_checkout_invites (
+    stripe_session_id TEXT PRIMARY KEY,
+    invite_token TEXT NOT NULL,
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT,
+    plan_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
