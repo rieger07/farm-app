@@ -386,7 +386,7 @@ async def api_contact(request: Request):
     now = time.monotonic()
     recent = [t for t in _CONTACT_BUCKETS.get(ip, []) if now - t < 600]
     if len(recent) >= 5:
-        raise HTTPException(429, "Too many inquiries. Please email steve.rieger.dev@gmail.com directly.")
+        raise HTTPException(429, "Too many inquiries. Please try again in a few minutes.")
     recent.append(now)
     _CONTACT_BUCKETS[ip] = recent
 
