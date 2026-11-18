@@ -36,6 +36,29 @@
   </table>
 </div>
 
+<div class="card">
+  <h2>Google Drive Receipts</h2>
+  <p class="sub" style="margin-bottom:12px">Store receipt photos &amp; PDFs in your own Google Drive (uses minimal <code>drive.file</code> access — only files created by Homestead Planner).</p>
+  {% if gdrive_conn %}
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <div>
+        <span class="pill green">Connected{% if gdrive_conn.google_email %} · {{ gdrive_conn.google_email }}{% endif %}</span>
+      </div>
+      <form method="post" action="/settings/google-drive/disconnect">
+        <button class="btn sm danger">Disconnect</button>
+      </form>
+    </div>
+    <form method="post" action="/settings/google-drive/folder" class="row" style="gap:10px;align-items:flex-end">
+      <label style="flex:1">Destination folder name<input name="folder_name" value="{{ gdrive_conn.folder_name or 'Homestead Planner Receipts' }}" required></label>
+      <button class="btn sm primary">Save folder</button>
+    </form>
+  {% elif gdrive_configured %}
+    <a href="/settings/google-drive/connect" class="btn primary sm">Connect Google Drive</a>
+  {% else %}
+    <p class="sub">Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in your server environment to enable one-click Google Drive receipt uploads. You can still paste manual receipt URLs on any feed, harvest, or expense entry.</p>
+  {% endif %}
+</div>
+
 <div class="cards two">
   <div class="card">
     <h2>Backup &amp; restore</h2>

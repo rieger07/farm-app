@@ -54,7 +54,7 @@
 
   <div class="card">
     <h2>Harvests &amp; Processing</h2>
-    <form method="post" action="/batches/log-harvest" class="fgrid" style="margin-bottom:14px">
+    <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
       <input type="hidden" name="batch_id" value="{{ b.id }}">
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
       <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
@@ -62,19 +62,22 @@
       <label>Dressed wt (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
       <label>Processing ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
       <label class="full">Notes<input name="notes" placeholder="Optional"></label>
+      <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+      <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
       <div class="full"><button class="btn primary sm">+ Add harvest</button></div>
     </form>
     <table>
-      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th class="num">Proc $</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th class="num">Proc $</th><th>Receipt</th><th></th></tr></thead>
       <tbody>
       {% for h in harvests %}
         <tr>
           <td>{{ h.harvest_date }}</td><td class="num">{{ h.head_count }}</td>
           <td class="num">{{ '%.1f'|format(h.dressed_lbs) }}</td><td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
+          <td>{% if h.receipt_url %}<a href="{{ h.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
           <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
         </tr>
       {% else %}
-        <tr><td colspan="5" class="empty">No harvests recorded.</td></tr>
+        <tr><td colspan="6" class="empty">No harvests recorded.</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -123,7 +126,7 @@
       Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb (${{ '%.2f'|format(logged_cost) }})</b>
       · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
     </p>
-    <form method="post" action="/batches/log-feed" class="fgrid" style="margin-bottom:14px">
+    <form method="post" action="/batches/log-feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
       <input type="hidden" name="batch_id" value="{{ b.id }}">
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
       <label>Date<input type="date" name="feed_date" value="{{ today_iso }}" required></label>
@@ -137,20 +140,23 @@
       <label>Feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
       <label>Cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
       <label>Notes<input name="notes" placeholder="Store, receipt..."></label>
+      <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+      <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
       <div class="full"><button class="btn primary sm">+ Add feed</button></div>
     </form>
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
       <tbody>
       {% for fl in feed_logs %}
         <tr>
           <td>{{ fl.feed_date }}</td><td>{{ fl.feed_type|title }}</td>
           <td class="num">{{ fl.bags }}</td><td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
           <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
+          <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
           <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
+        <tr><td colspan="7" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
       {% endfor %}
       </tbody>
     </table>

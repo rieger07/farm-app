@@ -1,9 +1,13 @@
 """Homestead Planner — FastAPI web app."""
 
 from contextlib import asynccontextmanager
-from datetime import date
+import csv
+from datetime import date, datetime, timedelta, timezone
+import io
 import os
 from pathlib import Path
+import secrets
+import time
 from urllib.parse import quote_plus
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -13,11 +17,13 @@ from fastapi.templating import Jinja2Templates
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
+    EXPENSE_CATEGORIES,
     acknowledge_milestone,
     add_batch_feed_log,
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
+    add_farm_expense,
     authenticate_user,
     count_users,
     create_user,
@@ -27,12 +33,15 @@ from homestead.database import (
     delete_batch_harvest,
     delete_batch_loss,
     delete_batch_sale,
+    delete_farm_expense,
     delete_species_preset,
     delete_user,
     delete_user_session,
+    disconnect_google_drive,
     export_backup_json,
     get_bag_weight,
     get_barrel_capacity,
+    get_google_drive_connection,
     get_species_catalog,
     get_user_by_session_token,
     import_backup_json,
@@ -44,17 +53,29 @@ from homestead.database import (
     list_batch_losses,
     list_batch_sales,
     list_batches,
+    list_farm_expenses,
     list_users,
     save_batch,
+    save_google_drive_connection,
     save_species_preset,
     set_bag_weight,
     set_barrel_capacity,
     set_batch_active,
     set_batch_actual_feed,
     set_public_registration_enabled,
+    update_google_drive_folder,
     update_user_password,
     verify_password,
 )
+from homestead.gdrive import (
+    GoogleDriveError,
+    build_auth_url,
+    exchange_code_for_tokens,
+    get_redirect_uri,
+    is_gdrive_configured,
+    upload_receipt_to_drive,
+)
+from inventory.crypto import encrypt_token
 from homestead.financials import (
     compute_purchasing_schedule,
     compute_roi_summary_table,
@@ -336,6 +357,7 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         sales=list_batch_sales(batch_id),
         feed_logs=list_batch_feed_logs(batch_id),
         bag_weight=bag_weight,
+        gdrive_connected=bool(get_google_drive_connection(user["id"])),
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -431,21 +453,67 @@ def batch_loss_delete(batch_id: int, loss_id: int, user: dict = Depends(current_
     return RedirectResponse(f"/batches/{batch_id}?msg=" + quote_plus("Loss removed."), status_code=303)
 
 
+_GDRIVE_OAUTH_STATES: dict[str, tuple[int, float]] = {}
+
+
+async def _resolve_receipt_attachment(
+    user_id: int,
+    receipt_file: UploadFile | None,
+    receipt_url: str,
+    receipt_date: str,
+    label: str,
+) -> tuple[str, str, str | None]:
+    manual_url = (receipt_url or "").strip()
+    if receipt_file and receipt_file.filename:
+        raw = await receipt_file.read()
+        if raw:
+            try:
+                file_id, view_url = upload_receipt_to_drive(
+                    user_id,
+                    receipt_file.filename,
+                    receipt_file.content_type or "application/octet-stream",
+                    raw,
+                    receipt_date=receipt_date,
+                    label=label,
+                )
+                return view_url, file_id, None
+            except GoogleDriveError as exc:
+                return manual_url, "", str(exc)
+    return manual_url, "", None
+
+
 @app.post("/batches/log-harvest")
-def batch_log_harvest(
+async def batch_log_harvest(
     batch_id: int = Form(...),
     harvest_date: str = Form(...),
     head_count: int = Form(...),
     dressed_lbs: float = Form(...),
     processing_cost_total: float = Form(0.0),
     notes: str = Form(""),
+    receipt_url: str = Form(""),
+    receipt_file: UploadFile | None = File(None),
     next_url: str = Form("/"),
     user: dict = Depends(current_user),
 ):
-    _get_owned_batch(batch_id, user)
-    add_batch_harvest(batch_id, harvest_date, max(1, head_count), dressed_lbs, processing_cost_total, notes.strip())
+    b = _get_owned_batch(batch_id, user)
+    r_url, drive_id, warn = await _resolve_receipt_attachment(
+        user["id"], receipt_file, receipt_url, harvest_date, f"{b['name']}-processing"
+    )
+    add_batch_harvest(
+        batch_id,
+        harvest_date,
+        max(1, head_count),
+        dressed_lbs,
+        processing_cost_total,
+        notes.strip(),
+        receipt_url=r_url,
+        drive_file_id=drive_id,
+    )
     target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(f"Logged {head_count} harvested."), status_code=303)
+    msg = f"Logged {head_count} harvested."
+    if warn:
+        msg += f" (Receipt not uploaded: {warn})"
+    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
 
 
 @app.post("/batches/{batch_id}/harvests/{harvest_id}/delete")
@@ -480,7 +548,7 @@ def batch_sale_delete(batch_id: int, sale_id: int, user: dict = Depends(current_
 
 
 @app.post("/batches/log-feed")
-def batch_log_feed(
+async def batch_log_feed(
     batch_id: int = Form(...),
     feed_date: str = Form(""),
     feed_type: str = Form("grower"),
@@ -488,14 +556,26 @@ def batch_log_feed(
     feed_lbs: float = Form(0.0),
     cost_total: float = Form(0.0),
     notes: str = Form(""),
+    receipt_url: str = Form(""),
+    receipt_file: UploadFile | None = File(None),
     next_url: str = Form("/"),
     user: dict = Depends(current_user),
 ):
-    _get_owned_batch(batch_id, user)
+    b = _get_owned_batch(batch_id, user)
     fdate = feed_date.strip() or date.today().isoformat()
-    add_batch_feed_log(batch_id, fdate, feed_type, bags, feed_lbs, cost_total, notes)
+    label = f"{b['name']}-{feed_type}"
+    r_url, drive_id, warn = await _resolve_receipt_attachment(
+        user["id"], receipt_file, receipt_url, fdate, label
+    )
+    add_batch_feed_log(
+        batch_id, fdate, feed_type, bags, feed_lbs, cost_total, notes,
+        receipt_url=r_url, drive_file_id=drive_id,
+    )
     target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus("Logged feed purchase."), status_code=303)
+    msg = "Logged feed purchase."
+    if warn:
+        msg += f" (Receipt not uploaded: {warn})"
+    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
 
 
 @app.post("/batches/{batch_id}/feed-logs/{log_id}/delete")
@@ -552,15 +632,17 @@ def feed_settings_submit(
 
 
 @app.get("/financials")
-def financials_page(request: Request, user: dict = Depends(current_user)):
+def financials_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     schedules = _schedules_for_user(user["id"], include_archived=False)
     unified_rows = compute_unified_financials_table(schedules)
     roi_rows = compute_roi_summary_table(schedules)
+    expenses = list_farm_expenses(user["id"])
     totals = {
         "est_rev": sum(s["estimated_revenue"] for s in schedules),
         "total_cost": sum(s["total_budget_cost"] for s in schedules),
         "est_profit": sum(s["estimated_profit"] for s in schedules),
         "cash_sales": sum(s["actual_sales_revenue"] for s in schedules),
+        "other_expenses": sum(float(e["amount"]) for e in expenses),
     }
     chart_peak = max(
         (max(s["total_budget_cost"], s["estimated_revenue"]) for s in schedules),
@@ -571,8 +653,99 @@ def financials_page(request: Request, user: dict = Depends(current_user)):
         schedules=schedules,
         unified_rows=unified_rows,
         roi_rows=roi_rows,
+        expenses=expenses,
+        expense_categories=EXPENSE_CATEGORIES,
+        gdrive_connected=bool(get_google_drive_connection(user["id"])),
         totals=totals,
         chart_peak=chart_peak,
+        msg=msg,
+    )
+
+
+@app.post("/expenses/add")
+async def expense_add_submit(
+    expense_date: str = Form(""),
+    vendor: str = Form(""),
+    category: str = Form("Other"),
+    amount: float = Form(0.0),
+    batch_id: str = Form(""),
+    notes: str = Form(""),
+    receipt_url: str = Form(""),
+    receipt_file: UploadFile | None = File(None),
+    user: dict = Depends(current_user),
+):
+    edate = expense_date.strip() or date.today().isoformat()
+    bid = int(batch_id) if batch_id.strip().isdigit() else None
+    if bid is not None:
+        _get_owned_batch(bid, user)
+    r_url, drive_id, warn = await _resolve_receipt_attachment(
+        user["id"], receipt_file, receipt_url, edate, vendor or category
+    )
+    add_farm_expense(
+        user["id"],
+        edate,
+        vendor,
+        category,
+        amount,
+        batch_id=bid,
+        notes=notes,
+        receipt_url=r_url,
+        drive_file_id=drive_id,
+    )
+    msg = "Saved farm expense."
+    if warn:
+        msg += f" (Receipt not uploaded: {warn})"
+    return RedirectResponse("/financials?msg=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/expenses/{expense_id}/delete")
+def expense_delete_submit(expense_id: int, user: dict = Depends(current_user)):
+    delete_farm_expense(expense_id, user["id"])
+    return RedirectResponse("/financials?msg=" + quote_plus("Expense removed."), status_code=303)
+
+
+@app.get("/financials/expenses.csv")
+def financials_expenses_csv(user: dict = Depends(current_user)):
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Date", "Source", "Category", "Vendor / Batch", "Amount ($)", "Notes", "Receipt URL"])
+    for exp in list_farm_expenses(user["id"]):
+        vendor_label = exp["vendor"] or exp["batch_name"] or ""
+        writer.writerow([
+            exp["expense_date"],
+            "Farm Expense",
+            exp["category"],
+            vendor_label,
+            f"{float(exp['amount']):.2f}",
+            exp["notes"] or "",
+            exp["receipt_url"] or "",
+        ])
+    for b in list_batches(user_id=user["id"]):
+        for fl in list_batch_feed_logs(b["id"]):
+            writer.writerow([
+                fl["feed_date"],
+                "Batch Feed",
+                "Feed",
+                f"{b['name']} ({fl['feed_type']})",
+                f"{float(fl['cost_total']):.2f}",
+                fl["notes"] or "",
+                fl.get("receipt_url") or "",
+            ])
+        for hv in list_batch_harvests(b["id"]):
+            if float(hv.get("processing_cost_total") or 0) > 0:
+                writer.writerow([
+                    hv["harvest_date"],
+                    "Harvest Processing",
+                    "Processing",
+                    b["name"],
+                    f"{float(hv['processing_cost_total']):.2f}",
+                    hv["notes"] or "",
+                    hv.get("receipt_url") or "",
+                ])
+    return Response(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="homestead-expenses-schedule-f.csv"'},
     )
 
 
@@ -592,8 +765,69 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
         species_catalog=get_species_catalog(user_id=user["id"]),
         reg_open=is_public_registration_enabled(),
         users=list_users() if user.get("is_admin") else [],
+        gdrive_configured=is_gdrive_configured(),
+        gdrive_conn=get_google_drive_connection(user["id"]),
         msg=msg,
     )
+
+
+@app.get("/settings/google-drive/connect")
+def gdrive_connect(request: Request, user: dict = Depends(current_user)):
+    if not is_gdrive_configured():
+        return RedirectResponse(
+            "/settings?msg=" + quote_plus("Google Drive OAuth is not configured on this server."),
+            status_code=303,
+        )
+    now = time.time()
+    for k, (_, exp) in list(_GDRIVE_OAUTH_STATES.items()):
+        if exp < now:
+            _GDRIVE_OAUTH_STATES.pop(k, None)
+    state = secrets.token_urlsafe(24)
+    _GDRIVE_OAUTH_STATES[state] = (user["id"], now + 600)
+    redirect_uri = get_redirect_uri(str(request.base_url))
+    return RedirectResponse(build_auth_url(state, redirect_uri), status_code=302)
+
+
+@app.get("/settings/google-drive/callback")
+def gdrive_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    user: dict = Depends(current_user),
+):
+    if error:
+        return RedirectResponse("/settings?msg=" + quote_plus(f"Google Drive error: {error}"), status_code=303)
+    entry = _GDRIVE_OAUTH_STATES.pop(state, None)
+    if not entry or entry[0] != user["id"] or entry[1] < time.time():
+        return RedirectResponse("/settings?msg=" + quote_plus("Google Drive authorization expired; try again."), status_code=303)
+    redirect_uri = get_redirect_uri(str(request.base_url))
+    try:
+        tokens = exchange_code_for_tokens(code, redirect_uri)
+    except GoogleDriveError as exc:
+        return RedirectResponse("/settings?msg=" + quote_plus(str(exc)), status_code=303)
+    secs = max(60, int(tokens.get("expires_in") or 3600))
+    exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat()
+    save_google_drive_connection(
+        user_id=user["id"],
+        google_email=str(tokens.get("email") or ""),
+        access_token_enc=encrypt_token(tokens.get("access_token") or ""),
+        refresh_token_enc=encrypt_token(tokens.get("refresh_token") or ""),
+        token_expires_at=exp_iso,
+    )
+    return RedirectResponse("/settings?msg=" + quote_plus("Google Drive connected for receipts."), status_code=303)
+
+
+@app.post("/settings/google-drive/folder")
+def gdrive_folder_save(folder_name: str = Form(...), user: dict = Depends(current_user)):
+    update_google_drive_folder(user["id"], folder_name)
+    return RedirectResponse("/settings?msg=" + quote_plus("Updated Google Drive receipt folder."), status_code=303)
+
+
+@app.post("/settings/google-drive/disconnect")
+def gdrive_disconnect(user: dict = Depends(current_user)):
+    disconnect_google_drive(user["id"])
+    return RedirectResponse("/settings?msg=" + quote_plus("Disconnected Google Drive."), status_code=303)
 
 
 @app.post("/settings/species")
