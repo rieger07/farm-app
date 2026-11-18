@@ -316,6 +316,12 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
     bag_weight = get_bag_weight(user_id=user["id"])
     s = compute_batch_schedule(b, bag_weight=bag_weight)
     s["status_badge"] = get_batch_status_badge(s)
+    gcal_arrival_url = create_gcal_link(
+        f"{b['name']} - {s['initial_label']}",
+        s["start_date"],
+        s["end_date"],
+        f"{s['initial_quantity']} {b['species']}",
+    )
     gcal_url = create_gcal_link(
         f"Process {b['name']}",
         s["proc_date"],
@@ -324,7 +330,7 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
     )
     return _render(
         request, "batch_detail.html", user, "batches",
-        b=b, s=s, gcal_url=gcal_url,
+        b=b, s=s, gcal_url=gcal_url, gcal_arrival_url=gcal_arrival_url,
         losses=list_batch_losses(batch_id),
         harvests=list_batch_harvests(batch_id),
         sales=list_batch_sales(batch_id),
