@@ -63,10 +63,10 @@
 
 <div class="card">
   <h2>Add or update member</h2>
-  <p class="sub">Add Zach, Marty, or a market helper. Staff accounts land directly on Quick sale and only see Quick sale. If the username already exists, their role on this merchant is updated.</p>
+  <p class="sub">Add a manager or market helper. Staff accounts land directly on Quick sale and only see Quick sale. If the username already exists, their role on this merchant is updated.</p>
   <form method="post" action="/settings/members" class="filters" style="padding:0;flex-wrap:wrap">
-    <input name="username" placeholder="Username (e.g. marty)" required style="max-width:180px">
-    <input name="display_name" placeholder="Display name (e.g. Marty)" style="max-width:180px">
+    <input name="username" placeholder="Username (e.g. cashier)" required style="max-width:180px">
+    <input name="display_name" placeholder="Display name (e.g. Sam)" style="max-width:180px">
     <input name="password" type="password" placeholder="Password (if new user)" style="max-width:180px">
     <select name="role">
       {% for r in roles %}

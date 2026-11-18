@@ -3,7 +3,7 @@
 {% block content %}
 <div class="eyebrow">PLATFORM ADMINISTRATION</div>
 <div class="pagehead">
-  <div><h1>Tenants &amp; Onboarding</h1><p class="sub">Create merchant workspaces, generate one-time invite links for Zach or Marty, and manage users.</p></div>
+  <div><h1>Tenants &amp; Onboarding</h1><p class="sub">Create merchant workspaces, generate one-time invite links, and manage users.</p></div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
@@ -30,11 +30,11 @@
 <div class="cards two even">
   <div class="card">
     <h2>1. Create tenant workspace directly</h2>
-    <p class="sub">Create Zach's workspace now and optionally set up his owner login in one step.</p>
+    <p class="sub">Create a new workspace now and optionally set up its owner login in one step.</p>
     <form method="post" action="/admin/merchants/create" style="display:flex;flex-direction:column;gap:10px">
-      <input name="merchant_name" placeholder="Business name (e.g. Zach's Honey)" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="owner_username" placeholder="Owner username (optional, e.g. zach)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="owner_display_name" placeholder="Owner display name (optional, e.g. Zach)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="merchant_name" placeholder="Business name (e.g. Willow Creek Farm)" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="owner_username" placeholder="Owner username (optional, e.g. owner)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="owner_display_name" placeholder="Owner display name (optional, e.g. Alex)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <input name="owner_password" type="password" placeholder="Owner password (if creating new user)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <button class="btn primary">Create workspace</button>
     </form>
@@ -42,7 +42,7 @@
 
   <div class="card">
     <h2>2. Generate one-time invite link</h2>
-    <p class="sub">Send a link to Zach or Marty so they can choose their own username and password.</p>
+    <p class="sub">Send a link to a farm owner or staff member so they can choose their own username and password.</p>
     <form method="post" action="/admin/invites/create" style="display:flex;flex-direction:column;gap:10px">
       <select name="target_merchant_id" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
         <option value="">✨ Create a brand-new merchant workspace (Owner)</option>
@@ -59,7 +59,7 @@
         <input type="number" name="days_valid" value="14" min="1" max="90" title="Days valid" style="width:110px;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       </div>
       <input name="default_merchant_name" placeholder="Pre-fill merchant name (if new workspace)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="note" placeholder="Note (e.g. For Zach, For Marty)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <input name="note" placeholder="Note (e.g. Farm owner, Market cashier)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
       <button class="btn primary">Generate invite link</button>
     </form>
   </div>
@@ -173,13 +173,13 @@
 
 <div class="card" style="margin-bottom:20px">
   <h2>Assign user to a workspace</h2>
-  <p class="sub">Add a new or existing user (e.g. Zach as owner, Marty as staff) to any workspace.</p>
+  <p class="sub">Add a new or existing user (e.g. an owner or staff member) to any workspace.</p>
   <form method="post" action="/admin/members/save" class="filters" style="padding:0;flex-wrap:wrap">
     <select name="merchant_id" required>
       {% for m in merchants %}<option value="{{ m.id }}">{{ m.name }} (#{{ m.id }})</option>{% endfor %}
     </select>
-    <input name="username" placeholder="Username (e.g. zach)" required style="max-width:160px">
-    <input name="display_name" placeholder="Display name (e.g. Zach)" style="max-width:160px">
+    <input name="username" placeholder="Username (e.g. alex)" required style="max-width:160px">
+    <input name="display_name" placeholder="Display name (e.g. Alex)" style="max-width:160px">
     <input name="password" type="password" placeholder="Password (if new user)" style="max-width:160px">
     <select name="role">
       {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}

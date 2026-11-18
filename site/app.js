@@ -5,17 +5,6 @@
     toggle.onclick = () => links.classList.toggle('open');
   }
 
-  const copyBtn = document.getElementById('copy-email');
-  if (copyBtn) {
-    copyBtn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText('steve.rieger.dev@gmail.com');
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => (copyBtn.textContent = 'Copy email'), 1800);
-      } catch (_) {}
-    };
-  }
-
   const form = document.getElementById('contact-form');
   if (form) {
     const status = document.getElementById('form-status');
@@ -44,10 +33,10 @@
           status.textContent = 'Thanks — your message was sent. I will reply shortly.';
         } else {
           const err = await res.json().catch(() => ({}));
-          status.textContent = err.detail || 'Could not send message. Please email steve.rieger.dev@gmail.com directly.';
+          status.textContent = err.detail || 'Could not send message. Please try again in a moment.';
         }
       } catch (_) {
-        status.textContent = 'Network error. Please email steve.rieger.dev@gmail.com directly.';
+        status.textContent = 'Network error. Please check your connection and try again.';
       } finally {
         if (btn) btn.disabled = false;
       }
