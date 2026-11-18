@@ -319,6 +319,22 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_feed_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                feed_date TEXT NOT NULL,
+                feed_type TEXT NOT NULL DEFAULT 'grower',
+                bags REAL NOT NULL DEFAULT 0,
+                feed_lbs REAL NOT NULL DEFAULT 0,
+                cost_total REAL NOT NULL DEFAULT 0,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
 
 
@@ -1272,6 +1288,52 @@ def add_batch_sale(
 def delete_batch_sale(sale_id: int) -> None:
     with get_db_connection() as conn:
         conn.execute("DELETE FROM batch_sales WHERE id = ?", (int(sale_id),))
+        conn.commit()
+
+
+def list_batch_feed_logs(batch_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM batch_feed_logs WHERE batch_id = ? ORDER BY feed_date DESC, id DESC",
+            (int(batch_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_batch_feed_log(
+    batch_id: int,
+    feed_date: str,
+    feed_type: str,
+    bags: float,
+    feed_lbs: float,
+    cost_total: float,
+    notes: str = "",
+) -> int:
+    ft = "starter" if str(feed_type).strip().lower() == "starter" else "grower"
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO batch_feed_logs (batch_id, feed_date, feed_type, bags, feed_lbs, cost_total, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(batch_id),
+                str(feed_date),
+                ft,
+                max(0.0, float(bags)),
+                max(0.0, float(feed_lbs)),
+                max(0.0, float(cost_total)),
+                str(notes or "").strip(),
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_batch_feed_log(log_id: int) -> None:
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM batch_feed_logs WHERE id = ?", (int(log_id),))
         conn.commit()
 
 

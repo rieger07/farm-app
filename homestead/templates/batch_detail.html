@@ -115,15 +115,52 @@
   </div>
 
   <div class="card">
-    <h2>Actual Feed Override</h2>
-    <p class="sub" style="margin-bottom:12px">Planned feed: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (est. ${{ '%.2f'|format(s.total_feed_cost_bags) }})</p>
-    <form method="post" action="/batches/log-feed" class="stack">
+    <h2>Feed Purchase &amp; Usage Log</h2>
+    <p class="sub" style="margin-bottom:12px">
+      Logged: <b>{{ '%.1f'|format(s.reconciled_feed_lbs) }} lb (${{ '%.2f'|format(s.reconciled_feed_cost) }})</b>
+      · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
+    </p>
+    <form method="post" action="/batches/log-feed" class="fgrid" style="margin-bottom:14px">
       <input type="hidden" name="batch_id" value="{{ b.id }}">
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
-      <label>Actual feed used (lb)<input type="number" name="actual_feed_lbs" step="0.1" min="0" value="{{ b.actual_feed_lbs if b.actual_feed_lbs is not none else '' }}"></label>
-      <label>Actual feed cost ($)<input type="number" name="actual_feed_cost" step="0.01" min="0" value="{{ b.actual_feed_cost if b.actual_feed_cost is not none else '' }}"></label>
-      <div><button class="btn primary sm">Save actual feed</button></div>
+      <label>Date<input type="date" name="feed_date" value="{{ today_iso }}" required></label>
+      <label>Type
+        <select name="feed_type" id="bd-ftype" onchange="syncBdFeed()">
+          <option value="starter">Starter</option>
+          <option value="grower" selected>Grower / Finisher</option>
+        </select>
+      </label>
+      <label>Bags ({{ bag_weight }} lb)<input type="number" name="bags" id="bd-fbags" step="0.5" min="0" value="1" oninput="syncBdFeed()"></label>
+      <label>Feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
+      <label>Cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
+      <label>Notes<input name="notes" placeholder="Store, receipt..."></label>
+      <div class="full"><button class="btn primary sm">+ Add feed</button></div>
     </form>
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th></th></tr></thead>
+      <tbody>
+      {% for fl in feed_logs %}
+        <tr>
+          <td>{{ fl.feed_date }}</td><td>{{ fl.feed_type|title }}</td>
+          <td class="num">{{ fl.bags }}</td><td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
+          <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <script>
+    function syncBdFeed() {
+      const bags = parseFloat(document.getElementById('bd-fbags').value || '0') || 0;
+      const price = document.getElementById('bd-ftype').value === 'starter'
+        ? {{ b.starter_bag_price or 24 }}
+        : {{ b.grower_bag_price or 22 }};
+      document.getElementById('bd-flbs').value = (bags * {{ bag_weight }}).toFixed(1).replace(/\.0$/, '');
+      document.getElementById('bd-fcost').value = (bags * price).toFixed(2);
+    }
+    </script>
   </div>
 </div>
 

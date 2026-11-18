@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
     acknowledge_milestone,
+    add_batch_feed_log,
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
@@ -22,6 +23,7 @@ from homestead.database import (
     create_user,
     create_user_session,
     delete_batch,
+    delete_batch_feed_log,
     delete_batch_harvest,
     delete_batch_loss,
     delete_batch_sale,
@@ -37,6 +39,7 @@ from homestead.database import (
     init_db,
     is_public_registration_enabled,
     list_acknowledged_milestones,
+    list_batch_feed_logs,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
@@ -279,6 +282,7 @@ def radar_page(request: Request, msg: str = "", user: dict = Depends(current_use
         timeline=_build_timeline(schedules),
         total_head=sum(s["surviving_quantity"] for s in schedules),
         total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in schedules),
+        bag_weight=get_bag_weight(user_id=user["id"]),
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -324,6 +328,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         losses=list_batch_losses(batch_id),
         harvests=list_batch_harvests(batch_id),
         sales=list_batch_sales(batch_id),
+        feed_logs=list_batch_feed_logs(batch_id),
+        bag_weight=bag_weight,
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -470,17 +476,27 @@ def batch_sale_delete(batch_id: int, sale_id: int, user: dict = Depends(current_
 @app.post("/batches/log-feed")
 def batch_log_feed(
     batch_id: int = Form(...),
-    actual_feed_lbs: str = Form(""),
-    actual_feed_cost: str = Form(""),
+    feed_date: str = Form(""),
+    feed_type: str = Form("grower"),
+    bags: float = Form(0.0),
+    feed_lbs: float = Form(0.0),
+    cost_total: float = Form(0.0),
+    notes: str = Form(""),
     next_url: str = Form("/"),
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
-    lbs = float(actual_feed_lbs) if actual_feed_lbs.strip() else None
-    cost = float(actual_feed_cost) if actual_feed_cost.strip() else None
-    set_batch_actual_feed(batch_id, lbs, cost)
+    fdate = feed_date.strip() or date.today().isoformat()
+    add_batch_feed_log(batch_id, fdate, feed_type, bags, feed_lbs, cost_total, notes)
     target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus("Saved actual feed."), status_code=303)
+    return RedirectResponse(f"{target}?msg=" + quote_plus("Logged feed purchase."), status_code=303)
+
+
+@app.post("/batches/{batch_id}/feed-logs/{log_id}/delete")
+def batch_feed_log_delete(batch_id: int, log_id: int, user: dict = Depends(current_user)):
+    _get_owned_batch(batch_id, user)
+    delete_batch_feed_log(log_id)
+    return RedirectResponse(f"/batches/{batch_id}?msg=" + quote_plus("Feed entry removed."), status_code=303)
 
 
 @app.get("/calendar.ics")

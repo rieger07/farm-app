@@ -67,12 +67,17 @@ class FarmWebTest(unittest.TestCase):
         self.c.post("/batches/log-loss", data={"batch_id": "1", "loss_date": "2026-11-05", "count": "2", "reason": "Runt", "next_url": "/batches/1"}, follow_redirects=False)
         self.c.post("/batches/log-harvest", data={"batch_id": "1", "harvest_date": "2026-11-16", "head_count": "10", "dressed_lbs": "46.5", "processing_cost_total": "50.0", "next_url": "/batches/1"}, follow_redirects=False)
         self.c.post("/batches/log-sale", data={"batch_id": "1", "entry_date": "2026-11-17", "allocation_type": "sale", "weight_lbs": "20", "revenue": "110", "next_url": "/batches/1"}, follow_redirects=False)
-        self.c.post("/batches/log-feed", data={"batch_id": "1", "actual_feed_lbs": "180", "actual_feed_cost": "95", "next_url": "/batches/1"}, follow_redirects=False)
+        self.c.post("/batches/log-feed", data={
+            "batch_id": "1", "feed_date": "2026-11-17", "feed_type": "grower",
+            "bags": "4", "feed_lbs": "200", "cost_total": "88", "notes": "Tractor Supply",
+            "next_url": "/batches/1",
+        }, follow_redirects=False)
 
         detail = self.c.get("/batches/1").text
         self.assertIn("28 / 30", detail)
         self.assertIn("46.5 lb", detail)
         self.assertIn("110.00", detail)
+        self.assertIn("200.0 lb ($88.00)", detail)
 
         # Feed, Financials, ICS, Backup, Settings
         self.c.post("/feed/settings", data={"barrel_capacity": "300", "bag_weight": "50"}, follow_redirects=False)

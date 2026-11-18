@@ -11,6 +11,7 @@ from homestead.config import (
 )
 from homestead.database import (
     get_species_defaults,
+    list_batch_feed_logs,
     list_batch_harvests,
     list_batch_losses,
     list_batch_sales,
@@ -394,16 +395,21 @@ def compute_batch_schedule(
         sum(item["processing_cost_total"] for item in parsed_harvests), 2
     )
 
-    actual_feed_lbs_override = (
-        float(batch["actual_feed_lbs"])
-        if batch.get("actual_feed_lbs") is not None
-        else None
-    )
-    actual_feed_cost_override = (
-        float(batch["actual_feed_cost"])
-        if batch.get("actual_feed_cost") is not None
-        else None
-    )
+    feed_logs = list_batch_feed_logs(int(batch["id"])) if batch.get("id") is not None else []
+    if feed_logs:
+        actual_feed_lbs_override = round(sum(float(f["feed_lbs"]) for f in feed_logs), 2)
+        actual_feed_cost_override = round(sum(float(f["cost_total"]) for f in feed_logs), 2)
+    else:
+        actual_feed_lbs_override = (
+            float(batch["actual_feed_lbs"])
+            if batch.get("actual_feed_lbs") is not None
+            else None
+        )
+        actual_feed_cost_override = (
+            float(batch["actual_feed_cost"])
+            if batch.get("actual_feed_cost") is not None
+            else None
+        )
     reconciled_feed_lbs = (
         round(actual_feed_lbs_override, 2)
         if actual_feed_lbs_override is not None
