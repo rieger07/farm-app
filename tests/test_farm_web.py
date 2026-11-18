@@ -82,9 +82,21 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(bak.status_code, 200)
         self.assertTrue(json.loads(bak.text)["batches"])
 
-        self.c.post("/settings/species", data={"species": "ducks", "lifecycle_type": "live_arrival", "growth_days": "49"}, follow_redirects=False)
+        self.c.post("/settings/species", data={
+            "species": "berkshire pigs",
+            "lifecycle_type": "mammal_breeding",
+            "days_to_birth": "114",
+            "starter_weeks": "6",
+            "grower_weeks": "20",
+            "starter_feed_lbs": "45",
+            "grower_feed_lbs": "520",
+            "expected_yield_lbs": "165",
+        }, follow_redirects=False)
         settings = self.c.get("/settings").text
-        self.assertIn("Ducks", settings)
+        self.assertIn("Berkshire Pigs", settings)
+        self.assertIn("Breeding", settings)
+        self.assertIn("26w", settings)
+        self.assertIn("165.0 lb", settings)
 
 
 if __name__ == "__main__":

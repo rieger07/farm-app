@@ -101,6 +101,8 @@ def _asset(name: str) -> str:
 
 
 templates.env.globals["asset"] = _asset
+templates.env.filters["money"] = lambda v: f"${float(v or 0):,.2f}"
+templates.env.filters["money0"] = lambda v: f"${float(v or 0):,.0f}"
 
 
 @app.exception_handler(_LoginRedirect)
@@ -285,7 +287,14 @@ def batch_save_submit(
     avg_dressed_weight: float = Form(0.0),
     sale_price_per_lb: float = Form(0.0),
     processing_cost: float = Form(0.0),
-    lifecycle_type: str = Form("live_arrival"),
+    lifecycle_type: str = Form("direct_arrival"),
+    days_to_birth: str = Form(""),
+    starter_weeks: str = Form(""),
+    grower_weeks: str = Form(""),
+    starter_feed_lbs: str = Form(""),
+    grower_feed_lbs: str = Form(""),
+    starter_bag_price: str = Form(""),
+    grower_bag_price: str = Form(""),
     notes: str = Form(""),
     next_url: str = Form("/batches"),
     user: dict = Depends(current_user),
@@ -293,7 +302,7 @@ def batch_save_submit(
     bid = int(batch_id) if batch_id.strip() else None
     if bid is not None:
         _get_owned_batch(bid, user)
-    payload = {
+    payload: dict = {
         "name": name.strip(),
         "species": species.strip().lower(),
         "start_date": start_date,
@@ -305,6 +314,17 @@ def batch_save_submit(
         "lifecycle_type": lifecycle_type,
         "notes": notes.strip(),
     }
+    for k, raw, cast in (
+        ("days_to_birth", days_to_birth, int),
+        ("starter_weeks", starter_weeks, int),
+        ("grower_weeks", grower_weeks, int),
+        ("starter_feed_lbs", starter_feed_lbs, float),
+        ("grower_feed_lbs", grower_feed_lbs, float),
+        ("starter_bag_price", starter_bag_price, float),
+        ("grower_bag_price", grower_bag_price, float),
+    ):
+        if raw.strip():
+            payload[k] = cast(raw)
     save_batch(payload, batch_id=bid, user_id=user["id"])
     target = next_url if next_url.startswith("/") else "/batches"
     return RedirectResponse(f"{target}?msg=" + quote_plus(f"Saved {name.strip()}."), status_code=303)
@@ -504,17 +524,18 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
 @app.post("/settings/species")
 def settings_species_save(
     species: str = Form(...),
-    lifecycle_type: str = Form("live_arrival"),
-    growth_days: int = Form(56),
-    starter_days: int = Form(21),
-    starter_lbs_per_day: float = Form(0.12),
-    grower_lbs_per_day: float = Form(0.30),
+    lifecycle_type: str = Form("direct_arrival"),
+    days_to_birth: int = Form(0),
+    starter_weeks: int = Form(3),
+    grower_weeks: int = Form(5),
+    starter_feed_lbs: float = Form(3.0),
+    grower_feed_lbs: float = Form(12.0),
     unit_cost: float = Form(3.5),
-    avg_dressed_weight: float = Form(4.5),
+    expected_yield_lbs: float = Form(4.5),
     sale_price_per_lb: float = Form(5.5),
     processing_cost: float = Form(5.0),
-    starter_bag_price: float = Form(28.0),
-    grower_bag_price: float = Form(24.0),
+    starter_bag_price: float = Form(24.0),
+    grower_bag_price: float = Form(22.0),
     apply_active: str = Form(""),
     user: dict = Depends(current_user),
 ):
@@ -522,12 +543,13 @@ def settings_species_save(
         species,
         {
             "lifecycle_type": lifecycle_type,
-            "growth_days": growth_days,
-            "starter_days": starter_days,
-            "starter_lbs_per_day": starter_lbs_per_day,
-            "grower_lbs_per_day": grower_lbs_per_day,
+            "days_to_birth": days_to_birth,
+            "starter_weeks": starter_weeks,
+            "grower_weeks": grower_weeks,
+            "starter_feed_lbs": starter_feed_lbs,
+            "grower_feed_lbs": grower_feed_lbs,
             "unit_cost": unit_cost,
-            "avg_dressed_weight": avg_dressed_weight,
+            "expected_yield_lbs": expected_yield_lbs,
             "sale_price_per_lb": sale_price_per_lb,
             "processing_cost": processing_cost,
             "starter_bag_price": starter_bag_price,

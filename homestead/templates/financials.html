@@ -8,10 +8,10 @@
 </div>
 
 <div class="cards four">
-  <div class="card"><small>Est. revenue</small><div class="big">${{ '%.0f'|format(totals.est_rev) }}</div><small>Across active batches</small></div>
-  <div class="card"><small>Total budget cost</small><div class="big">${{ '%.0f'|format(totals.total_cost) }}</div><small>Chicks, feed &amp; processing</small></div>
-  <div class="card"><small>Est. profit</small><div class="big">${{ '%.0f'|format(totals.est_profit) }}</div><small>Projected net</small></div>
-  <div class="card"><small>Cash sales</small><div class="big">${{ '%.0f'|format(totals.cash_sales) }}</div><small>Realized revenue</small></div>
+  <div class="card"><small>Est. revenue</small><div class="big">{{ totals.est_rev|money0 }}</div><small>Across active batches</small></div>
+  <div class="card"><small>Total budget cost</small><div class="big">{{ totals.total_cost|money0 }}</div><small>Chicks, feed &amp; processing</small></div>
+  <div class="card"><small>Est. profit</small><div class="big">{{ totals.est_profit|money0 }}</div><small>Projected net</small></div>
+  <div class="card"><small>Cash sales</small><div class="big">{{ totals.cash_sales|money0 }}</div><small>Realized revenue</small></div>
 </div>
 
 {% if schedules %}
@@ -19,14 +19,15 @@
   <h2>Cost vs. estimated revenue by batch</h2>
   <div class="bar-wrap">
     {% for s in schedules %}
-    {% set maxv = [s.total_budget_cost, s.estimated_revenue, 1]|max %}
     <div class="bar-item">
       <div class="bar-labels">
         <b>{{ s.batch.name }}</b>
-        <small class="inline">Cost ${{ '%.0f'|format(s.total_budget_cost) }} · Est. Rev ${{ '%.0f'|format(s.estimated_revenue) }}</small>
+        <small class="inline">Cost {{ s.total_budget_cost|money0 }} · Est. Rev {{ s.estimated_revenue|money0 }}</small>
       </div>
-      <div class="bar-track" title="Cost vs Revenue">
+      <div class="bar-track" title="Cost">
         <div class="bar-cost" style="width:{{ (s.total_budget_cost / chart_peak * 100)|round(1) }}%"></div>
+      </div>
+      <div class="bar-track" title="Estimated Revenue">
         <div class="bar-rev" style="width:{{ (s.estimated_revenue / chart_peak * 100)|round(1) }}%"></div>
       </div>
     </div>
