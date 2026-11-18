@@ -117,7 +117,9 @@
   <div class="card">
     <h2>Feed Purchase &amp; Usage Log</h2>
     <p class="sub" style="margin-bottom:12px">
-      Logged: <b>{{ '%.1f'|format(s.reconciled_feed_lbs) }} lb (${{ '%.2f'|format(s.reconciled_feed_cost) }})</b>
+      {% set logged_lbs = (feed_logs|sum(attribute='feed_lbs')) if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
+      {% set logged_cost = (feed_logs|sum(attribute='cost_total')) if feed_logs else (b.actual_feed_cost if b.actual_feed_cost is not none else 0.0) %}
+      Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb (${{ '%.2f'|format(logged_cost) }})</b>
       · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
     </p>
     <form method="post" action="/batches/log-feed" class="fgrid" style="margin-bottom:14px">
