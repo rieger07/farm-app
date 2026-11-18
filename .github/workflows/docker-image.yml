@@ -80,7 +80,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Site Docker image
         id: meta_site
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a81df20a
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: asralis/ironclad-site
 
