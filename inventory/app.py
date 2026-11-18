@@ -367,7 +367,7 @@ def login_page(request: Request):
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"error": None, "first_run": count_merchants() == 0},
+        {"error": None, "first_run": count_merchants() == 0, "stripe_configured": billing.configured()},
     )
 
 

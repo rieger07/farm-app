@@ -18,6 +18,9 @@
     <label>Username<input name="username" autocomplete="username" autocapitalize="none" required {{ '' if first_run else 'autofocus' }}></label>
     <label>Password<input name="password" type="password" autocomplete="{{ 'new-password' if first_run else 'current-password' }}" required></label>
     <button class="btn primary">{{ 'Create workspace & sign in' if first_run else 'Sign in' }}</button>
+    {% if stripe_configured and not first_run %}
+      <small class="center" style="margin-top:12px">New farm or business? <a href="/signup" style="color:var(--green);font-weight:600">Start a workspace →</a></small>
+    {% endif %}
   </form>
 </div>
 {% endblock %}
