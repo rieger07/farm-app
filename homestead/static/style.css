@@ -60,12 +60,14 @@ td{padding:11px 14px;border-top:1px solid var(--line);font-size:14px}
 .ms-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .ms-row:first-child{border-top:0}
 
-.fgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.fgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.fgrid>*{min-width:0}
 .fgrid label,.stack label{display:flex;flex-direction:column;gap:4px;font-size:13px}
-.fgrid label.full{grid-column:1/-1}
+.fgrid .full{grid-column:1/-1}
 .stack{display:flex;flex-direction:column;gap:12px}
-input,select,textarea{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#faf9f3;font:inherit;color:var(--ink)}
-dialog{border:1px solid var(--line);border-radius:14px;padding:20px;max-width:520px;width:calc(100vw - 24px);box-shadow:0 20px 50px rgba(31,58,45,.25)}
+input,select,textarea{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#faf9f3;font:inherit;color:var(--ink);width:100%;box-sizing:border-box}
+input[type="checkbox"],input[type="radio"]{width:auto}
+dialog{border:1px solid var(--line);border-radius:14px;padding:20px;max-width:520px;width:calc(100vw - 24px);max-height:90vh;overflow-y:auto;box-sizing:border-box;box-shadow:0 20px 50px rgba(31,58,45,.25)}
 dialog::backdrop{background:rgba(31,58,45,.35)}
 
 .bar-wrap{display:flex;flex-direction:column;gap:10px}
