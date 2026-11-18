@@ -23,6 +23,15 @@ class FarmWebTest(unittest.TestCase):
     def test_full_farm_workflow(self):
         self.assertEqual(self.c.get("/healthz").json(), {"ok": True})
 
+        # Unauthenticated public homepage, privacy policy & terms for Google OAuth verification
+        home_resp = self.c.get("/", follow_redirects=False)
+        self.assertEqual(home_resp.status_code, 200)
+        self.assertIn("Ironclad Systems LLC", home_resp.text)
+        self.assertIn("drive.file", home_resp.text)
+        self.assertIn("/privacy", home_resp.text)
+        self.assertEqual(self.c.get("/privacy", follow_redirects=False).status_code, 200)
+        self.assertEqual(self.c.get("/terms", follow_redirects=False).status_code, 200)
+
         # First-time setup: register admin user
         login_html = self.c.get("/login").text
         self.assertIn("Create admin", login_html)
@@ -110,6 +119,45 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Breeding", settings)
         self.assertIn("26w", settings)
         self.assertIn("165.0 lb", settings)
+        self.assertIn("Google Drive Receipts", settings)
+
+        # General farm expense + receipt URL + Schedule F CSV export
+        r_exp = self.c.post("/expenses/add", data={
+            "expense_date": "2026-11-18",
+            "vendor": "Tractor Supply",
+            "category": "Supplies & Equipment",
+            "amount": "48.50",
+            "notes": "Pine shavings",
+            "receipt_url": "https://drive.google.com/file/d/abc123/view",
+        }, follow_redirects=False)
+        self.assertEqual(r_exp.status_code, 303)
+        fin_html = self.c.get("/financials").text
+        self.assertIn("Tractor Supply", fin_html)
+        self.assertIn("https://drive.google.com/file/d/abc123/view", fin_html)
+
+        csv_resp = self.c.get("/financials/expenses.csv")
+        self.assertEqual(csv_resp.status_code, 200)
+        self.assertIn("Tractor Supply", csv_resp.text)
+        self.assertIn("48.50", csv_resp.text)
+        self.assertIn("https://drive.google.com/file/d/abc123/view", csv_resp.text)
+
+        # Multipart receipt upload -> mocked Google Drive uploader
+        from unittest.mock import patch
+        with patch("app.upload_receipt_to_drive", return_value=("drv999", "https://drive.google.com/file/d/drv999/view")) as mock_up:
+            r_up = self.c.post(
+                "/expenses/add",
+                data={
+                    "expense_date": "2026-11-18",
+                    "vendor": "Runnings",
+                    "category": "Feed",
+                    "amount": "32.00",
+                },
+                files={"receipt_file": ("receipt.jpg", b"fake-jpeg-bytes", "image/jpeg")},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_up.status_code, 303)
+            self.assertTrue(mock_up.called)
+        self.assertIn("https://drive.google.com/file/d/drv999/view", self.c.get("/financials").text)
 
 
 if __name__ == "__main__":

@@ -26,10 +26,10 @@
     </div>
   </div>
   <div class="tl-months">
-    {% for m in timeline.months %}<span style="left:{{ m.pct }}%">{{ m.label }}</span>{% endfor %}
+    {% for m in timeline.months %}<span style="left:{{ m.pct }}%{% if m.pct > 92 %};transform:translateX(-90%){% elif m.pct < 6 %};transform:translateX(0){% endif %}">{{ m.label }}</span>{% endfor %}
   </div>
   <div class="tl-rows">
-    {% if timeline.today_pct is not none %}<div class="tl-today" style="left:calc(160px + (100% - 160px) * {{ timeline.today_pct / 100 }})"></div>{% endif %}
+    {% if timeline.today_pct is not none %}<div class="tl-today" style="--today-pct:{{ timeline.today_pct / 100 }}"></div>{% endif %}
     {% for r in timeline.rows %}
     <div class="tl-row">
       <a href="/batches/{{ r.id }}" class="tl-name" title="{{ r.name }} ({{ r.span_label }})">{{ r.name }}</a>
