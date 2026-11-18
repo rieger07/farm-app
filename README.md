@@ -1,72 +1,106 @@
-# 🚜 Homestead Planner: Poultry & Pigs (`farm-app`)
+# Ironclad Farm & Ledger Suite (`farm-app`)
 
-A Streamlit application for planning, comparing, and persisting multiple livestock batches (chickens, turkeys, Kunekune pigs) on a shared lifecycle timeline, phased feed & barrel storage schedule, purchasing/cash-flow plan, and $/lb meat ROI calculator.
+A three-container platform built by **Ironclad Systems LLC** on a shared SQLite database (`FARM_DB_PATH`):
 
-## Features
+1. **Homestead Planner (`app.py`, port `8501`)** — FastAPI + Jinja2 livestock batch, phased feed, harvest, and $/lb economics planner.
+2. **Iron Ledger (`inventory/`, port `8600`)** — Multi-tenant inventory ledger, automatic Zettle POS sync, offline-capable Quick Sale, per-unit & per-pound selling, and Stripe SaaS billing.
+3. **Ironclad Systems Site (`site/`, port `8080`)** — Lightweight `nginx:alpine` static website for `www.ironcladsystems.dev` (services, products, contact, and SaaS legal/policy pages).
 
-- **Multi-Tenant User Accounts & Persistent Sessions**:
-  - **First-Run Admin Onboarding**: Creating the first account promotes it to Administrator, seeds the 4 built-in species presets, and automatically claims any existing unowned batches, logs, and settings in the database.
-  - **Per-User Data Isolation**: Each user has their own isolated livestock batches, loss/harvest/sales logs, storage barrel/bag settings, custom species presets, and JSON backups.
-  - **Admin User Management & Persistent Login**: Administrators can create/delete user accounts, reset passwords, or toggle public self-registration on/off. Sessions persist across browser reloads via expiring session tokens.
-- **Custom Livestock Species Presets & Lifecycle Types**:
-  - Each user starts with 4 built-in presets (`Chicken Eggs`, `Chicken Chicks`, `Turkey Chicks`, `Kunekune Pigs`) and can add new species (e.g., `Meat Rabbits`, `Ducklings`, `Quail Eggs`, `Feeder Pigs`), edit/delete presets, or restore defaults via the `🐾 Manage Species Presets` modal or inline inside the `➕ Add Livestock Batch` dialog.
-  - Supports 3 configurable **Lifecycle Types** per species: `🐣 Poultry / Eggs (Arrival → Incubation → Hatch)`, `🐖 Mammal / Breeding (Breeding → Gestation → Birth)`, and `📥 Direct Arrival (0 days to birth/hatch)`.
-- **Streamlined 4-Tab Workflow Navigation**:
-  - **🗓️ Radar & Timeline (Operational Radar)**: 3 clean single-number vital cards (`🐾 Animals on Ground`, `🌾 Feed & Barrel Storage`, `⏳ Next Farm Milestone`), plus a side-by-side main view with the interactive **Shared Herd Lifecycle Timeline** (2/3 width, with quick action buttons to `🐾 Open Batch Logs` or `✏️ Edit Batch`) and a compact **🔔 Next Up Action Agenda** checklist (1/3 width, with relative day badges and Google Calendar links).
-  - **🐾 Batch Logs (Master-Detail Logging)**: Compact batch selector bar with primary `✏️ Edit Batch` button and a tucked-away `⋯ More & Calendar` popover menu (`📋 Duplicate Batch`, `⏸️ Exclude from Plan` / `▶️ Include in Plan`, `🗑️ Delete Batch`, and Google Calendar links), a single-line 4-metric vitals strip, and 3 action-first logging tabs (`📉 Batch Losses`, `🔪 Harvest & Butcher Log` with tucked-away Actual Feed Override, and `💵 Freezer & Sales Log`).
-  - **🌾 Feed & Shopping**: Side-by-side Weekly Feed Burn (Starter vs. Grower) and Barrel Storage Demand charts, a chronological **🛒 Feed & Livestock Shopping Schedule**, and raw weekly/monthly feed tables tucked inside an optional expander.
-  - **💰 Financials & Freezer (Unified Scorecard)**: 3 headline scorecard metrics (`💰 Total Outlay (Reconciled)`, `💵 Cash Sales & Net Cash`, `❄️ Home Freezer Meat`), a unified 8-column **🥩 Batch Economics & Freezer Summary** table, and granular 19-column cost/ration/ROI math tucked inside a `🔍 View Detailed Cost, Ration & Planned ROI Breakdown` expander.
-- **Minimal Sidebar + Quick-Add `@st.dialog` Batch Modal**:
-  - Minimal sidebar with a prominent `➕ Add Livestock Batch` button, Species & Status filters, one-click `📅 Export Active Plan (.ics)`, and a tucked-away `⚙️ Settings & Backup` expander (Barrel Size, Bag Weight, and JSON Herd Backup & Restore).
-  - Streamlined Quick-Add popup `@st.dialog` modal showing only the 4 essentials (`Select Livestock Type`, `Initial Quantity`, `Arrival/Breeding Date`, `Batch Name`) up front, an optional `⚙️ Customize Feed Rations, Pricing & Notes` expander, and a 1-line **Live Preview** summary before saving.
-- **Persistent Multi-Batch Herd Planning**: Stores batches, dated loss records, actual harvest records, sales/home freezer allocations, and storage/bag settings in a local SQLite database (`FARM_DB_PATH`, defaulting to `data/homestead.db`) with full JSON backup & restore.
-- **2-Phase Ration, Cost/Yield & Target Sale Price Modeling**:
-  - Splits growing rations into **Starter** and **Grower/Finisher** phases (weeks, lbs/head, and bag prices pre-filled from species defaults and editable per batch).
-  - Tracks acquisition cost per unit, whole-bag feed cost (with configurable bag weight, default 50 lbs, plus exact consumed cost comparison), processing cost per head, expected dressed meat yield (lbs/head), **Target Sale Price (\$/lb)**, **Feed Cost/lb of Meat**, **Total Cost/lb of Meat**, **Estimated Revenue**, **Estimated Net Profit**, and **ROI (%)**.
-- **Dated Batch Loss Tracking**:
-  - Record losses as they occur (`loss_date`, `count`, `reason`) inside each Saved Batch card.
-  - Dynamically adjusts surviving headcount from `loss_date` onward, automatically recalculating Starter/Grower feed consumption, bags needed, barrel storage demand, harvested headcount, processing cost, expected meat yield, and \$/lb ROI.
-  - Displays `⚠️ -N Lost` markers on the batch's swimlane in the shared timeline.
-- **Actual Harvest, Home Freezer & Sales Reconciliation**:
-  - **Harvest & Butcher Log**: Log whole-batch or split/multi-date harvests (`harvest_date`, `head_count`, `dressed_lbs`, `processing_cost_total`, `notes`). Early or split harvests automatically reduce remaining feed demand after `harvest_date` and place `🥩 Harvested` markers on the shared timeline.
-  - **Actual Feed Override**: Optionally override total feed lbs and total feed cost used at the end of a batch to reconcile leftover or extra bags.
-  - **Customer Sales & Home Freezer Log**: Allocate harvested meat between **Customer Sale** (tracking lbs sold and actual cash revenue) and **Home Freezer** (tracking lbs stored for personal consumption), computing **Actual Net Cash Position (\$)** and **Effective Cost of Home Freezer Meat (\$/lb)** after offsetting batch costs with customer sales revenue (highlighting `"🎉 $0.00/lb (Free Meat!)"` when customer sales cover 100% of batch costs).
-- **Shared Grouped Swimlane Timeline**: Visualizes all active batches side-by-side using `streamlit-vis-timeline` with color-coded phases (`Breeding`/`Arrival`, `Gestation`/`Incubation`, `Starter`, `Grower/Finisher`, `Processing`, and loss markers).
-- **Purchasing & Cash-Flow Schedule**: Chronological and monthly summary of when to purchase animals, Starter feed bags, Grower/Finisher feed bags, and pay butcher/processing fees.
-- **Calendar Exports**: Fixed Google Calendar all-day event links per batch (including Ration Transition reminders) plus a one-click `.ics` calendar export for all active batches.
+---
+
+## 1. Homestead Planner (`app.py`)
+
+FastAPI + Jinja2 web app (zero Streamlit/pandas runtime) for managing livestock batches from arrival/incubation through processing and freezer reconciliation:
+
+- **Radar (`/`)**: Active batch summary cards, 14-day upcoming milestone checklist, and **1-tap quick-log modals** for **Loss**, **Harvest**, and **Actual Feed**.
+- **Batches (`/batches`, `/batches/{id}`)**: Create/edit/archive/delete batches, log dated losses, harvests, customer sales, home freezer allocations, and export `.ics` / Google Calendar events.
+- **Feed (`/feed`)**: Configurable barrel capacity & bag weight, next-buy alert, purchasing schedule, and weekly/monthly feed demand tables.
+- **Financials (`/financials`)**: Cost vs. estimated revenue bars, unified batch economics & effective freezer `$/lb`, and ROI breakdown.
+- **Settings (`/settings`)**: Custom species presets, JSON backup export/restore, password management, and admin user/registration controls.
+
+---
+
+## 2. Iron Ledger (`inventory/`)
+
+Multi-tenant farm & market-stand POS and inventory system (`ledger.ironcladsystems.dev`):
+
+- **Inventory (`/inventory`)**:
+  - Mobile-first card layout + desktop table with search, category, status, and **Needs attention** filter.
+  - **Update modal**: Set exact count, restock, relative adjustment, low-stock threshold, recent ledger activity history, and **Show on Quick Sale screen** visibility toggle.
+  - **Three selling & stocking modes**:
+    - `unit` — Priced and stocked per unit (jars, candles, etc.).
+    - `lb_stock_unit` — Priced `$/lb`, stocked by whole units (e.g., whole chickens/turkeys: each weighed bird decrements `1` unit from stock).
+    - `lb_stock_lb` — Priced `$/lb`, stocked in `lb` (e.g., bulk meat/produce: decimal counts & decrements).
+- **Quick Sale (`/quick-sale`)**:
+  - Offline-capable cash register (`localStorage` queue + service worker) with live `X left` / `X lb left` stock hints.
+  - Additive weight modal (`+0.5`, `+1`, `+1.5`, `+2 lb` + decimal input) for per-pound items.
+- **Sales & CSV (`/sales`, `/sales/export.csv`)**: Unified Zettle + Cash sales, daily/weekly/custom charts, and formula-safe CSV export (`payment_type` set to `cash` for Quick Sale cash orders).
+- **Zettle Sync (`/settings`, `/zettle/*`)**: Background polling every `ZETTLE_POLL_SECONDS` (default `300s`), manual sync, and OAuth tokens encrypted at rest (`enc1:` HMAC-SHA256 + SHA-256 CTR via `INVENTORY_SECRET_KEY` or `.inventory_key`).
+- **Onboarding & Multi-Tenancy (`/admin`, `/signup`, `/invite/*`, `/billing`)**:
+  - Interactive 6-step **`? Tour`** walkthrough across Inventory, Sales, Quick Sale, and Settings.
+  - Role-based access (`owner`, `manager`, `staff`), one-time invite links, and Stripe subscription billing (supporting Stripe `2025+` / `2026-10-28.endive` webhook payloads).
+
+---
+
+## 3. Ironclad Systems Website (`site/`)
+
+Static `nginx:alpine` container serving `www.ironcladsystems.dev` with clean extensionless routes:
+
+- `/` (Home), `/services` (B2B/C2C consulting & contracting), `/products` (Iron Ledger & Homestead Planner), `/contact` (`steve.rieger.dev@gmail.com` + copy/mailto/optional form endpoint), `/privacy`, `/terms`, `/refunds`, and `/healthz`.
+
+---
 
 ## Project Structure
 
 ```text
-├── app.py                        # Streamlit entry point & backward-compatible re-exports
-├── homestead/                    # Core domain & data package
-│   ├── config.py                 # Species presets, defaults, workspace & status constants
-│   ├── database.py               # SQLite persistence, schema migrations, CRUD & JSON backup/restore
-│   ├── scheduling.py             # Batch lifecycle engine, phased feed demand & upcoming milestones
-│   ├── financials.py             # Shopping schedule, ROI summary & harvest/freezer reconciliation tables
-│   ├── calendar_export.py        # Google Calendar link builder & RFC 5545 .ics export
-│   └── ui/                       # Streamlit UI views & components
-│       ├── timeline_shim.py      # streamlit-vis-timeline loader & headless AppTest fallback
-│       ├── auth_view.py          # First-run admin setup, login/registration gate & user management modal
-│       ├── species_modal.py      # @st.dialog modal for adding, editing & deleting species presets
-│       ├── sidebar.py            # Minimal sidebar: user badge, Quick-Add, species manager, filters & settings
-│       ├── batch_modal.py        # @st.dialog Quick-Add / Edit batch modal & inline custom species creation
-│       ├── radar_tab.py          # Workspace 1: 🗓️ Radar & Timeline
-│       ├── batch_logs_tab.py     # Workspace 2: 🐾 Batch Logs (losses, harvests & freezer/sales)
-│       ├── feed_tab.py           # Workspace 3: 🌾 Feed & Shopping
-│       └── financials_tab.py     # Workspace 4: 💰 Financials & Freezer
+├── app.py                        # Homestead Planner FastAPI entrypoint (port 8501)
+├── Dockerfile                    # Alpine Python 3.11 + uvicorn for Homestead Planner
+├── Dockerfile.inventory          # Alpine Python 3.11 + uvicorn for Iron Ledger (port 8600)
+├── Dockerfile.site               # nginx:alpine for www.ironcladsystems.dev (port 8080)
+├── docker-compose.yml            # Local multi-container compose setup
+├── requirements-inventory.txt    # Shared FastAPI/uvicorn/Jinja2/httpx dependencies
+├── homestead/                    # Homestead domain, pure-Python scheduling/financials & templates
+├── inventory/                    # Iron Ledger routes, crypto, Zettle sync, Stripe billing & UI
+├── site/                         # Static HTML/CSS/JS + nginx.conf for Ironclad Systems LLC
+└── tests/                        # Unit & integration tests (unittest + FastAPI TestClient)
 ```
 
-## Running Locally
+---
+
+## Running Locally & Testing
 
 ```bash
-pip install streamlit streamlit-vis-timeline pandas
-streamlit run app.py
+# Install runtime dependencies
+pip install -r requirements-inventory.txt
+
+# Run Homestead Planner (http://localhost:8501)
+FARM_COOKIE_SECURE=0 uvicorn app:app --host 0.0.0.0 --port 8501
+
+# Run Iron Ledger (http://localhost:8600)
+INVENTORY_COOKIE_SECURE=0 uvicorn inventory.app:app --host 0.0.0.0 --port 8600
+
+# Run full test suite
+env PYTHONPATH=.deps python3 -W ignore -m unittest discover -s tests -t .
 ```
 
-## Running with Docker
+## Environment Variables (`farm-inventory`)
 
-```bash
-docker build -t farm-app .
-docker run -p 8501:8501 -v $(pwd)/data:/app/data farm-app
-```
+| Variable | Purpose |
+|---|---|
+| `FARM_DB_PATH` | SQLite database path (default `/app/data/homestead.db`) |
+| `INVENTORY_TZ` | Display timezone (default `America/New_York`) |
+| `INVENTORY_COOKIE_SECURE` | `1` behind HTTPS reverse proxy, `0` for local HTTP |
+| `INVENTORY_SECRET_KEY` | Optional key for encrypting Zettle OAuth tokens at rest |
+| `ZETTLE_CLIENT_ID` / `ZETTLE_CLIENT_SECRET` / `ZETTLE_REDIRECT_URI` | Zettle OAuth credentials |
+| `ZETTLE_POLL_SECONDS` | Background Zettle sync interval in seconds (default `300`) |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Stripe API & `/webhooks/stripe` signing secret |
+| `STRIPE_PRICE_MONTHLY` / `STRIPE_PRICE_ANNUAL` | Stripe `price_...` IDs for subscription plans |
+| `STRIPE_DISPLAY_MONTHLY` / `STRIPE_DISPLAY_ANNUAL` | Display labels on `/signup` (e.g. `$15 / month`) |
+| `STRIPE_TRIAL_DAYS` | Optional free trial length in days |
+
+## Docker & CI Releases
+
+Publishing a GitHub Release triggers [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml), building and pushing:
+- `asralis/farm-app:latest` (`Dockerfile`)
+- `asralis/farm-inventory:latest` (`Dockerfile.inventory`)
+- `asralis/ironclad-site:latest` (`Dockerfile.site`)
