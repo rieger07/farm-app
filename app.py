@@ -227,6 +227,41 @@ def logout_submit(request: Request):
     return resp
 
 
+def _build_timeline(schedules: list[dict]) -> dict | None:
+    if not schedules:
+        return None
+    min_d = min(s["start_date"] for s in schedules)
+    max_d = max(s["proc_date"] for s in schedules)
+    span = max(1, (max_d - min_d).days)
+    pct = lambda d: round(max(0.0, min(100.0, (d - min_d).days / span * 100)), 2)
+
+    today = date.today()
+    today_pct = pct(today) if min_d <= today <= max_d else None
+
+    months = []
+    cur = min_d.replace(day=1)
+    while cur <= max_d:
+        if cur >= min_d:
+            months.append({"label": cur.strftime("%b '%y"), "pct": pct(cur)})
+        cur = date(cur.year + (cur.month // 12), (cur.month % 12) + 1, 1)
+
+    rows = []
+    for s in schedules:
+        b = s["batch"]
+        rows.append({
+            "id": b["id"],
+            "name": b["name"],
+            "span_label": f"{s['start_date'].strftime('%b %-d')} → {s['proc_date'].strftime('%b %-d')}",
+            "incub_left": pct(s["start_date"]),
+            "incub_w": round(max(0.0, pct(s["proc_base"]) - pct(s["start_date"])), 2),
+            "start_left": pct(s["proc_base"]),
+            "start_w": round(max(0.0, pct(s["transition_date"]) - pct(s["proc_base"])), 2),
+            "grow_left": pct(s["transition_date"]),
+            "grow_w": round(max(0.0, pct(s["proc_date"]) - pct(s["transition_date"])), 2),
+        })
+    return {"rows": rows, "months": months, "today_pct": today_pct}
+
+
 @app.get("/")
 def radar_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     schedules = _schedules_for_user(user["id"], include_archived=False)
@@ -235,6 +270,7 @@ def radar_page(request: Request, msg: str = "", user: dict = Depends(current_use
         request, "radar.html", user, "radar",
         schedules=schedules,
         milestones=milestones,
+        timeline=_build_timeline(schedules),
         total_head=sum(s["surviving_quantity"] for s in schedules),
         total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in schedules),
         species_catalog=get_species_catalog(user_id=user["id"]),

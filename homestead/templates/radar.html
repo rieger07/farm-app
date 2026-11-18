@@ -14,6 +14,36 @@
   <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
 </div>
 
+{% if timeline %}
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:6px">
+    <h2 style="margin:0">Batch lifecycle timeline</h2>
+    <div class="tl-legend" style="margin:0">
+      <span><i class="tl-dot tl-incub"></i>Incubation / Gestation</span>
+      <span><i class="tl-dot tl-starter"></i>Starter</span>
+      <span><i class="tl-dot tl-grower"></i>Grower</span>
+      {% if timeline.today_pct is not none %}<span><i class="tl-dot" style="background:var(--redink)"></i>Today</span>{% endif %}
+    </div>
+  </div>
+  <div class="tl-months">
+    {% for m in timeline.months %}<span style="left:{{ m.pct }}%">{{ m.label }}</span>{% endfor %}
+  </div>
+  <div class="tl-rows">
+    {% if timeline.today_pct is not none %}<div class="tl-today" style="left:calc(160px + (100% - 160px) * {{ timeline.today_pct / 100 }})"></div>{% endif %}
+    {% for r in timeline.rows %}
+    <div class="tl-row">
+      <a href="/batches/{{ r.id }}" class="tl-name" title="{{ r.name }} ({{ r.span_label }})">{{ r.name }}</a>
+      <div class="tl-track" title="{{ r.span_label }}">
+        {% if r.incub_w > 0 %}<div class="tl-seg tl-incub" style="left:{{ r.incub_left }}%;width:{{ r.incub_w }}%"></div>{% endif %}
+        {% if r.start_w > 0 %}<div class="tl-seg tl-starter" style="left:{{ r.start_left }}%;width:{{ r.start_w }}%"></div>{% endif %}
+        {% if r.grow_w > 0 %}<div class="tl-seg tl-grower" style="left:{{ r.grow_left }}%;width:{{ r.grow_w }}%"></div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {% if milestones %}
 <div class="card">
   <h2>Upcoming milestones (14 days)</h2>

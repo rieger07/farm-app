@@ -10,6 +10,7 @@
   <div class="row">
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">Google Calendar</a>{% endif %}
     <button type="button" class="btn" onclick='openEditBatchModal({{ b|tojson }})'>Edit batch</button>
+    <button type="button" class="btn" onclick='openDuplicateBatchModal({{ b|tojson }})'>Duplicate</button>
     <form method="post" action="/batches/{{ b.id }}/delete" onsubmit="return confirm('Delete this batch and all its logs?')">
       <button class="btn danger">Delete</button>
     </form>

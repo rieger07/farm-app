@@ -50,10 +50,12 @@ class FarmWebTest(unittest.TestCase):
 
         radar = self.c.get("/").text
         self.assertIn("Spring Broilers", radar)
+        self.assertIn("Batch lifecycle timeline", radar)
 
         # Grab batch id from /batches
         batches_html = self.c.get("/batches").text
         self.assertIn("Spring Broilers", batches_html)
+        self.assertIn("openDuplicateBatchModal", batches_html)
 
         # Log loss, harvest, sale, feed on batch 1
         self.c.post("/batches/log-loss", data={"batch_id": "1", "loss_date": "2026-11-05", "count": "2", "reason": "Runt", "next_url": "/batches/1"}, follow_redirects=False)

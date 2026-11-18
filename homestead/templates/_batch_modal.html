@@ -95,4 +95,11 @@ function openEditBatchModal(b) {
   document.getElementById('bm-notes').value = b.notes || '';
   document.getElementById('batchm').showModal();
 }
+function openDuplicateBatchModal(b) {
+  openEditBatchModal(b);
+  document.getElementById('bm-title').textContent = 'Duplicate batch';
+  document.getElementById('bm-id').value = '';
+  document.getElementById('bm-name').value = (b.name || 'Batch') + ' (Copy)';
+  document.getElementById('bm-start').value = '{{ today_iso }}';
+}
 </script>

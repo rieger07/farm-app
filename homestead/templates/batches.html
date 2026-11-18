@@ -29,6 +29,7 @@
           <div class="row" style="justify-content:flex-end">
             <a href="/batches/{{ b.id }}" class="btn sm">Logs</a>
             <button type="button" class="btn sm" onclick='openEditBatchModal({{ b|tojson }})'>Edit</button>
+            <button type="button" class="btn sm" onclick='openDuplicateBatchModal({{ b|tojson }})'>Duplicate</button>
             <form method="post" action="/batches/{{ b.id }}/toggle-active" style="display:inline">
               <button class="btn sm">{{ 'Archive' if b.active else 'Restore' }}</button>
             </form>
