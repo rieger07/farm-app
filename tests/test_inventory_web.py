@@ -453,6 +453,35 @@ class WebTest(unittest.TestCase):
         self.assertIn(",4.85,", csv_text)
         self.assertIn(",2.25,", csv_text)
 
+    def test_stripe_webhook_2025_plus_payload(self):
+        from inventory.billing import get_subscription, process_webhook_event, upsert_subscription
+
+        upsert_subscription(
+            self.mid, status="trialing", plan_key="monthly",
+            stripe_customer_id="cus_1", stripe_subscription_id="sub_1",
+        )
+        res_inv = process_webhook_event({
+            "type": "invoice.paid",
+            "data": {"object": {
+                "customer": None,
+                "parent": {"subscription_details": {"subscription": "sub_1"}},
+                "lines": {"data": [{"period": {"end": 1800000000}}]},
+            }},
+        })
+        self.assertEqual(res_inv, {"handled": True, "action": "activated"})
+
+        res_sub = process_webhook_event({
+            "type": "customer.subscription.updated",
+            "data": {"object": {
+                "id": "sub_1",
+                "customer": "cus_1",
+                "status": "active",
+                "items": {"data": [{"current_period_end": 1800000000}]},
+            }},
+        })
+        self.assertEqual(res_sub, {"handled": True, "action": "updated_active"})
+        self.assertTrue(get_subscription(self.mid)["current_period_end"])
+
 
 if __name__ == "__main__":
     unittest.main()

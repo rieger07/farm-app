@@ -381,7 +381,12 @@ def process_webhook_event(event: dict) -> dict:
             return {"handled": True, "action": "invite_created", "token": token}
         return {"handled": False}
 
-    sub_id = obj.get("subscription") or (obj.get("id") if etype.startswith("customer.subscription.") else None)
+    parent_sub = ((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription")
+    sub_id = (
+        obj.get("subscription")
+        or parent_sub
+        or (obj.get("id") if etype.startswith("customer.subscription.") else None)
+    )
     cust_id = obj.get("customer")
     mid = _find_merchant_by_stripe(cust_id, sub_id)
     if not mid:
@@ -418,9 +423,13 @@ def process_webhook_event(event: dict) -> dict:
     if etype == "customer.subscription.updated":
         st = str(obj.get("status") or "active")
         mapped = st if st in ("trialing", "active", "past_due", "canceled") else "active"
+        sub_items = (obj.get("items") or {}).get("data") or []
+        raw_period_end = obj.get("current_period_end") or (
+            sub_items[0].get("current_period_end") if sub_items else None
+        )
         period_end = (
-            _iso(datetime.utcfromtimestamp(int(obj["current_period_end"])))
-            if obj.get("current_period_end")
+            _iso(datetime.utcfromtimestamp(int(raw_period_end)))
+            if raw_period_end
             else None
         )
         grace = cur["grace_until"] if mapped == "past_due" else None
