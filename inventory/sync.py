@@ -235,7 +235,7 @@ def import_purchase(conn, merchant_id: int, purchase: dict, tracking_start: str)
              int(line.get("unitPrice") or 0)),
         )
         # Refunds are reported only. Whether a returned jar goes back on the
-        # shelf is a human call, so Zach makes it with a manual adjustment.
+        # shelf is a human call, so the merchant makes it with a manual adjustment.
         if sku and not refund and occurred >= tracking_start:
             stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -qty
             conn.execute(
