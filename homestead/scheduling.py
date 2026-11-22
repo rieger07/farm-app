@@ -22,6 +22,8 @@ def get_batch_status_badge(schedule: dict) -> str:
     b = schedule["batch"]
     if not b["active"]:
         return "⚪ Excluded"
+    if schedule.get("is_planned"):
+        return "🗓 Planned"
     if schedule["is_fully_harvested"]:
         return "🥩 Harvested"
     return "🟢 Active"
@@ -663,6 +665,9 @@ def compute_batch_schedule(
         "reconciled_total_cost": reconciled_total_cost,
         "reconciled_meat_lbs": reconciled_meat_lbs,
         "reconciled_cost_per_lb_meat": reconciled_cost_per_lb_meat,
+        "is_planned": start_dt > date.today(),
+        "days_until_start": max(0, (start_dt - date.today()).days),
+        "on_farm_head": 0 if start_dt > date.today() else max(0, surviving_quantity - harvested_head),
         "sold_lbs": sold_lbs,
         "actual_sales_revenue": actual_sales_revenue,
         "freezer_lbs": freezer_lbs,
