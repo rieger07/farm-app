@@ -422,6 +422,7 @@ def init_db() -> None:
             ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
             ("pickup_status", "TEXT NOT NULL DEFAULT 'unassigned'"),
             ("claimed_at", "TEXT DEFAULT ''"),
+            ("actual_sale_price", "REAL"),
         ):
             if col_name not in hv_cols:
                 conn.execute(
@@ -1138,6 +1139,53 @@ def set_int_setting(
 ) -> None:
     uid = _resolve_user_id(user_id)
     clean_val = str(max(1, int(value)))
+    with get_db_connection() as conn:
+        if uid is not None:
+            conn.execute(
+                """
+                INSERT INTO user_settings (user_id, key, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (uid, key, clean_val),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, clean_val),
+            )
+        conn.commit()
+
+
+def get_text_setting(
+    key: str, default_val: str = "", user_id: int | None = None
+) -> str:
+    uid = _resolve_user_id(user_id)
+    with get_db_connection() as conn:
+        if uid is not None:
+            row = conn.execute(
+                "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+                (uid, key),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row and row["value"] is not None:
+            return str(row["value"])
+    return default_val
+
+
+def set_text_setting(
+    key: str, value: str, user_id: int | None = None
+) -> None:
+    uid = _resolve_user_id(user_id)
+    clean_val = str(value or "")
     with get_db_connection() as conn:
         if uid is not None:
             conn.execute(
@@ -2402,15 +2450,18 @@ def update_harvest_assignment(
     customer_id: int | None = None,
     for_sale: bool = True,
     deposit_paid: float = 0.0,
+    actual_sale_price: float | None = None,
     payment_status: str = "unpaid",
     pickup_status: str = "unassigned",
     notes: str | None = None,
 ) -> bool:
     pay = payment_status if payment_status in PAYMENT_STATUSES else "unpaid"
     pstat = pickup_status if pickup_status in PICKUP_STATUSES else "unassigned"
+    actual_val = round(max(0.0, float(actual_sale_price)), 2) if actual_sale_price is not None else None
     if not for_sale:
         customer_id = None
         pstat = "unassigned"
+        actual_val = None
     elif customer_id is not None and pstat == "unassigned":
         pstat = "assigned"
     elif customer_id is None and pstat != "unassigned":
@@ -2421,7 +2472,7 @@ def update_harvest_assignment(
             cur = conn.execute(
                 """
                 UPDATE batch_harvests
-                SET customer_id = ?, for_sale = ?, deposit_paid = ?,
+                SET customer_id = ?, for_sale = ?, deposit_paid = ?, actual_sale_price = ?,
                     payment_status = ?, pickup_status = ?,
                     claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END,
                     notes = ?
@@ -2431,6 +2482,7 @@ def update_harvest_assignment(
                     int(customer_id) if customer_id else None,
                     1 if for_sale else 0,
                     max(0.0, float(deposit_paid or 0.0)),
+                    actual_val,
                     pay,
                     pstat,
                     claimed_at,
@@ -2445,7 +2497,7 @@ def update_harvest_assignment(
             cur = conn.execute(
                 """
                 UPDATE batch_harvests
-                SET customer_id = ?, for_sale = ?, deposit_paid = ?,
+                SET customer_id = ?, for_sale = ?, deposit_paid = ?, actual_sale_price = ?,
                     payment_status = ?, pickup_status = ?,
                     claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END
                 WHERE id = ? AND batch_id = ?
@@ -2454,6 +2506,7 @@ def update_harvest_assignment(
                     int(customer_id) if customer_id else None,
                     1 if for_sale else 0,
                     max(0.0, float(deposit_paid or 0.0)),
+                    actual_val,
                     pay,
                     pstat,
                     claimed_at,
@@ -2545,3 +2598,86 @@ def claim_bird_atomically(
             return False, "already_claimed"
         conn.commit()
         return True, "ok"
+
+
+def customer_insights_summary(user_id: int, search: str = "") -> dict:
+    """Compute per-customer species counts, calculated vs actual paid, tips/overpayments, and overall KPIs."""
+    customers = list_customers(user_id, search=search)
+    with get_db_connection() as conn:
+        bird_rows = conn.execute(
+            """
+            SELECT bh.*, b.name AS batch_name, b.species, b.sale_price_per_lb
+            FROM batch_harvests bh
+            JOIN batches b ON b.id = bh.batch_id
+            WHERE b.user_id = ? AND bh.customer_id IS NOT NULL
+            ORDER BY bh.harvest_date DESC, bh.id DESC
+            """,
+            (int(user_id),),
+        ).fetchall()
+
+    by_cust: dict[int, list[dict]] = {}
+    for r in bird_rows:
+        by_cust.setdefault(int(r["customer_id"]), []).append(dict(r))
+
+    total_birds = 0
+    total_lbs = 0.0
+    total_calc = 0.0
+    total_actual = 0.0
+    repeat_customers = 0
+
+    for c in customers:
+        birds = by_cust.get(int(c["id"]), [])
+        species_counts: dict[str, int] = {}
+        batch_ids: set[int] = set()
+        c_lbs = 0.0
+        c_head = 0
+        c_calc = 0.0
+        c_actual = 0.0
+        c_bal = 0.0
+        for b in birds:
+            hc = max(1, int(b.get("head_count") or 1))
+            dl = float(b.get("dressed_lbs") or 0.0)
+            sp = str(b.get("species") or "Livestock").title()
+            species_counts[sp] = species_counts.get(sp, 0) + hc
+            batch_ids.add(int(b["batch_id"]))
+            c_head += hc
+            c_lbs += dl
+            calc_p = round(dl * float(b.get("sale_price_per_lb") or 0.0), 2)
+            act_p = (
+                round(float(b["actual_sale_price"]), 2)
+                if b.get("actual_sale_price") is not None
+                else calc_p
+            )
+            c_calc += calc_p
+            c_actual += act_p
+            if b.get("payment_status") != "paid":
+                dep = float(b.get("deposit_paid") or 0.0)
+                c_bal += max(0.0, act_p - dep)
+
+        c["bird_count"] = c_head
+        c["total_lbs"] = round(c_lbs, 2)
+        c["avg_lbs"] = round(c_lbs / c_head, 2) if c_head else 0.0
+        c["batch_count"] = len(batch_ids)
+        c["species_counts"] = species_counts
+        c["calculated_total"] = round(c_calc, 2)
+        c["actual_total"] = round(c_actual, 2)
+        c["tip_diff"] = round(c_actual - c_calc, 2)
+        c["balance_due"] = round(c_bal, 2)
+
+        total_birds += c_head
+        total_lbs += c_lbs
+        total_calc += c_calc
+        total_actual += c_actual
+        if len(batch_ids) >= 2:
+            repeat_customers += 1
+
+    return {
+        "customers": customers,
+        "total_customers": len(customers),
+        "total_birds": total_birds,
+        "total_lbs": round(total_lbs, 2),
+        "total_calculated": round(total_calc, 2),
+        "total_actual": round(total_actual, 2),
+        "total_tips": round(total_actual - total_calc, 2),
+        "repeat_customers": repeat_customers,
+    }

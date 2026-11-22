@@ -262,23 +262,44 @@ class FarmWebTest(unittest.TestCase):
         bird1_id = b1["entries"][0]["id"]
         bird2_id = b2["entries"][0]["id"]
 
-        # Assign Bird #1 to Bob Jones with $25 deposit -> balance due = 20*5 - 25 = $75
+        # Assign Bird #1 to Bob Jones with $115 actual sale price ($100 calc + $15 tip) & $25 deposit -> balance due = $90
         assigned = self.c.post(f"/api/batches/{bid}/harvest/{bird1_id}/assign", json={
             "for_sale": True,
             "customer_id": c2["id"],
+            "actual_sale_price": 115.0,
             "deposit_paid": 25.0,
-            "payment_status": "deposit",
-            "pickup_status": "assigned",
+            "payment_status": "paid",
+            "pickup_status": "picked_up",
         }).json()
         a_entry = next(e for e in assigned["entries"] if e["id"] == bird1_id)
         self.assertEqual(a_entry["customer_name"], "Bob Jones")
-        self.assertAlmostEqual(a_entry["balance_due"], 75.0)
+        self.assertAlmostEqual(a_entry["actual_sale_price"], 115.0)
+        self.assertAlmostEqual(a_entry["tip_diff"], 15.0)
+        self.assertAlmostEqual(a_entry["balance_due"], 90.0)
         self.assertEqual(assigned["available_count"], 1)
 
-        # Customer detail shows assigned bird history
+        # Auto-applied batch economics: Bird #1 (paid, 20 lb, $115) -> sold_lbs & actual_sales_revenue; Bird #3 (not_for_sale, 18 lb) -> freezer_lbs!
+        from homestead.scheduling import compute_batch_schedule
+        sched = compute_batch_schedule(list_batches()[0])
+        self.assertAlmostEqual(sched["sold_lbs"], 20.0)
+        self.assertAlmostEqual(sched["actual_sales_revenue"], 115.0)
+        self.assertAlmostEqual(sched["freezer_lbs"], 18.0)
+
+        # Customer Insights page shows species breakdown, Paid vs Calc, and +$15.00 tip
         c_detail = self.c.get(f"/customers?selected={c2['id']}").text
         self.assertIn("Thanksgiving Turkeys", c_detail)
         self.assertIn("20.00 lb", c_detail)
+        self.assertIn("+$15.00", c_detail)
+        self.assertIn("1 × Turkey Chicks", c_detail)
+
+        # Configure ntfy push notifications in Settings
+        r_ntfy = self.c.post("/settings/ntfy", data={
+            "ntfy_url": "https://ntfy.sh",
+            "ntfy_topic": "farm-test-topic",
+            "ntfy_token": "tk_secret",
+        }, follow_redirects=False)
+        self.assertEqual(r_ntfy.status_code, 303)
+        self.assertIn("farm-test-topic", self.c.get("/settings").text)
 
         # Public picking page: closed before enabled
         anon = TestClient(app)
@@ -295,11 +316,15 @@ class FarmWebTest(unittest.TestCase):
         self.assertNotIn("18.0", pick_html)    # not-for-sale bird completely hidden
         self.assertNotIn("Bob Jones", pick_html)  # buyer privacy preserved!
 
-        # Identify-first flow matches existing customer Sarah by phone & claims Bird #2 atomically
+        # Identify-first flow matches existing customer Sarah by phone & claims Bird #2 atomically (fires ntfy!)
+        from unittest.mock import patch
         ident_sarah = anon.post(f"/api/pick/{slug}/identify", json={"name": "Sarah Miller", "contact": "(555) 123-4567"}).json()
-        r_claim = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_sarah["customer_id"]})
-        self.assertEqual(r_claim.status_code, 200)
-        self.assertAlmostEqual(r_claim.json()["bird"]["est_price"], 80.0)
+        with patch("app.send_ntfy_async") as mock_ntfy:
+            r_claim = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_sarah["customer_id"]})
+            self.assertEqual(r_claim.status_code, 200)
+            self.assertAlmostEqual(r_claim.json()["bird"]["est_price"], 80.0)
+            mock_ntfy.assert_called_once()
+            self.assertIn("Sarah Miller", mock_ntfy.call_args[0][2])
 
         # Double-booking protection: another customer trying to claim Bird #2 gets 409 Conflict
         ident_other = anon.post(f"/api/pick/{slug}/identify", json={"name": "Late Buyer", "contact": "late@example.com"}).json()
