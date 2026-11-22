@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Insights · iron ledger{% endblock %}
+{% block content %}
+<div class="eyebrow">MARKET DAY PERFORMANCE</div>
+<div class="pagehead">
+  <div><h1>Insights</h1><p class="sub">{{ period_label }} · {{ insights.basket_count }} basket{{ '' if insights.basket_count == 1 else 's' }}</p></div>
+</div>
+
+<div class="chips" style="margin-bottom:10px;align-items:center">
+  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
+  <a class="chip {{ 'on' if period == key }}" href="/insights?period={{ key }}" style="text-decoration:none">{{ label }}</a>
+  {% endfor %}
+  <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('insrange').hidden = !document.getElementById('insrange').hidden">Custom</button>
+  <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:auto">
+    <input type="hidden" name="period" value="day">
+    <label style="font-size:12px;color:var(--muted)">Market day</label>
+    <input type="date" name="date" value="{{ market_date }}" onchange="this.form.submit()" class="datein" style="padding:6px 10px;font-size:13px">
+  </form>
+</div>
+<form id="insrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
+  <input type="hidden" name="period" value="custom">
+  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">From<input type="date" name="from" value="{{ date_from }}" required class="datein"></label>
+  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">To<input type="date" name="to" value="{{ date_to }}" required class="datein"></label>
+  <button class="btn primary">Apply</button>
+</form>
+
+<div class="cards four">
+  <div class="card"><small>Product sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ summary.units }} units sold</small></div>
+  <div class="card"><small>Avg basket</small><div class="big">{{ insights.avg_basket_items }}</div><small>Items / transaction</small></div>
+  <div class="card"><small>Card fees collected</small><div class="big">{{ insights.fee_cents|money }}</div><small>{{ insights.fee_count }} fee line{{ '' if insights.fee_count == 1 else 's' }}</small></div>
+  <div class="card"><small>Sell-outs</small><div class="big">{{ insights.sellouts|length }}</div><small>Hit 0 left in range</small></div>
+</div>
+
+<div class="cards two">
+  <div class="card table-card">
+    <div class="filters"><b>Top products by volume</b></div>
+    <table>
+      <thead><tr><th>Product</th><th class="num">Units</th><th class="num">Revenue</th></tr></thead>
+      <tbody>
+      {% for p in insights.top_by_units %}
+        <tr><td><b>{{ p.name }}</b></td><td class="num">{{ p.units }}</td><td class="num">{{ p.revenue_cents|money }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No product sales in this period.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card table-card">
+    <div class="filters"><b>Top products by revenue</b></div>
+    <table>
+      <thead><tr><th>Product</th><th class="num">Revenue</th><th class="num">Units</th></tr></thead>
+      <tbody>
+      {% for p in insights.top_by_revenue %}
+        <tr><td><b>{{ p.name }}</b></td><td class="num">{{ p.revenue_cents|money }}</td><td class="num">{{ p.units }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No product sales in this period.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="cards two">
+  <div class="card table-card">
+    <div class="filters"><b>Early sell-out flags</b><small class="right muted">0 left on hand</small></div>
+    <table>
+      <thead><tr><th>Product</th><th class="num">Sold</th><th>Last sale</th></tr></thead>
+      <tbody>
+      {% for s in insights.sellouts %}
+        <tr><td><b>{{ s.name }}</b></td><td class="num">{{ s.units_sold }}</td><td><span class="pill red">{{ s.last_sold_label }}</span></td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No sold-out items from this period.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card table-card">
+    <div class="filters"><b>Frequently bought together</b><small class="right muted">Same checkout</small></div>
+    <table>
+      <thead><tr><th>Product pair</th><th class="num">Baskets</th></tr></thead>
+      <tbody>
+      {% for pair in insights.top_pairs %}
+        <tr><td><b>{{ pair.a }}</b> <span class="muted">+</span> <b>{{ pair.b }}</b></td><td class="num">{{ pair.count }}</td></tr>
+      {% else %}
+        <tr><td colspan="2" class="empty">Not enough multi-item baskets yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

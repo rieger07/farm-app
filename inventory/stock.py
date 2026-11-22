@@ -4,6 +4,7 @@ from inventory.db import get_connection
 
 
 SELL_MODES = ("unit", "lb_stock_unit", "lb_stock_lb")
+ITEM_TYPES = ("product", "fee")
 
 
 def fmt_qty(val: float | int) -> int | float:
@@ -128,14 +129,29 @@ def set_quick_sale_visibility(
         conn.close()
 
 
-def list_stock(merchant_id: int) -> list[dict]:
+def set_item_type(merchant_id: int, sku_id: int, item_type: str) -> None:
+    if item_type not in ITEM_TYPES:
+        raise ValueError(f"Invalid item type: {item_type}")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE skus SET item_type = ? WHERE id = ? AND merchant_id = ?",
+            (item_type, int(sku_id), int(merchant_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_stock(merchant_id: int, include_fees: bool = False) -> list[dict]:
     """Active SKUs with derived on-hand quantity and status."""
+    fee_filter = "" if include_fees else " AND COALESCE(s.item_type, 'product') != 'fee'"
     conn = get_connection()
     try:
         rows = conn.execute(
             "SELECT s.*, COALESCE(SUM(l.delta), 0) AS on_hand"
             " FROM skus s LEFT JOIN stock_ledger l ON l.sku_id = s.id"
-            " WHERE s.merchant_id = ? AND s.active = 1"
+            f" WHERE s.merchant_id = ? AND s.active = 1{fee_filter}"
             " GROUP BY s.id ORDER BY s.category, s.name, s.variant_name",
             (int(merchant_id),),
         ).fetchall()
@@ -147,6 +163,7 @@ def list_stock(merchant_id: int) -> list[dict]:
         d["on_hand"] = fmt_qty(d["on_hand"])
         d["low_stock_threshold"] = fmt_qty(d["low_stock_threshold"])
         d["sell_mode"] = d.get("sell_mode") or "unit"
+        d["item_type"] = d.get("item_type") or "product"
         d["stock_unit"] = "lb" if d["sell_mode"] == "lb_stock_lb" else "units"
         d["status"] = stock_status(d["on_hand"], d["low_stock_threshold"])
         out.append(d)

@@ -8,7 +8,7 @@
   <h2>Zettle</h2>
   {% if status.connected %}
     <p><span class="pill green">Connected</span></p>
-    <small>Last sync: {{ status.last_sync or 'never' }} (UTC)</small>
+    <small>Last synced: {{ last_sync_display }}</small>
     {% if status.last_error %}<p class="err">Last error: {{ status.last_error }}</p>{% endif %}
     <form method="post" action="/zettle/sync" style="margin-top:12px"><button class="btn primary">Sync now</button></form>
     <p><a href="/zettle/connect">Reconnect</a></p>
@@ -75,5 +75,45 @@
     </select>
     <button class="btn primary">Save member</button>
   </form>
+</div>
+
+<div class="card" style="margin-top:20px">
+  <h2>Non-Inventory &amp; Fee Items</h2>
+  <p class="sub">Exclude surcharges, card fees, or tips from stock counts, transaction unit totals, and product rankings while keeping receipt totals reconciled.</p>
+  <form method="post" action="/settings/item-type" class="filters" style="padding:0;flex-wrap:wrap;margin-bottom:14px">
+    <select name="sku_id" required style="flex:1;min-width:200px">
+      {% for s in all_skus %}
+      <option value="{{ s.id }}">{{ s.name }}{% if s.variant_name %} · {{ s.variant_name }}{% endif %}{% if s.item_type == 'fee' %} (Excluded fee){% endif %}</option>
+      {% endfor %}
+    </select>
+    <select name="item_type">
+      <option value="fee">Mark as Fee / Non-inventory</option>
+      <option value="product">Mark as Inventory Product</option>
+    </select>
+    <button class="btn primary">Save classification</button>
+  </form>
+  {% set fee_skus = all_skus|selectattr('item_type', 'equalto', 'fee')|list %}
+  {% if fee_skus %}
+  <table>
+    <thead><tr><th>Excluded item</th><th>Price</th><th></th></tr></thead>
+    <tbody>
+    {% for s in fee_skus %}
+      <tr>
+        <td><b>{{ s.name }}</b>{% if s.variant_name %} <small class="inline">· {{ s.variant_name }}</small>{% endif %}</td>
+        <td>{{ s.price_cents|money }}</td>
+        <td style="text-align:right">
+          <form method="post" action="/settings/item-type" style="display:inline">
+            <input type="hidden" name="sku_id" value="{{ s.id }}">
+            <input type="hidden" name="item_type" value="product">
+            <button class="link">Restore to inventory</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <small class="muted">No items marked as fees yet (e.g., Card charge).</small>
+  {% endif %}
 </div>
 {% endblock %}

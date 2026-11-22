@@ -7,11 +7,17 @@
   <a class="btn" href="/sales/export.csv?{{ export_qs }}" style="text-decoration:none">Export CSV</a>
 </div>
 
-<div class="chips" style="margin-bottom:10px">
+<div class="chips" style="margin-bottom:10px;align-items:center">
   {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
   <a class="chip {{ 'on' if period == key }}" href="/sales?period={{ key }}&source={{ source }}" style="text-decoration:none">{{ label }}</a>
   {% endfor %}
   <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('customrange').hidden = !document.getElementById('customrange').hidden">Custom</button>
+  <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:auto">
+    <input type="hidden" name="period" value="day">
+    <input type="hidden" name="source" value="{{ source }}">
+    <label style="font-size:12px;color:var(--muted)">Market day</label>
+    <input type="date" name="date" value="{{ market_date }}" onchange="this.form.submit()" class="datein" style="padding:6px 10px;font-size:13px">
+  </form>
 </div>
 <form id="customrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
   <input type="hidden" name="period" value="custom">
@@ -23,37 +29,37 @@
 
 <div class="cards four">
   <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}</small></div>
-  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.zettle_count }} Zettle · {{ summary.cash_count }} cash</small></div>
+  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.card_count }} card · {{ summary.cash_count }} cash</small></div>
   <div class="card"><small>Average sale</small><div class="big">{{ summary.avg_cents|money }}</div><small>Per transaction</small></div>
-  <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across all products</small></div>
+  <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across products</small></div>
 </div>
 
 <div class="cards two">
   <div class="card">
-    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Zettle <i class="dot y"></i>Cash</span></div>
+    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot y"></i>Cash</span></div>
     <div class="chartwrap">
       <div class="chart" style="min-width: {{ days|length * 26 }}px">
         {% for d in days %}
-        {% set tot = d.zettle_cents + d.cash_cents %}
+        {% set tot = d.card_cents + d.cash_cents %}
         <div class="barcol">
-          <div class="bar" title="{{ d.title }}: {{ tot|money }}" style="height: {{ (tot / peak * 100)|round|int }}%">
+          <div class="bar" title="{{ d.title }}: {{ tot|money }} (Card {{ d.card_cents|money }}, Cash {{ d.cash_cents|money }})" style="height: {{ (tot / peak * 100)|round|int }}%">
             <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
-            <div class="seg g" style="flex: {{ d.zettle_cents }}"></div>
+            <div class="seg g" style="flex: {{ d.card_cents }}"></div>
           </div>
           <small>{{ d.label }}</small>
         </div>
         {% endfor %}
       </div>
     </div>
-    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.zettle_cents + best.cash_cents)|money }}).</small>
+    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.card_cents + best.cash_cents)|money }}).</small>
   </div>
   <div class="card">
     <b>Cash or card. All accounted for.</b>
-    <small class="muted block">{{ period_label|upper }} · SALES BY SOURCE</small>
-    {% set tot = (summary.zettle_cents + summary.cash_cents) or 1 %}
-    <div class="split"><div class="g" style="width: {{ (summary.zettle_cents / tot * 100)|round|int }}%"></div><div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div></div>
-    <div class="srcrow"><div><b>Zettle</b><small>{{ summary.zettle_count }} sales · Card</small></div><b>{{ summary.zettle_cents|money }}</b></div>
-    <div class="srcrow"><div><b>Cash</b><small>{{ summary.cash_count }} sales · Quick sale</small></div><b>{{ summary.cash_cents|money }}</b></div>
+    <small class="muted block">{{ period_label|upper }} · PAYMENT BREAKDOWN</small>
+    {% set tot = (summary.card_cents + summary.cash_cents) or 1 %}
+    <div class="split"><div class="g" style="width: {{ (summary.card_cents / tot * 100)|round|int }}%"></div><div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div></div>
+    <div class="srcrow"><div><b>Card</b><small>{{ summary.card_count }} sales · Zettle</small></div><b>{{ summary.card_cents|money }}</b></div>
+    <div class="srcrow"><div><b>Cash</b><small>{{ summary.cash_count }} sales · Zettle ({{ summary.zettle_cash_cents|money }}) + Quick sale ({{ summary.quick_cash_cents|money }})</small></div><b>{{ summary.cash_cents|money }}</b></div>
   </div>
 </div>
 
@@ -77,7 +83,8 @@
       <summary>
         <div class="when"><b>{{ t.date_label }}</b><small>{{ t.time_label }}</small></div>
         <div class="what">
-          <span class="src {{ t.source }}">{{ t.source|capitalize }}</span>
+          <span class="src {{ t.source }}">{{ 'Quick sale' if t.source == 'cash' else 'Zettle' }}</span>
+          <span class="pay-badge {{ t.pay_method }}">{{ t.pay_method|capitalize }}</span>
           <small>#{{ t.id }} · {{ t.units }} unit{{ '' if t.units == 1 else 's' }}{% if t.status != 'completed' %} · {{ t.status }}{% endif %}</small>
         </div>
         <b class="amt {{ 'neg' if t.total_cents < 0 }}">{{ t.total_cents|money }}</b>
@@ -86,7 +93,7 @@
       <div class="detail">
         <small class="muted">{{ t.full_label }}{% if t.payment_type %} · paid by {{ t.payment_type }}{% endif %}</small>
         {% for it in t['items'] %}
-        <div class="line"><span>{{ it.quantity }} × {{ it.name_snapshot }} <small class="inline">@ {{ it.unit_price_cents|money }}</small></span><b>{{ it.subtotal_cents|money }}</b></div>
+        <div class="line"><span>{{ it.quantity }} × {{ it.name_snapshot }}{% if it.is_fee %} <small class="inline muted">(fee)</small>{% endif %} <small class="inline">@ {{ it.unit_price_cents|money }}</small></span><b>{{ it.subtotal_cents|money }}</b></div>
         {% else %}
         <div class="line"><small class="muted">No item details recorded.</small></div>
         {% endfor %}

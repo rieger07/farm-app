@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS skus (
     low_stock_threshold REAL NOT NULL DEFAULT 10,
     show_in_quick_sale INTEGER NOT NULL DEFAULT 1,
     sell_mode TEXT NOT NULL DEFAULT 'unit',
+    item_type TEXT NOT NULL DEFAULT 'product',
     updated_at TEXT NOT NULL,
     UNIQUE (merchant_id, zettle_product_uuid, zettle_variant_uuid),
     FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
@@ -185,6 +186,8 @@ def init_inventory_db() -> None:
             conn.execute("ALTER TABLE skus ADD COLUMN show_in_quick_sale INTEGER NOT NULL DEFAULT 1")
         if "sell_mode" not in sku_cols:
             conn.execute("ALTER TABLE skus ADD COLUMN sell_mode TEXT NOT NULL DEFAULT 'unit'")
+        if "item_type" not in sku_cols:
+            conn.execute("ALTER TABLE skus ADD COLUMN item_type TEXT NOT NULL DEFAULT 'product'")
         conn.commit()
     finally:
         conn.close()

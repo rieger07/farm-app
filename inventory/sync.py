@@ -221,7 +221,7 @@ def import_purchase(conn, merchant_id: int, purchase: dict, tracking_start: str)
     for line in purchase.get("products") or []:
         qty = fmt_qty(float(line.get("quantity") or 1))
         sku = conn.execute(
-            "SELECT id, sell_mode FROM skus WHERE merchant_id = ? AND zettle_product_uuid = ?"
+            "SELECT id, sell_mode, item_type FROM skus WHERE merchant_id = ? AND zettle_product_uuid = ?"
             " AND zettle_variant_uuid = ?",
             (merchant_id, line.get("productUuid", ""), line.get("variantUuid") or ""),
         ).fetchone()
@@ -236,7 +236,8 @@ def import_purchase(conn, merchant_id: int, purchase: dict, tracking_start: str)
         )
         # Refunds are reported only. Whether a returned jar goes back on the
         # shelf is a human call, so the merchant makes it with a manual adjustment.
-        if sku and not refund and occurred >= tracking_start:
+        is_fee = sku and (sku["item_type"] == "fee")
+        if sku and not is_fee and not refund and occurred >= tracking_start:
             stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -qty
             conn.execute(
                 "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"

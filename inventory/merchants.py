@@ -10,8 +10,8 @@ ROLES = (OWNER, MANAGER, STAFF)
 
 # Pages each role may open. Staff only ever see Quick sale.
 PAGE_ACCESS = {
-    OWNER: {"inventory", "sales", "quick_sale", "settings"},
-    MANAGER: {"inventory", "sales", "quick_sale"},
+    OWNER: {"inventory", "sales", "insights", "quick_sale", "settings"},
+    MANAGER: {"inventory", "sales", "insights", "quick_sale"},
     STAFF: {"quick_sale"},
 }
 HOME_PAGE = {OWNER: "inventory", MANAGER: "inventory", STAFF: "quick_sale"}
