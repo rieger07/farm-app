@@ -27,13 +27,7 @@
     </select>
   </form>
   {% endif %}
-  <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:auto">
-    <input type="hidden" name="period" value="day">
-    <input type="hidden" name="source" value="{{ source }}">
-    {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
-    <label style="font-size:12px;color:var(--muted)">Market day</label>
-    <input type="date" name="date" value="{{ market_date }}" onchange="this.form.submit()" class="datein" style="padding:6px 10px;font-size:13px">
-  </form>
+  {% include "_market_day_picker.html" %}
 </div>
 <form id="customrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
   <input type="hidden" name="period" value="custom">

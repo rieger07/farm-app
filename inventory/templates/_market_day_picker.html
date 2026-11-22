@@ -1,0 +1,89 @@
+<div class="cal-wrap" style="margin-left:auto">
+  <button type="button" class="chip {{ 'on' if period == 'day' }}" id="cal-trigger" onclick="toggleMarketCal(event)">
+    📅 {{ period_label if period == 'day' else 'Market day' }}
+  </button>
+  <div class="cal-pop" id="cal-pop" hidden>
+    <div class="cal-head">
+      <button type="button" class="btn" style="padding:4px 9px;font-size:13px" onclick="shiftCalMonth(-1)">‹</button>
+      <b id="cal-month-label"></b>
+      <button type="button" class="btn" style="padding:4px 9px;font-size:13px" onclick="shiftCalMonth(1)">›</button>
+    </div>
+    <div class="cal-dow"><span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span></div>
+    <div class="cal-grid" id="cal-grid"></div>
+    <div class="cal-foot">
+      <span><i class="cal-dot"></i> Days with sales</span>
+      <button type="button" class="link" style="padding:0" onclick="jumpLatestSaleDay()">Latest sale day</button>
+    </div>
+  </div>
+</div>
+<script id="sale-dates-json" type="application/json">{{ sale_dates|tojson }}</script>
+<script>
+(function () {
+  const SALE_DATES = JSON.parse(document.getElementById('sale-dates-json').textContent || '{}');
+  const BASE_PATH = {{ request.url.path|tojson }};
+  const EXTRA_QS = {{ (('source=' ~ source if source is defined else '') ~ ('&marketplace=' ~ selected_marketplace if selected_marketplace else ''))|tojson }};
+  const SELECTED = {{ (market_date if period == 'day' else '')|tojson }};
+  const INIT_DATE = {{ market_date|tojson }};
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const d0 = INIT_DATE ? new Date(INIT_DATE + 'T12:00:00') : new Date();
+  let viewY = d0.getFullYear(), viewM = d0.getMonth();
+  const todayIso = new Date().toLocaleDateString('en-CA');
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function money(c) { return '$' + (c / 100).toFixed(2); }
+  function goDay(iso) {
+    const qs = ['period=day', 'date=' + encodeURIComponent(iso)];
+    if (EXTRA_QS) qs.push(EXTRA_QS.replace(/^&/, ''));
+    location.href = BASE_PATH + '?' + qs.join('&');
+  }
+
+  function renderCal() {
+    document.getElementById('cal-month-label').textContent = `${MONTHS[viewM]} ${viewY}`;
+    const grid = document.getElementById('cal-grid');
+    grid.innerHTML = '';
+    const firstDow = new Date(viewY, viewM, 1).getDay();
+    const daysInMonth = new Date(viewY, viewM + 1, 0).getDate();
+    for (let i = 0; i < firstDow; i++) {
+      grid.appendChild(document.createElement('span'));
+    }
+    for (let day = 1; day <= daysInMonth; day++) {
+      const iso = `${viewY}-${pad(viewM + 1)}-${pad(day)}`;
+      const info = SALE_DATES[iso];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cal-day'
+        + (info ? ' has-sales' : '')
+        + (iso === SELECTED ? ' sel' : '')
+        + (iso === todayIso ? ' today' : '');
+      btn.textContent = String(day);
+      if (info) {
+        const mp = info.marketplace ? ` · ${info.marketplace}` : '';
+        btn.title = `${iso}: ${money(info.cents)} (${info.txns} sale${info.txns === 1 ? '' : 's'}${mp})`;
+      }
+      btn.onclick = () => goDay(iso);
+      grid.appendChild(btn);
+    }
+  }
+
+  window.toggleMarketCal = (e) => {
+    e.stopPropagation();
+    const pop = document.getElementById('cal-pop');
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) renderCal();
+  };
+  window.shiftCalMonth = (delta) => {
+    viewM += delta;
+    if (viewM < 0) { viewM = 11; viewY -= 1; }
+    if (viewM > 11) { viewM = 0; viewY += 1; }
+    renderCal();
+  };
+  window.jumpLatestSaleDay = () => {
+    const keys = Object.keys(SALE_DATES).sort();
+    if (keys.length) goDay(keys[keys.length - 1]);
+  };
+  document.addEventListener('click', (e) => {
+    const pop = document.getElementById('cal-pop');
+    if (pop && !pop.hidden && !e.target.closest('.cal-wrap')) pop.hidden = true;
+  });
+})();
+</script>

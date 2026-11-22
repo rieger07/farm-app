@@ -618,3 +618,38 @@ def suggest_pack_list(
         )
     items.sort(key=lambda x: (-x["pack_qty"], x["name"]))
     return {"days": n_days, "items": items, "short_count": short_count}
+
+
+def list_sale_dates(merchant_id: int, tz) -> dict[str, dict]:
+    """Return {YYYY-MM-DD: {cents, txns, marketplace}} for all dates with completed sales."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT occurred_at, total_cents
+            FROM sales
+            WHERE merchant_id = ? AND status = 'completed'
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+        md_rows = conn.execute(
+            """
+            SELECT md.market_date, m.name AS marketplace_name
+            FROM market_days md
+            JOIN marketplaces m ON m.id = md.marketplace_id
+            WHERE md.merchant_id = ?
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    mp_by_date = {r["market_date"]: r["marketplace_name"] for r in md_rows}
+    out: dict[str, dict] = {}
+    for r in rows:
+        dt = datetime.fromisoformat(str(r["occurred_at"]).replace("Z", "")[:19]).replace(tzinfo=timezone.utc)
+        d_str = dt.astimezone(tz).date().isoformat()
+        cur = out.setdefault(d_str, {"cents": 0, "txns": 0, "marketplace": mp_by_date.get(d_str, "")})
+        cur["cents"] += int(r["total_cents"] or 0)
+        cur["txns"] += 1
+    return out

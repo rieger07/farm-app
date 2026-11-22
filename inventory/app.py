@@ -65,6 +65,7 @@ from inventory.markets import (
     delete_market_day,
     get_market_day,
     list_marketplaces,
+    list_sale_dates,
     marketplace_analytics,
     marketplace_utc_windows,
     recommend_cash_drawer,
@@ -803,6 +804,7 @@ def sales_page(
         period=rng["period"], period_label=rng["label"], source=source,
         date_from=rng["date_from"], date_to=rng["date_to"],
         market_date=rng["market_date"] or today.isoformat(),
+        sale_dates=list_sale_dates(ctx.merchant_id, local_tz()),
         marketplaces=marketplaces,
         selected_marketplace=str(mp_id or ""),
         active_day_str=active_day_str,
@@ -868,6 +870,7 @@ def insights_page(
         date_from=rng["date_from"],
         date_to=rng["date_to"],
         market_date=rng["market_date"] or datetime.now(local_tz()).date().isoformat(),
+        sale_dates=list_sale_dates(ctx.merchant_id, local_tz()),
         msg=msg,
     )
 
