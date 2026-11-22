@@ -174,12 +174,25 @@ def init_db() -> None:
             ("sale_price_per_lb", "REAL"),
             ("actual_feed_lbs", "REAL"),
             ("actual_feed_cost", "REAL"),
+            ("picking_enabled", "INTEGER DEFAULT 0"),
+            ("picking_slug", "TEXT"),
+            ("max_birds_per_customer", "INTEGER"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing_cols:
                 conn.execute(
                     f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}"
                 )
+        for row in conn.execute(
+            "SELECT id FROM batches WHERE picking_slug IS NULL OR picking_slug = ''"
+        ).fetchall():
+            conn.execute(
+                "UPDATE batches SET picking_slug = ? WHERE id = ?",
+                (secrets.token_urlsafe(10), row["id"]),
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_picking_slug ON batches(picking_slug)"
+        )
 
         # Backfill any rows that were created before phased-feed / sale_price / lifecycle_type columns existed
         legacy_rows = conn.execute(
@@ -371,6 +384,24 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                phone TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                preferred_contact TEXT NOT NULL DEFAULT 'sms',
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id)"
+        )
         for tbl in ("batch_feed_logs", "batch_harvests"):
             cols = {
                 row["name"]
@@ -380,6 +411,22 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE {tbl} ADD COLUMN receipt_url TEXT DEFAULT ''")
             if "drive_file_id" not in cols:
                 conn.execute(f"ALTER TABLE {tbl} ADD COLUMN drive_file_id TEXT DEFAULT ''")
+        hv_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(batch_harvests)").fetchall()
+        }
+        for col_name, col_type in (
+            ("customer_id", "INTEGER"),
+            ("for_sale", "INTEGER NOT NULL DEFAULT 1"),
+            ("deposit_paid", "REAL NOT NULL DEFAULT 0"),
+            ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
+            ("pickup_status", "TEXT NOT NULL DEFAULT 'unassigned'"),
+            ("claimed_at", "TEXT DEFAULT ''"),
+        ):
+            if col_name not in hv_cols:
+                conn.execute(
+                    f"ALTER TABLE batch_harvests ADD COLUMN {col_name} {col_type}"
+                )
         conn.commit()
 
 
@@ -1239,15 +1286,16 @@ def add_batch_harvest(
     notes: str = "",
     receipt_url: str = "",
     drive_file_id: str = "",
+    for_sale: bool = True,
 ) -> int:
     with get_db_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO batch_harvests (
                 batch_id, harvest_date, head_count, dressed_lbs, processing_cost_total,
-                notes, receipt_url, drive_file_id, created_at
+                notes, receipt_url, drive_file_id, for_sale, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(batch_id),
@@ -1258,6 +1306,7 @@ def add_batch_harvest(
                 str(notes).strip(),
                 str(receipt_url or "").strip(),
                 str(drive_file_id or "").strip(),
+                1 if for_sale else 0,
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
         )
@@ -1617,9 +1666,10 @@ def save_batch(
                     days_to_birth, weeks_to_proc, feed_total,
                     starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
                     starter_bag_price, grower_bag_price, unit_cost,
-                    processing_cost, expected_yield_lbs, sale_price_per_lb, active, notes, created_at
+                    processing_cost, expected_yield_lbs, sale_price_per_lb, active, notes,
+                    picking_slug, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uid,
@@ -1644,6 +1694,7 @@ def save_batch(
                     norm["sale_price_per_lb"],
                     norm["active"],
                     norm["notes"],
+                    secrets.token_urlsafe(10),
                     datetime.utcnow().isoformat(timespec="seconds"),
                 ),
             )
@@ -2183,3 +2234,314 @@ def delete_farm_expense(expense_id: int, user_id: int) -> None:
             (int(expense_id), int(user_id)),
         )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Customers, Bird Assignments & Public Picking
+# ---------------------------------------------------------------------------
+PREFERRED_CONTACTS = ("sms", "email", "call")
+PAYMENT_STATUSES = ("unpaid", "deposit", "paid")
+PICKUP_STATUSES = ("unassigned", "assigned", "picked_up")
+
+
+def _norm_phone(phone: str) -> str:
+    return "".join(ch for ch in (phone or "") if ch.isdigit())
+
+
+def list_customers(user_id: int, search: str = "") -> list[dict]:
+    q = (search or "").strip().lower()
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.*,
+                   COUNT(bh.id) AS bird_count,
+                   COALESCE(SUM(bh.dressed_lbs), 0) AS total_lbs
+            FROM customers c
+            LEFT JOIN batch_harvests bh ON bh.customer_id = c.id
+            WHERE c.user_id = ?
+            GROUP BY c.id
+            ORDER BY LOWER(c.name) ASC, c.id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    if q:
+        out = [
+            c for c in out
+            if q in (c["name"] or "").lower()
+            or q in (c["phone"] or "").lower()
+            or q in (c["email"] or "").lower()
+            or q in (c["notes"] or "").lower()
+        ]
+    return out
+
+
+def get_customer(user_id: int, customer_id: int) -> dict | None:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM customers WHERE user_id = ? AND id = ?",
+            (int(user_id), int(customer_id)),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_customer(
+    user_id: int,
+    name: str,
+    phone: str = "",
+    email: str = "",
+    preferred_contact: str = "sms",
+    notes: str = "",
+    customer_id: int | None = None,
+) -> int:
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("Customer name is required.")
+    pref = preferred_contact if preferred_contact in PREFERRED_CONTACTS else "sms"
+    with get_db_connection() as conn:
+        if customer_id:
+            conn.execute(
+                """
+                UPDATE customers
+                SET name = ?, phone = ?, email = ?, preferred_contact = ?, notes = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    clean_name,
+                    (phone or "").strip(),
+                    (email or "").strip(),
+                    pref,
+                    (notes or "").strip(),
+                    int(customer_id),
+                    int(user_id),
+                ),
+            )
+            conn.commit()
+            return int(customer_id)
+        cur = conn.execute(
+            """
+            INSERT INTO customers (user_id, name, phone, email, preferred_contact, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                clean_name,
+                (phone or "").strip(),
+                (email or "").strip(),
+                pref,
+                (notes or "").strip(),
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_customer(user_id: int, customer_id: int) -> None:
+    with get_db_connection() as conn:
+        conn.execute(
+            "UPDATE batch_harvests SET customer_id = NULL, pickup_status = 'unassigned'"
+            " WHERE customer_id = ? AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)",
+            (int(customer_id), int(user_id)),
+        )
+        conn.execute(
+            "DELETE FROM customers WHERE id = ? AND user_id = ?",
+            (int(customer_id), int(user_id)),
+        )
+        conn.commit()
+
+
+def find_or_create_customer(
+    user_id: int, name: str, contact: str
+) -> dict:
+    """Match an existing customer by normalized phone or lowercase email, or create one."""
+    clean_name = (name or "").strip()
+    clean_contact = (contact or "").strip()
+    if not clean_name or not clean_contact:
+        raise ValueError("Please enter your name and phone or email.")
+    is_email = "@" in clean_contact
+    norm_ph = _norm_phone(clean_contact)
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM customers WHERE user_id = ?", (int(user_id),)
+        ).fetchall()
+        for r in rows:
+            if is_email and (r["email"] or "").strip().lower() == clean_contact.lower():
+                return dict(r)
+            if not is_email and norm_ph and _norm_phone(r["phone"] or "") == norm_ph:
+                return dict(r)
+    cid = save_customer(
+        user_id=user_id,
+        name=clean_name,
+        phone="" if is_email else clean_contact,
+        email=clean_contact if is_email else "",
+        preferred_contact="email" if is_email else "sms",
+    )
+    return get_customer(user_id, cid) or {"id": cid, "name": clean_name}
+
+
+def list_customer_birds(user_id: int, customer_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT bh.*, b.name AS batch_name, b.species, b.sale_price_per_lb
+            FROM batch_harvests bh
+            JOIN batches b ON b.id = bh.batch_id
+            WHERE b.user_id = ? AND bh.customer_id = ?
+            ORDER BY bh.harvest_date DESC, bh.id DESC
+            """,
+            (int(user_id), int(customer_id)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_harvest_assignment(
+    batch_id: int,
+    harvest_id: int,
+    *,
+    customer_id: int | None = None,
+    for_sale: bool = True,
+    deposit_paid: float = 0.0,
+    payment_status: str = "unpaid",
+    pickup_status: str = "unassigned",
+    notes: str | None = None,
+) -> bool:
+    pay = payment_status if payment_status in PAYMENT_STATUSES else "unpaid"
+    pstat = pickup_status if pickup_status in PICKUP_STATUSES else "unassigned"
+    if not for_sale:
+        customer_id = None
+        pstat = "unassigned"
+    elif customer_id is not None and pstat == "unassigned":
+        pstat = "assigned"
+    elif customer_id is None and pstat != "unassigned":
+        pstat = "unassigned"
+    claimed_at = datetime.utcnow().isoformat(timespec="seconds") if customer_id else ""
+    with get_db_connection() as conn:
+        if notes is not None:
+            cur = conn.execute(
+                """
+                UPDATE batch_harvests
+                SET customer_id = ?, for_sale = ?, deposit_paid = ?,
+                    payment_status = ?, pickup_status = ?,
+                    claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END,
+                    notes = ?
+                WHERE id = ? AND batch_id = ?
+                """,
+                (
+                    int(customer_id) if customer_id else None,
+                    1 if for_sale else 0,
+                    max(0.0, float(deposit_paid or 0.0)),
+                    pay,
+                    pstat,
+                    claimed_at,
+                    claimed_at,
+                    claimed_at,
+                    str(notes).strip(),
+                    int(harvest_id),
+                    int(batch_id),
+                ),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE batch_harvests
+                SET customer_id = ?, for_sale = ?, deposit_paid = ?,
+                    payment_status = ?, pickup_status = ?,
+                    claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END
+                WHERE id = ? AND batch_id = ?
+                """,
+                (
+                    int(customer_id) if customer_id else None,
+                    1 if for_sale else 0,
+                    max(0.0, float(deposit_paid or 0.0)),
+                    pay,
+                    pstat,
+                    claimed_at,
+                    claimed_at,
+                    claimed_at,
+                    int(harvest_id),
+                    int(batch_id),
+                ),
+            )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def update_batch_picking_settings(
+    user_id: int,
+    batch_id: int,
+    picking_enabled: bool,
+    max_birds_per_customer: int | None = None,
+) -> dict | None:
+    limit_val = int(max_birds_per_customer) if max_birds_per_customer and int(max_birds_per_customer) > 0 else None
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT picking_slug FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not row:
+            return None
+        slug = row["picking_slug"] or secrets.token_urlsafe(10)
+        conn.execute(
+            """
+            UPDATE batches
+            SET picking_enabled = ?, picking_slug = ?, max_birds_per_customer = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (1 if picking_enabled else 0, slug, limit_val, int(batch_id), int(user_id)),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        return dict(updated) if updated else None
+
+
+def get_batch_by_picking_slug(slug: str) -> dict | None:
+    clean = (slug or "").strip()
+    if not clean:
+        return None
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM batches WHERE picking_slug = ?", (clean,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def claim_bird_atomically(
+    batch_id: int,
+    harvest_id: int,
+    customer_id: int,
+    max_birds_per_customer: int | None = None,
+) -> tuple[bool, str]:
+    """Atomically claim a for-sale unassigned bird; returns (ok, error_reason)."""
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if max_birds_per_customer and int(max_birds_per_customer) > 0:
+            already = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM batch_harvests"
+                    " WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1",
+                    (int(batch_id), int(customer_id)),
+                ).fetchone()[0]
+            )
+            if already >= int(max_birds_per_customer):
+                conn.rollback()
+                return False, "limit_reached"
+        cur = conn.execute(
+            """
+            UPDATE batch_harvests
+            SET customer_id = ?, pickup_status = 'assigned', claimed_at = ?
+            WHERE id = ? AND batch_id = ?
+              AND customer_id IS NULL
+              AND COALESCE(for_sale, 1) = 1
+            """,
+            (int(customer_id), now_iso, int(harvest_id), int(batch_id)),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return False, "already_claimed"
+        conn.commit()
+        return True, "ok"

@@ -1,9 +1,11 @@
 """Homestead Planner — FastAPI web app."""
 
+import asyncio
 from contextlib import asynccontextmanager
 import csv
 from datetime import date, datetime, timedelta, timezone
 import io
+import json
 import os
 from pathlib import Path
 import secrets
@@ -11,13 +13,16 @@ import time
 from urllib.parse import quote_plus
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
     EXPENSE_CATEGORIES,
+    PAYMENT_STATUSES,
+    PICKUP_STATUSES,
+    PREFERRED_CONTACTS,
     acknowledge_milestone,
     add_batch_feed_log,
     add_batch_harvest,
@@ -25,6 +30,7 @@ from homestead.database import (
     add_batch_sale,
     add_farm_expense,
     authenticate_user,
+    claim_bird_atomically,
     count_users,
     create_user,
     create_user_session,
@@ -33,14 +39,18 @@ from homestead.database import (
     delete_batch_harvest,
     delete_batch_loss,
     delete_batch_sale,
+    delete_customer,
     delete_farm_expense,
     delete_species_preset,
     delete_user,
     delete_user_session,
     disconnect_google_drive,
     export_backup_json,
+    find_or_create_customer,
     get_bag_weight,
     get_barrel_capacity,
+    get_batch_by_picking_slug,
+    get_customer,
     get_google_drive_connection,
     get_species_catalog,
     get_user_by_session_token,
@@ -53,9 +63,12 @@ from homestead.database import (
     list_batch_losses,
     list_batch_sales,
     list_batches,
+    list_customer_birds,
+    list_customers,
     list_farm_expenses,
     list_users,
     save_batch,
+    save_customer,
     save_google_drive_connection,
     save_species_preset,
     set_bag_weight,
@@ -63,7 +76,9 @@ from homestead.database import (
     set_batch_active,
     set_batch_actual_feed,
     set_public_registration_enabled,
+    update_batch_picking_settings,
     update_google_drive_folder,
+    update_harvest_assignment,
     update_user_password,
     verify_password,
 )
@@ -389,6 +404,20 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
     )
 
 
+_PICK_SUBSCRIBERS: dict[str, set[asyncio.Queue]] = {}
+
+
+def _broadcast_pick_event(slug: str | None, payload: dict) -> None:
+    if not slug:
+        return
+    data = json.dumps(payload)
+    for q in list(_PICK_SUBSCRIBERS.get(slug, ())):
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            pass
+
+
 def _fmt_lb_oz(lbs: float) -> str:
     total_oz = round(max(0.0, float(lbs or 0)) * 16)
     whole_lb, rem_oz = divmod(total_oz, 16)
@@ -403,6 +432,9 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         key=lambda h: int(h.get("id") or 0),
         reverse=True,
     )
+    customers = list_customers(user_id)
+    cust_by_id = {int(c["id"]): c for c in customers}
+
     harvested_head = sum(int(h.get("head_count") or 0) for h in harvests)
     surviving = int(s["surviving_quantity"])
     remaining = max(0, surviving - harvested_head)
@@ -416,13 +448,38 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     min_lbs = min(per_bird) if per_bird else 0.0
     max_lbs = max(per_bird) if per_bird else 0.0
     sale_price = float(batch.get("sale_price_per_lb") or 0.0)
-    est_value = round(total_lbs * sale_price, 2)
     est_total_lbs = round(surviving * float(batch.get("avg_dressed_weight") or 0.0), 1)
     progress_pct = min(100, round(harvested_head / surviving * 100)) if surviving > 0 else 0
+
+    for_sale_lbs = 0.0
+    available_count = 0
+    assigned_count = 0
+    picked_up_count = 0
+    not_for_sale_count = 0
     entries = []
     for idx, h in enumerate(harvests):
         hc = max(1, int(h.get("head_count") or 1))
         dl = round(float(h.get("dressed_lbs") or 0), 2)
+        for_sale = bool(1 if h.get("for_sale") is None else h.get("for_sale"))
+        cid = int(h["customer_id"]) if h.get("customer_id") else None
+        cust = cust_by_id.get(cid) if cid else None
+        dep = round(float(h.get("deposit_paid") or 0.0), 2)
+        pay_stat = h.get("payment_status") or "unpaid"
+        pick_stat = h.get("pickup_status") or ("assigned" if cid else "unassigned")
+        est_price = round(dl * sale_price, 2) if for_sale else 0.0
+        bal_due = round(max(0.0, est_price - dep), 2) if for_sale else 0.0
+
+        if for_sale:
+            for_sale_lbs += dl
+            if not cid:
+                available_count += 1
+            elif pick_stat == "picked_up":
+                picked_up_count += 1
+            else:
+                assigned_count += 1
+        else:
+            not_for_sale_count += 1
+
         entries.append({
             "id": int(h["id"]),
             "num": len(harvests) - idx,
@@ -432,7 +489,21 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
             "lb_oz": _fmt_lb_oz(dl),
             "per_bird_lbs": round(dl / hc, 2),
             "notes": h.get("notes") or "",
+            "for_sale": for_sale,
+            "customer_id": cid,
+            "customer_name": cust["name"] if cust else "",
+            "customer_phone": cust["phone"] if cust else "",
+            "customer_email": cust["email"] if cust else "",
+            "customer_pref": cust["preferred_contact"] if cust else "sms",
+            "deposit_paid": dep,
+            "payment_status": pay_stat,
+            "pickup_status": pick_stat,
+            "est_price": est_price,
+            "balance_due": bal_due,
+            "claimed_at": h.get("claimed_at") or "",
         })
+
+    est_value = round(for_sale_lbs * sale_price, 2)
     return {
         "batch_id": int(batch["id"]),
         "batch_name": batch["name"],
@@ -441,12 +512,20 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         "remaining_head": remaining,
         "progress_pct": progress_pct,
         "total_lbs": total_lbs,
+        "for_sale_lbs": round(for_sale_lbs, 2),
         "est_total_lbs": est_total_lbs,
         "avg_lbs": avg_lbs,
         "min_lbs": min_lbs,
         "max_lbs": max_lbs,
         "sale_price_per_lb": sale_price,
         "est_value": est_value,
+        "available_count": available_count,
+        "assigned_count": assigned_count,
+        "picked_up_count": picked_up_count,
+        "not_for_sale_count": not_for_sale_count,
+        "picking_enabled": bool(batch.get("picking_enabled")),
+        "picking_slug": batch.get("picking_slug") or "",
+        "max_birds_per_customer": batch.get("max_birds_per_customer"),
         "entries": entries,
     }
 
@@ -457,9 +536,12 @@ def batch_harvest_tally_page(
 ):
     b = _get_owned_batch(batch_id, user)
     tally = _harvest_tally_payload(b, user["id"])
+    pick_url = f"{str(request.base_url).rstrip('/')}/pick/{tally['picking_slug']}" if tally["picking_slug"] else ""
     return _render(
         request, "harvest_tally.html", user, "batches",
         b=b, tally=tally,
+        customers=list_customers(user["id"]),
+        pick_url=pick_url,
     )
 
 
@@ -476,7 +558,46 @@ async def api_batch_harvest_add(
         raise HTTPException(status_code=400, detail="Weight must be greater than 0.")
     notes = str(payload.get("notes") or "").strip()
     proc_cost = float(payload.get("processing_cost_total") or 0.0)
-    add_batch_harvest(batch_id, hdate, head_count, round(dressed_lbs, 2), proc_cost, notes)
+    for_sale = bool(payload.get("for_sale", True))
+    bird_id = add_batch_harvest(
+        batch_id, hdate, head_count, round(dressed_lbs, 2), proc_cost, notes, for_sale=for_sale
+    )
+    _broadcast_pick_event(
+        b.get("picking_slug"),
+        {"bird_id": bird_id, "status": "available" if for_sale else "hidden", "reload": True},
+    )
+    return _harvest_tally_payload(b, user["id"])
+
+
+@app.post("/api/batches/{batch_id}/harvest/{harvest_id}/assign")
+async def api_batch_harvest_assign(
+    batch_id: int, harvest_id: int, request: Request, user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    payload = await request.json()
+    raw_cid = payload.get("customer_id")
+    cid = int(raw_cid) if raw_cid not in (None, "", 0, "0") else None
+    if cid is not None and not get_customer(user["id"], cid):
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    for_sale = bool(payload.get("for_sale", True))
+    deposit_paid = float(payload.get("deposit_paid") or 0.0)
+    payment_status = str(payload.get("payment_status") or "unpaid")
+    pickup_status = str(payload.get("pickup_status") or ("assigned" if cid else "unassigned"))
+    notes = payload.get("notes")
+    update_harvest_assignment(
+        batch_id,
+        harvest_id,
+        customer_id=cid,
+        for_sale=for_sale,
+        deposit_paid=deposit_paid,
+        payment_status=payment_status,
+        pickup_status=pickup_status,
+        notes=str(notes) if notes is not None else None,
+    )
+    pub_status = "hidden" if not for_sale else ("claimed" if cid else "available")
+    _broadcast_pick_event(
+        b.get("picking_slug"), {"bird_id": int(harvest_id), "status": pub_status}
+    )
     return _harvest_tally_payload(b, user["id"])
 
 
@@ -486,7 +607,262 @@ def api_batch_harvest_delete(
 ):
     b = _get_owned_batch(batch_id, user)
     delete_batch_harvest(harvest_id)
+    _broadcast_pick_event(
+        b.get("picking_slug"), {"bird_id": int(harvest_id), "status": "hidden"}
+    )
     return _harvest_tally_payload(b, user["id"])
+
+
+@app.post("/api/batches/{batch_id}/picking")
+async def api_batch_picking_settings(
+    batch_id: int, request: Request, user: dict = Depends(current_user)
+):
+    _get_owned_batch(batch_id, user)
+    payload = await request.json()
+    enabled = bool(payload.get("picking_enabled"))
+    raw_max = payload.get("max_birds_per_customer")
+    max_birds = int(raw_max) if raw_max not in (None, "", 0, "0") else None
+    updated = update_batch_picking_settings(user["id"], batch_id, enabled, max_birds)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    return {
+        "picking_enabled": bool(updated.get("picking_enabled")),
+        "picking_slug": updated.get("picking_slug") or "",
+        "max_birds_per_customer": updated.get("max_birds_per_customer"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Customer Directory
+# ---------------------------------------------------------------------------
+@app.get("/customers")
+def customers_page(
+    request: Request,
+    q: str = "",
+    selected: str = "",
+    msg: str = "",
+    user: dict = Depends(current_user),
+):
+    customers = list_customers(user["id"], search=q)
+    sel_id = int(selected) if selected.strip().isdigit() else None
+    sel_customer = get_customer(user["id"], sel_id) if sel_id else None
+    sel_birds = list_customer_birds(user["id"], sel_id) if sel_customer else []
+    for bird in sel_birds:
+        bird["lb_oz"] = _fmt_lb_oz(bird["dressed_lbs"])
+        bird["est_price"] = round(float(bird["dressed_lbs"] or 0) * float(bird["sale_price_per_lb"] or 0), 2)
+    return _render(
+        request, "customers.html", user, "batches",
+        customers=customers,
+        q=q,
+        sel_customer=sel_customer,
+        sel_birds=sel_birds,
+        preferred_contacts=PREFERRED_CONTACTS,
+        msg=msg,
+    )
+
+
+@app.post("/customers/save")
+def customers_save_submit(
+    customer_id: str = Form(""),
+    name: str = Form(...),
+    phone: str = Form(""),
+    email: str = Form(""),
+    preferred_contact: str = Form("sms"),
+    notes: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    cid = int(customer_id) if customer_id.strip().isdigit() else None
+    try:
+        saved_id = save_customer(
+            user["id"], name=name, phone=phone, email=email,
+            preferred_contact=preferred_contact, notes=notes, customer_id=cid,
+        )
+        return RedirectResponse(
+            f"/customers?selected={saved_id}&msg=" + quote_plus(f"Saved {name.strip()}."),
+            status_code=303,
+        )
+    except ValueError as exc:
+        return RedirectResponse("/customers?msg=" + quote_plus(str(exc)), status_code=303)
+
+
+@app.post("/customers/{customer_id}/delete")
+def customers_delete_submit(customer_id: int, user: dict = Depends(current_user)):
+    delete_customer(user["id"], customer_id)
+    return RedirectResponse("/customers?msg=" + quote_plus("Customer deleted."), status_code=303)
+
+
+@app.post("/api/customers")
+async def api_customer_create(request: Request, user: dict = Depends(current_user)):
+    payload = await request.json()
+    try:
+        cid = save_customer(
+            user["id"],
+            name=str(payload.get("name") or ""),
+            phone=str(payload.get("phone") or ""),
+            email=str(payload.get("email") or ""),
+            preferred_contact=str(payload.get("preferred_contact") or "sms"),
+            notes=str(payload.get("notes") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return get_customer(user["id"], cid)
+
+
+# ---------------------------------------------------------------------------
+# Public Live Customer Picking Page (/pick/<slug>) + SSE
+# ---------------------------------------------------------------------------
+def _public_picking_birds(batch: dict) -> list[dict]:
+    """Return ONLY for_sale birds with ZERO buyer PII."""
+    harvests = sorted(
+        list_batch_harvests(batch["id"]),
+        key=lambda h: int(h.get("id") or 0),
+    )
+    price = float(batch.get("sale_price_per_lb") or 0.0)
+    birds = []
+    for idx, h in enumerate(harvests, start=1):
+        for_sale = bool(1 if h.get("for_sale") is None else h.get("for_sale"))
+        if not for_sale:
+            continue
+        dl = round(float(h.get("dressed_lbs") or 0), 2)
+        claimed = bool(h.get("customer_id"))
+        birds.append({
+            "id": int(h["id"]),
+            "num": idx,
+            "dressed_lbs": dl,
+            "lb_oz": _fmt_lb_oz(dl),
+            "est_price": round(dl * price, 2),
+            "status": "claimed" if claimed else "available",
+        })
+    birds.sort(key=lambda x: (1 if x["status"] == "claimed" else 0, x["dressed_lbs"]))
+    return birds
+
+
+@app.get("/pick/{slug}")
+def public_picking_page(request: Request, slug: str):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Picking page not found.")
+    enabled = bool(batch.get("picking_enabled"))
+    birds = _public_picking_birds(batch) if enabled else []
+    return templates.TemplateResponse(
+        request, "pick.html",
+        {
+            "request": request,
+            "batch_name": batch["name"],
+            "species": batch["species"],
+            "sale_price_per_lb": float(batch.get("sale_price_per_lb") or 0.0),
+            "max_birds_per_customer": batch.get("max_birds_per_customer"),
+            "picking_enabled": enabled,
+            "slug": slug,
+            "birds": birds,
+        },
+    )
+
+
+@app.post("/api/pick/{slug}/identify")
+async def api_public_pick_identify(slug: str, request: Request):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch or not batch.get("picking_enabled"):
+        raise HTTPException(status_code=404, detail="Picking is not currently open.")
+    payload = await request.json()
+    try:
+        cust = find_or_create_customer(
+            int(batch["user_id"]),
+            str(payload.get("name") or ""),
+            str(payload.get("contact") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    harvests = sorted(list_batch_harvests(batch["id"]), key=lambda h: int(h.get("id") or 0))
+    price = float(batch.get("sale_price_per_lb") or 0.0)
+    mine = []
+    for idx, h in enumerate(harvests, start=1):
+        if h.get("customer_id") and int(h["customer_id"]) == int(cust["id"]) and bool(1 if h.get("for_sale") is None else h.get("for_sale")):
+            dl = round(float(h.get("dressed_lbs") or 0), 2)
+            mine.append({
+                "id": int(h["id"]),
+                "num": idx,
+                "dressed_lbs": dl,
+                "lb_oz": _fmt_lb_oz(dl),
+                "est_price": round(dl * price, 2),
+            })
+    return {"customer_id": int(cust["id"]), "name": cust["name"], "my_birds": mine}
+
+
+@app.post("/api/pick/{slug}/claim/{bird_id}")
+async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch or not batch.get("picking_enabled"):
+        raise HTTPException(status_code=404, detail="Picking is not currently open.")
+    payload = await request.json()
+    cid = payload.get("customer_id")
+    if not cid or not get_customer(int(batch["user_id"]), int(cid)):
+        raise HTTPException(status_code=400, detail="Please enter your name and contact info first.")
+    ok, reason = claim_bird_atomically(
+        int(batch["id"]),
+        int(bird_id),
+        int(cid),
+        max_birds_per_customer=batch.get("max_birds_per_customer"),
+    )
+    if not ok:
+        if reason == "limit_reached":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Limit of {batch.get('max_birds_per_customer')} bird(s) per customer reached.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="Someone just grabbed that bird—please pick another!",
+        )
+    _broadcast_pick_event(slug, {"bird_id": int(bird_id), "status": "claimed"})
+    harvests = sorted(list_batch_harvests(batch["id"]), key=lambda h: int(h.get("id") or 0))
+    price = float(batch.get("sale_price_per_lb") or 0.0)
+    claimed_info = None
+    for idx, h in enumerate(harvests, start=1):
+        if int(h["id"]) == int(bird_id):
+            dl = round(float(h.get("dressed_lbs") or 0), 2)
+            claimed_info = {
+                "id": int(h["id"]),
+                "num": idx,
+                "dressed_lbs": dl,
+                "lb_oz": _fmt_lb_oz(dl),
+                "est_price": round(dl * price, 2),
+            }
+            break
+    return {"ok": True, "bird": claimed_info}
+
+
+@app.get("/api/pick/{slug}/events")
+async def api_public_pick_events(slug: str, request: Request):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch or not batch.get("picking_enabled"):
+        raise HTTPException(status_code=404, detail="Picking is not currently open.")
+    q: asyncio.Queue = asyncio.Queue(maxsize=64)
+    _PICK_SUBSCRIBERS.setdefault(slug, set()).add(q)
+
+    async def event_stream():
+        try:
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            subs = _PICK_SUBSCRIBERS.get(slug)
+            if subs:
+                subs.discard(q)
+                if not subs:
+                    _PICK_SUBSCRIBERS.pop(slug, None)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/batches/{batch_id}/harvest.csv")
