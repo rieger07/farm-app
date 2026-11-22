@@ -223,6 +223,11 @@ details.sale[open]{background:#faf9f3}
 .fast-cash .chip { padding: 6px 12px; font-size: 13px; }
 .sticky-cart { position: fixed; left: 246px; right: 16px; bottom: 16px; background: #fff; border: 1.5px solid var(--green); border-radius: 12px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; box-shadow: 0 10px 28px rgba(31,58,45,.18); z-index: 30; }
 .sticky-cart b { font-size: 15px; }
+details.collapse-card > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; user-select: none; }
+details.collapse-card > summary::-webkit-details-marker { display: none; }
+details.collapse-card > summary .chev { color: var(--muted); transition: transform .15s; font-size: 13px; }
+details.collapse-card[open] > summary { border-bottom: 1px solid var(--line); }
+details.collapse-card[open] > summary .chev { transform: rotate(180deg); }
 @media(max-width:800px){
   .cards.four { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .cards.four .card { padding: 12px; }

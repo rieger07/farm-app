@@ -76,13 +76,17 @@
   </small>
 </div>
 
-<div class="card table-card" style="margin-bottom:16px">
-  <div class="filters">
+<details class="card table-card collapse-card" style="margin-bottom:16px">
+  <summary>
     <div>
       <b>Suggested pack list</b>
-      <small class="inline muted" style="margin-left:6px">{{ selected_mp_name or 'All markets' }}{% if pack_list.days %} · {{ pack_list.days }} sale day{{ '' if pack_list.days == 1 else 's' }}{% endif %}</small>
+      <small class="inline muted" style="margin-left:6px">{{ selected_mp_name or 'All markets' }} · {{ pack_list['items']|length }} item{{ '' if pack_list['items']|length == 1 else 's' }}{% if pack_list.days %} ({{ pack_list.days }}d){% endif %}</small>
       {% if pack_list.short_count %}<span class="pill red" style="margin-left:6px">{{ pack_list.short_count }} short</span>{% endif %}
     </div>
+    <span class="chev" aria-hidden="true">▾</span>
+  </summary>
+  <div class="filters" style="border-bottom:1px solid var(--line)">
+    <small class="muted">Avg/day × 1.25 buffer (1.5× if sold out)</small>
     <div class="right row" style="align-items:center">
       <button type="button" class="link" style="padding:0" onclick="resetPackChecks()">Reset checks</button>
       <button type="button" class="btn" style="padding:5px 10px;font-size:12px" id="copy-pack-btn" onclick="copyPackList()">Copy pack list</button>
@@ -141,11 +145,18 @@
     };
   })();
   </script>
-</div>
+</details>
 
-<div class="card table-card" style="margin-bottom:16px">
-  <div class="filters">
-    <b>Marketplace comparison</b>
+<details class="card table-card collapse-card" style="margin-bottom:16px">
+  <summary>
+    <div>
+      <b>Marketplace comparison</b>
+      <small class="inline muted" style="margin-left:6px">{{ mp_analytics.comparison|length }} marketplace{{ '' if mp_analytics.comparison|length == 1 else 's' }}</small>
+    </div>
+    <span class="chev" aria-hidden="true">▾</span>
+  </summary>
+  <div class="filters" style="border-bottom:1px solid var(--line)">
+    <small class="muted">Net revenue after booth &amp; travel costs</small>
     <a href="/settings#marketplaces" class="right link" style="padding:0">Manage marketplaces →</a>
   </div>
   <table>
@@ -167,11 +178,17 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 
 {% if mp_analytics.untagged_days and marketplaces %}
-<div class="card table-card" style="margin-bottom:16px">
-  <div class="filters"><b>Untagged sale days</b><small class="right muted">Quick-assign a marketplace</small></div>
+<details class="card table-card collapse-card" style="margin-bottom:16px">
+  <summary>
+    <div>
+      <b>Untagged sale days</b>
+      <span class="pill amber" style="margin-left:6px">{{ mp_analytics.untagged_days|length }} to tag</span>
+    </div>
+    <span class="chev" aria-hidden="true">▾</span>
+  </summary>
   <table>
     <thead><tr><th>Date</th><th class="num">Sales</th><th class="num">Revenue</th><th>Assign marketplace</th></tr></thead>
     <tbody>
@@ -196,12 +213,18 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endif %}
 
 {% if mp_analytics.market_day_rows %}
-<div class="card table-card" style="margin-bottom:16px">
-  <div class="filters"><b>Past market days</b><small class="right muted">{{ mp_analytics.market_day_rows|length }} tagged</small></div>
+<details class="card table-card collapse-card" style="margin-bottom:16px">
+  <summary>
+    <div>
+      <b>Past market days</b>
+      <small class="inline muted" style="margin-left:6px">{{ mp_analytics.market_day_rows|length }} tagged</small>
+    </div>
+    <span class="chev" aria-hidden="true">▾</span>
+  </summary>
   <table>
     <thead><tr><th>Date</th><th>Marketplace</th><th>Weather</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Net</th><th>Notes</th></tr></thead>
     <tbody>
@@ -218,12 +241,15 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endif %}
 
-<div class="cards two">
-  <div class="card table-card">
-    <div class="filters"><b>Top products by volume</b></div>
+<div class="cards two" style="align-items:start">
+  <details class="card table-card collapse-card">
+    <summary>
+      <div><b>Top products by volume</b> <small class="inline muted" style="margin-left:6px">{{ insights.top_by_units|length }}</small></div>
+      <span class="chev" aria-hidden="true">▾</span>
+    </summary>
     <table>
       <thead><tr><th>Product</th><th class="num">Units</th><th class="num">Revenue</th></tr></thead>
       <tbody>
@@ -234,10 +260,13 @@
       {% endfor %}
       </tbody>
     </table>
-  </div>
+  </details>
 
-  <div class="card table-card">
-    <div class="filters"><b>Top products by revenue</b></div>
+  <details class="card table-card collapse-card">
+    <summary>
+      <div><b>Top products by revenue</b> <small class="inline muted" style="margin-left:6px">{{ insights.top_by_revenue|length }}</small></div>
+      <span class="chev" aria-hidden="true">▾</span>
+    </summary>
     <table>
       <thead><tr><th>Product</th><th class="num">Revenue</th><th class="num">Units</th></tr></thead>
       <tbody>
@@ -248,12 +277,18 @@
       {% endfor %}
       </tbody>
     </table>
-  </div>
+  </details>
 </div>
 
-<div class="cards two">
-  <div class="card table-card">
-    <div class="filters"><b>Early sell-out flags</b><small class="right muted">0 left on hand</small></div>
+<div class="cards two" style="align-items:start">
+  <details class="card table-card collapse-card">
+    <summary>
+      <div>
+        <b>Early sell-out flags</b>
+        {% if insights.sellouts %}<span class="pill red" style="margin-left:6px">{{ insights.sellouts|length }}</span>{% else %}<small class="inline muted" style="margin-left:6px">0</small>{% endif %}
+      </div>
+      <span class="chev" aria-hidden="true">▾</span>
+    </summary>
     <table>
       <thead><tr><th>Product</th><th class="num">Sold</th><th>Last sale</th></tr></thead>
       <tbody>
@@ -264,10 +299,13 @@
       {% endfor %}
       </tbody>
     </table>
-  </div>
+  </details>
 
-  <div class="card table-card">
-    <div class="filters"><b>Frequently bought together</b><small class="right muted">Same checkout</small></div>
+  <details class="card table-card collapse-card">
+    <summary>
+      <div><b>Frequently bought together</b> <small class="inline muted" style="margin-left:6px">{{ insights.top_pairs|length }} pairs</small></div>
+      <span class="chev" aria-hidden="true">▾</span>
+    </summary>
     <table>
       <thead><tr><th>Product pair</th><th class="num">Baskets</th></tr></thead>
       <tbody>
@@ -278,6 +316,6 @@
       {% endfor %}
       </tbody>
     </table>
-  </div>
+  </details>
 </div>
 {% endblock %}
