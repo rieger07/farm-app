@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Customers · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← BATCHES</a></div>
+<div class="pagehead">
+  <div><h1>Customers</h1><p class="sub">Directory of farm customers, contact preferences, and bird assignment history.</p></div>
+  <button type="button" class="btn primary" onclick="openCustomerModal()">+ Add customer</button>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card" style="margin-bottom:16px">
+  <form method="get" action="/customers" class="row" style="gap:8px;align-items:center">
+    <input name="q" type="search" value="{{ q }}" placeholder="Search by name, phone, email, or notes..." style="flex:1">
+    <button class="btn sm primary">Search</button>
+    {% if q %}<a href="/customers" class="btn sm">Clear</a>{% endif %}
+  </form>
+</div>
+
+<div class="cards two" style="align-items:start">
+  <div class="card table-card">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+      <b>Directory</b>
+      <small>{{ customers|length }} customer{{ '' if customers|length == 1 else 's' }}</small>
+    </div>
+    <table>
+      <thead><tr><th>Customer</th><th>Contact</th><th class="num">Birds</th><th class="num">Total lb</th></tr></thead>
+      <tbody>
+      {% for c in customers %}
+        <tr style="cursor:pointer{% if sel_customer and sel_customer.id == c.id %};background:#f3f1e7{% endif %}" onclick="location.href='/customers?selected={{ c.id }}{% if q %}&q={{ q|urlencode }}{% endif %}'">
+          <td>
+            <b>{{ c.name }}</b>
+            <small>{{ c.preferred_contact|upper }}</small>
+          </td>
+          <td>
+            {% if c.phone %}<div>{{ c.phone }}</div>{% endif %}
+            {% if c.email %}<small>{{ c.email }}</small>{% endif %}
+          </td>
+          <td class="num">{{ c.bird_count }}</td>
+          <td class="num">{{ '%.1f'|format(c.total_lbs or 0) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No customers yet. Tap <b>+ Add customer</b> to add your first buyer.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    {% if sel_customer %}
+      <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <h2 style="margin:0">{{ sel_customer.name }}</h2>
+          <small>Prefers {{ sel_customer.preferred_contact|upper }}{% if sel_customer.phone %} · {{ sel_customer.phone }}{% endif %}{% if sel_customer.email %} · {{ sel_customer.email }}{% endif %}</small>
+        </div>
+        <div class="row">
+          <button type="button" class="btn sm" onclick='openCustomerModal({{ sel_customer|tojson }})'>Edit</button>
+          <form method="post" action="/customers/{{ sel_customer.id }}/delete" onsubmit="return confirm('Delete this customer and unassign their birds?')">
+            <button class="btn sm danger">Delete</button>
+          </form>
+        </div>
+      </div>
+      {% if sel_customer.notes %}
+      <p class="sub" style="background:#faf9f3;padding:10px 12px;border-radius:8px;border:1px solid var(--line);margin-bottom:14px">{{ sel_customer.notes }}</p>
+      {% endif %}
+      <h3>Assigned birds ({{ sel_birds|length }})</h3>
+      <table>
+        <thead><tr><th>Date</th><th>Batch</th><th class="num">Weight</th><th class="num">Est. $</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for b in sel_birds %}
+          <tr>
+            <td>{{ b.harvest_date }}</td>
+            <td><a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a></td>
+            <td class="num">{{ '%.2f'|format(b.dressed_lbs) }} lb <small>{{ b.lb_oz }}</small></td>
+            <td class="num">${{ '%.2f'|format(b.est_price) }}</td>
+            <td>
+              <span class="pill {{ 'green' if b.pickup_status == 'picked_up' else 'amber' }}">{{ b.pickup_status|replace('_', ' ')|title }}</span>
+              <small>{{ b.payment_status|title }}</small>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">No birds assigned to this customer yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <h2>Customer details</h2>
+      <p class="sub">Select a customer from the directory to view contact info, notes, and their bird history across past and current batches.</p>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="custm">
+  <h2 id="cm-title">Add customer</h2>
+  <form method="post" action="/customers/save" class="fgrid">
+    <input type="hidden" name="customer_id" id="cm-id">
+    <label class="full">Name<input name="name" id="cm-name" required placeholder="e.g. Sarah Miller"></label>
+    <label>Phone<input name="phone" id="cm-phone" type="tel" placeholder="(555) 123-4567"></label>
+    <label>Email<input name="email" id="cm-email" type="email" placeholder="sarah@example.com"></label>
+    <label class="full">Preferred contact
+      <select name="preferred_contact" id="cm-pref">
+        <option value="sms">Text (SMS)</option>
+        <option value="email">Email</option>
+        <option value="call">Phone call</option>
+      </select>
+    </label>
+    <label class="full">Notes<textarea name="notes" id="cm-notes" rows="2" placeholder="Prefers smaller hen, Saturday pickup..."></textarea></label>
+    <div class="row full" style="justify-content:flex-end;margin-top:6px">
+      <button type="button" class="btn" onclick="document.getElementById('custm').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save customer</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+function openCustomerModal(c) {
+  document.getElementById('cm-title').textContent = c ? 'Edit customer' : 'Add customer';
+  document.getElementById('cm-id').value = c ? c.id : '';
+  document.getElementById('cm-name').value = c ? (c.name || '') : '';
+  document.getElementById('cm-phone').value = c ? (c.phone || '') : '';
+  document.getElementById('cm-email').value = c ? (c.email || '') : '';
+  document.getElementById('cm-pref').value = c ? (c.preferred_contact || 'sms') : 'sms';
+  document.getElementById('cm-notes').value = c ? (c.notes || '') : '';
+  document.getElementById('custm').showModal();
+}
+</script>
+{% endblock %}

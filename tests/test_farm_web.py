@@ -215,6 +215,105 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(r_start.status_code, 303)
         self.assertNotIn("Planned batches", self.c.get("/").text)
 
+    def test_customers_bird_assignment_and_public_picking(self):
+        from homestead.database import list_batches
+
+        # Register admin & create a turkey batch at $5.00/lb
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"})
+        self.c.post("/batches/save", data={
+            "name": "Thanksgiving Turkeys",
+            "species": "turkey chicks",
+            "start_date": "2026-06-01",
+            "initial_quantity": "10",
+            "unit_cost": "10.00",
+            "avg_dressed_weight": "18",
+            "sale_price_per_lb": "5.00",
+            "processing_cost": "0",
+        }, follow_redirects=False)
+        batch = list_batches()[0]
+        bid = batch["id"]
+        slug = batch["picking_slug"]
+        self.assertTrue(slug)
+
+        # Customer directory CRUD
+        r_cust = self.c.post("/customers/save", data={
+            "name": "Sarah Miller", "phone": "555-123-4567", "email": "sarah@example.com",
+            "preferred_contact": "sms", "notes": "Prefers 18-20 lb",
+        }, follow_redirects=False)
+        self.assertEqual(r_cust.status_code, 303)
+        self.assertIn("Sarah Miller", self.c.get("/customers?q=sarah").text)
+
+        # Inline quick-create customer API
+        c2 = self.c.post("/api/customers", json={"name": "Bob Jones", "phone": "555-999-8888"}).json()
+        self.assertEqual(c2["name"], "Bob Jones")
+
+        # Weigh 3 birds: 2 for_sale (20 lb, 16 lb) and 1 not_for_sale (18 lb)
+        b1 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 20.0, "for_sale": True}).json()
+        b2 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 16.0, "for_sale": True}).json()
+        b3 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 18.0, "for_sale": False}).json()
+
+        # KPI check: Harvested & Total lbs include all 3 (54.0 lb), but Est. value & Available exclude 18 lb NFS bird ($180, 2 avail)
+        self.assertEqual(b3["harvested_head"], 3)
+        self.assertAlmostEqual(b3["total_lbs"], 54.0)
+        self.assertEqual(b3["available_count"], 2)
+        self.assertEqual(b3["not_for_sale_count"], 1)
+        self.assertAlmostEqual(b3["est_value"], 180.0)
+
+        bird1_id = b1["entries"][0]["id"]
+        bird2_id = b2["entries"][0]["id"]
+
+        # Assign Bird #1 to Bob Jones with $25 deposit -> balance due = 20*5 - 25 = $75
+        assigned = self.c.post(f"/api/batches/{bid}/harvest/{bird1_id}/assign", json={
+            "for_sale": True,
+            "customer_id": c2["id"],
+            "deposit_paid": 25.0,
+            "payment_status": "deposit",
+            "pickup_status": "assigned",
+        }).json()
+        a_entry = next(e for e in assigned["entries"] if e["id"] == bird1_id)
+        self.assertEqual(a_entry["customer_name"], "Bob Jones")
+        self.assertAlmostEqual(a_entry["balance_due"], 75.0)
+        self.assertEqual(assigned["available_count"], 1)
+
+        # Customer detail shows assigned bird history
+        c_detail = self.c.get(f"/customers?selected={c2['id']}").text
+        self.assertIn("Thanksgiving Turkeys", c_detail)
+        self.assertIn("20.00 lb", c_detail)
+
+        # Public picking page: closed before enabled
+        anon = TestClient(app)
+        self.assertIn("Picking is currently closed", anon.get(f"/pick/{slug}").text)
+
+        # Enable public picking with 1-bird-per-customer limit
+        self.assertEqual(
+            self.c.post(f"/api/batches/{bid}/picking", json={"picking_enabled": True, "max_birds_per_customer": 1}).status_code,
+            200,
+        )
+        pick_html = anon.get(f"/pick/{slug}").text
+        self.assertIn("Thanksgiving Turkeys", pick_html)
+        self.assertIn("16.0", pick_html)       # for-sale bird visible
+        self.assertNotIn("18.0", pick_html)    # not-for-sale bird completely hidden
+        self.assertNotIn("Bob Jones", pick_html)  # buyer privacy preserved!
+
+        # Identify-first flow matches existing customer Sarah by phone & claims Bird #2 atomically
+        ident_sarah = anon.post(f"/api/pick/{slug}/identify", json={"name": "Sarah Miller", "contact": "(555) 123-4567"}).json()
+        r_claim = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_sarah["customer_id"]})
+        self.assertEqual(r_claim.status_code, 200)
+        self.assertAlmostEqual(r_claim.json()["bird"]["est_price"], 80.0)
+
+        # Double-booking protection: another customer trying to claim Bird #2 gets 409 Conflict
+        ident_other = anon.post(f"/api/pick/{slug}/identify", json={"name": "Late Buyer", "contact": "late@example.com"}).json()
+        r_dup = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_other["customer_id"]})
+        self.assertEqual(r_dup.status_code, 409)
+        self.assertIn("Someone just grabbed that bird", r_dup.json()["detail"])
+
+        # Limit check: Sarah trying to claim a 2nd bird (even if another available bird is added) gets 409
+        b4 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 17.5, "for_sale": True}).json()
+        bird4_id = b4["entries"][0]["id"]
+        r_lim = anon.post(f"/api/pick/{slug}/claim/{bird4_id}", json={"customer_id": ident_sarah["customer_id"]})
+        self.assertEqual(r_lim.status_code, 409)
+        self.assertIn("Limit of 1", r_lim.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()
