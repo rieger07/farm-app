@@ -69,10 +69,13 @@
     <form method="get" class="right">
       <input type="hidden" name="period" value="{{ period }}">
       {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+      {% if period == 'day' %}<input type="hidden" name="date" value="{{ market_date }}">{% endif %}
       <select name="source" onchange="this.form.submit()">
-        <option value="all">All sources</option>
-        <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle</option>
-        <option value="cash" {{ 'selected' if source=='cash' }}>Cash</option>
+        <option value="all" {{ 'selected' if source=='all' }}>All transactions</option>
+        <option value="cash" {{ 'selected' if source=='cash' }}>Cash (Zettle + Quick sale)</option>
+        <option value="card" {{ 'selected' if source=='card' }}>Card (Zettle)</option>
+        <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle (all)</option>
+        <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale only</option>
       </select>
     </form>
   </div>
@@ -111,7 +114,7 @@
 
   <div class="foot">
     <span>Showing {{ txns|length }} of {{ total_count }}. Zettle sales appear automatically. Cash sales come from Quick sale.</span>
-    {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
+    {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% elif period == 'day' %}&date={{ market_date }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
   </div>
 </div>
 

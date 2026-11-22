@@ -801,9 +801,10 @@ def sales_export(
     source: str = "all",
     date_from: str = Query("", alias="from"),
     date_to: str = Query("", alias="to"),
+    market_date: str = Query("", alias="date"),
     ctx: Ctx = Depends(require("sales")),
 ):
-    rng = _sales_query(period, date_from, date_to)
+    rng = _sales_query(period, date_from, date_to, market_date)
     rows = export_rows(
         ctx.merchant_id, rng["since"], rng["until"], None if source == "all" else source
     )

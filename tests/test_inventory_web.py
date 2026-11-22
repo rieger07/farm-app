@@ -593,6 +593,14 @@ class WebTest(unittest.TestCase):
         today_str = datetime.now().strftime("%Y-%m-%d")
         self.assertEqual(c.get(f"/sales?period=day&date={today_str}").status_code, 200)
 
+        # Cash filter includes Zettle cash transactions (and excludes card); Card filter shows only card
+        cash_only_html = c.get("/sales?period=today&source=cash").text
+        self.assertIn("$15.00", cash_only_html)
+        self.assertNotIn("Card charge", cash_only_html)
+        card_only_html = c.get("/sales?period=today&source=card").text
+        self.assertIn("$15.75", card_only_html)
+        self.assertIn("Card charge", card_only_html)
+
         # Quick sale usability: sticky cart bar, hide out of stock, fast cash buttons
         qs_html = c.get("/quick-sale").text
         self.assertIn("sticky-cart", qs_html)

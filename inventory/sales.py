@@ -199,17 +199,28 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
     return out
 
 
+def _source_filter_clause(source: str | None, alias: str = "") -> str:
+    p = f"{alias}." if alias else ""
+    if source == "cash":
+        return f" AND ({p}source = 'cash' OR LOWER(COALESCE({p}payment_type, '')) = 'cash')"
+    if source == "card":
+        return f" AND ({p}source = 'zettle' AND LOWER(COALESCE({p}payment_type, '')) != 'cash')"
+    if source == "zettle":
+        return f" AND {p}source = 'zettle'"
+    if source == "quick_sale":
+        return f" AND {p}source = 'cash'"
+    return ""
+
+
 def count_sales(
     merchant_id: int, since_iso: str, until_iso: str, source: str | None = None
 ) -> int:
     sql = (
         "SELECT COUNT(*) FROM sales WHERE merchant_id = ?"
         " AND occurred_at >= ? AND occurred_at < ?"
+        + _source_filter_clause(source)
     )
     args: list = [int(merchant_id), since_iso, until_iso]
-    if source in ("zettle", "cash"):
-        sql += " AND source = ?"
-        args.append(source)
     conn = get_connection()
     try:
         return int(conn.execute(sql, args).fetchone()[0])
@@ -231,11 +242,9 @@ def recent_sales(
         "   WHERE si.sale_id = s.id AND COALESCE(k.item_type, 'product') != 'fee'"
         " ), 0) AS units"
         " FROM sales s WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
+        + _source_filter_clause(source, alias="s")
     )
     args: list = [int(merchant_id), since_iso, until_iso]
-    if source in ("zettle", "cash"):
-        sql += " AND s.source = ?"
-        args.append(source)
     sql += " ORDER BY s.occurred_at DESC, s.id DESC LIMIT ? OFFSET ?"
     args += [int(limit), int(offset)]
     conn = get_connection()
@@ -288,11 +297,9 @@ def export_rows(
         " LEFT JOIN sale_items i ON i.sale_id = s.id"
         " LEFT JOIN users u ON u.id = s.created_by"
         " WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
+        + _source_filter_clause(source, alias="s")
     )
     args: list = [int(merchant_id), since_iso, until_iso]
-    if source in ("zettle", "cash"):
-        sql += " AND s.source = ?"
-        args.append(source)
     sql += " ORDER BY s.occurred_at ASC, s.id ASC, i.id ASC"
     conn = get_connection()
     try:
