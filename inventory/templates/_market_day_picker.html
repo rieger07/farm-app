@@ -65,11 +65,26 @@
     }
   }
 
+  function positionPop() {
+    const trig = document.getElementById('cal-trigger');
+    const pop = document.getElementById('cal-pop');
+    if (!trig || !pop) return;
+    const rect = trig.getBoundingClientRect();
+    const popW = 276;
+    const left = Math.max(12, Math.min(window.innerWidth - popW - 12, rect.right - popW));
+    const top = Math.min(window.innerHeight - 310, rect.bottom + 6);
+    pop.style.left = left + 'px';
+    pop.style.top = Math.max(12, top) + 'px';
+  }
+
   window.toggleMarketCal = (e) => {
     e.stopPropagation();
     const pop = document.getElementById('cal-pop');
     pop.hidden = !pop.hidden;
-    if (!pop.hidden) renderCal();
+    if (!pop.hidden) {
+      renderCal();
+      positionPop();
+    }
   };
   window.shiftCalMonth = (delta) => {
     viewM += delta;

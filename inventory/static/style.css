@@ -228,8 +228,8 @@ details.collapse-card > summary::-webkit-details-marker { display: none; }
 details.collapse-card > summary .chev { color: var(--muted); transition: transform .15s; font-size: 13px; }
 details.collapse-card[open] > summary { border-bottom: 1px solid var(--line); }
 details.collapse-card[open] > summary .chev { transform: rotate(180deg); }
-.cal-wrap { position: relative; display: inline-block; }
-.cal-pop { position: absolute; right: 0; top: calc(100% + 6px); width: 276px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: 0 14px 32px rgba(31,58,45,.18); z-index: 40; }
+.cal-wrap { position: relative; display: inline-block; flex-shrink: 0; }
+.cal-pop { position: fixed; width: 276px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: 0 14px 32px rgba(31,58,45,.2); z-index: 60; }
 .cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .cal-dow, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; text-align: center; }
 .cal-dow { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
