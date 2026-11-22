@@ -82,12 +82,12 @@
     </div>
     <div class="batch-stats">
       <div><small>Surviving</small><b>{{ s.surviving_quantity }} / {{ s.initial_quantity }}</b></div>
-      <div><small>Harvested</small><b>{{ s.harvested_head }} head</b></div>
+      <div><small>Harvested</small><b>{{ s.harvested_head }} head{% if s.actual_dressed_lbs %} · {{ '%.1f'|format(s.actual_dressed_lbs) }} lb{% endif %}</b></div>
       <div><small>Est. Profit</small><b>${{ '%.0f'|format(s.estimated_profit) }}</b></div>
     </div>
     <div class="batch-actions">
       <button type="button" class="btn sm" onclick='openQuickLog("loss", {{ b.id }}, {{ b.name|tojson }})'>− Loss</button>
-      <button type="button" class="btn sm" onclick='openQuickLog("harvest", {{ b.id }}, {{ b.name|tojson }})'>+ Harvest</button>
+      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Harvest tally</a>
       <button type="button" class="btn sm" onclick='openQuickLog("feed", {{ b.id }}, {{ b.name|tojson }}, {{ b.starter_bag_price or 24 }}, {{ b.grower_bag_price or 22 }})'>+ Feed</button>
       <a href="/batches/{{ b.id }}" class="btn sm right">Details →</a>
     </div>

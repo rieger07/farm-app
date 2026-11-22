@@ -8,6 +8,7 @@
     <p class="sub">{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</p>
   </div>
   <div class="row">
+    <a href="/batches/{{ b.id }}/harvest" class="btn primary">Harvest tally</a>
     {% if gcal_arrival_url %}<a href="{{ gcal_arrival_url }}" target="_blank" rel="noopener" class="btn">GCal: {{ s.initial_label }}</a>{% endif %}
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
     <button type="button" class="btn" onclick='openEditBatchModal({{ b|tojson }})'>Edit batch</button>
@@ -53,7 +54,14 @@
   </div>
 
   <div class="card">
-    <h2>Harvests &amp; Processing</h2>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin:0">Harvests &amp; Processing</h2>
+      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Open Harvest Tally →</a>
+    </div>
+    <p class="sub" style="margin-bottom:12px">
+      Harvested: <b>{{ s.harvested_head }} / {{ s.surviving_quantity }} head</b> ({{ [0, s.surviving_quantity - s.harvested_head]|max }} left)
+      · Total: <b>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb</b>{% if s.harvested_head > 0 %} (avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/head){% endif %}
+    </p>
     <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
       <input type="hidden" name="batch_id" value="{{ b.id }}">
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
@@ -79,6 +87,15 @@
       {% else %}
         <tr><td colspan="6" class="empty">No harvests recorded.</td></tr>
       {% endfor %}
+      {% if harvests %}
+        <tr style="background:#faf9f3;font-weight:600">
+          <td>Total</td>
+          <td class="num">{{ s.harvested_head }}</td>
+          <td class="num">{{ '%.1f'|format(s.actual_dressed_lbs) }}</td>
+          <td class="num">${{ '%.2f'|format(harvests|sum(attribute='processing_cost_total')) }}</td>
+          <td colspan="2"><small class="inline muted">{% if s.harvested_head > 0 %}avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/hd{% endif %}</small></td>
+        </tr>
+      {% endif %}
       </tbody>
     </table>
   </div>

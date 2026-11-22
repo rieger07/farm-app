@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Harvest Tally · {{ b.name }} · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="pagehead">
+  <div>
+    <h1>Harvest Tally</h1>
+    <p class="sub">{{ b.name }} · {{ b.species|title }} · Scale bird-by-bird as they're bagged</p>
+  </div>
+  <div class="row">
+    <button type="button" class="btn sm" id="copy-weights-btn" onclick="copyHarvestList()">Copy list</button>
+    <a href="/batches/{{ b.id }}/harvest.csv" class="btn sm">Export CSV</a>
+  </div>
+</div>
+
+<!-- Pinned live running tally bar -->
+<div class="card" style="position:sticky;top:10px;z-index:10;box-shadow:0 8px 24px rgba(31,58,45,.08)">
+  <div class="cards four" style="margin-bottom:10px">
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <small>Harvested</small>
+      <div style="font:600 22px Georgia,serif" id="t-head">{{ tally.harvested_head }} / {{ tally.surviving_quantity }}</div>
+      <small id="t-rem">{{ tally.remaining_head }} remaining</small>
+    </div>
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <small>Total dressed</small>
+      <div style="font:600 22px Georgia,serif;color:var(--green)" id="t-lbs">{{ '%.1f'|format(tally.total_lbs) }} lb</div>
+      <small>Est. {{ '%.1f'|format(tally.est_total_lbs) }} lb</small>
+    </div>
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <small>Avg / bird</small>
+      <div style="font:600 22px Georgia,serif" id="t-avg">{{ '%.2f'|format(tally.avg_lbs) }} lb</div>
+      <small id="t-minmax">{% if tally.entries %}{{ '%.1f'|format(tally.min_lbs) }}–{{ '%.1f'|format(tally.max_lbs) }} lb{% else %}—{% endif %}</small>
+    </div>
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <small>Est. value</small>
+      <div style="font:600 22px Georgia,serif" id="t-val">${{ '{:,.0f}'.format(tally.est_value) }}</div>
+      <small>@ ${{ '%.2f'|format(tally.sale_price_per_lb) }}/lb</small>
+    </div>
+  </div>
+  <div style="height:8px;background:#eeece1;border-radius:999px;overflow:hidden">
+    <div id="t-bar" style="height:100%;background:var(--green);width:{{ tally.progress_pct }}%;transition:width .2s"></div>
+  </div>
+</div>
+
+<!-- Fast bird-by-bird scale entry -->
+<div class="card">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="margin:0">Log next bird</h2>
+    <div class="row" style="gap:6px">
+      <button type="button" class="btn sm primary" id="mode-dec" onclick="setWeightMode('dec')">Decimal lb</button>
+      <button type="button" class="btn sm" id="mode-lboz" onclick="setWeightMode('lboz')">lb + oz</button>
+    </div>
+  </div>
+  <form id="tally-form" class="fgrid" onsubmit="submitBird(event)">
+    <div id="dec-wrap" class="full">
+      <label>Dressed weight (lb)
+        <input id="w-dec" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="e.g. 18.4" style="font:600 22px/1.2 Georgia,serif;padding:12px" autofocus>
+      </label>
+    </div>
+    <label id="lb-wrap" hidden>Pounds (lb)
+      <input id="w-lb" type="number" step="1" min="0" inputmode="numeric" placeholder="e.g. 18" style="font:600 22px/1.2 Georgia,serif;padding:12px">
+    </label>
+    <label id="oz-wrap" hidden>Ounces (oz)
+      <input id="w-oz" type="number" step="0.1" min="0" max="15.9" inputmode="decimal" placeholder="0–15" style="font:600 22px/1.2 Georgia,serif;padding:12px">
+    </label>
+    <label>Notes (optional)<input id="w-notes" placeholder="Tom, hen, customer name..."></label>
+    <label>Date<input id="w-date" type="date" value="{{ today_iso }}" required></label>
+    <div class="full row" style="justify-content:space-between;align-items:center;margin-top:4px">
+      <button type="button" class="btn sm" id="undo-btn" onclick="undoLast()" {{ 'disabled' if not tally.entries }} style="color:var(--redink)">↩ Undo last bird</button>
+      <button type="submit" class="btn primary" id="add-bird-btn" style="padding:11px 22px;font-size:15px">+ Add bird</button>
+    </div>
+  </form>
+  <small id="t-err" style="color:var(--redink);margin-top:8px" hidden></small>
+</div>
+
+<!-- Live bird list -->
+<div class="card table-card">
+  <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+    <b>Weighed birds</b>
+    <small id="t-count">{{ tally.entries|length }} entr{{ 'y' if tally.entries|length == 1 else 'ies' }}</small>
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>Date</th><th class="num">Weight (lb)</th><th>lb + oz</th><th>Notes</th><th></th></tr></thead>
+    <tbody id="t-rows"></tbody>
+  </table>
+</div>
+
+<script id="tally-init" type="application/json">{{ tally|tojson }}</script>
+<script>
+let TALLY = JSON.parse(document.getElementById('tally-init').textContent);
+let MODE = 'dec';
+const BATCH_ID = {{ b.id }};
+
+function setWeightMode(m) {
+  MODE = m;
+  document.getElementById('dec-wrap').hidden = m !== 'dec';
+  document.getElementById('lb-wrap').hidden = m !== 'lboz';
+  document.getElementById('oz-wrap').hidden = m !== 'lboz';
+  document.getElementById('mode-dec').classList.toggle('primary', m === 'dec');
+  document.getElementById('mode-lboz').classList.toggle('primary', m === 'lboz');
+  (m === 'dec' ? document.getElementById('w-dec') : document.getElementById('w-lb')).focus();
+}
+
+function renderTally(t) {
+  TALLY = t;
+  document.getElementById('t-head').textContent = `${t.harvested_head} / ${t.surviving_quantity}`;
+  document.getElementById('t-rem').textContent = `${t.remaining_head} remaining`;
+  document.getElementById('t-lbs').textContent = `${Number(t.total_lbs).toFixed(1)} lb`;
+  document.getElementById('t-avg').textContent = `${Number(t.avg_lbs).toFixed(2)} lb`;
+  document.getElementById('t-minmax').textContent = t.entries.length ? `${Number(t.min_lbs).toFixed(1)}–${Number(t.max_lbs).toFixed(1)} lb` : '—';
+  document.getElementById('t-val').textContent = '$' + Math.round(t.est_value).toLocaleString();
+  document.getElementById('t-bar').style.width = `${t.progress_pct}%`;
+  document.getElementById('undo-btn').disabled = !t.entries.length;
+  document.getElementById('t-count').textContent = `${t.entries.length} ${t.entries.length === 1 ? 'entry' : 'entries'}`;
+
+  const tb = document.getElementById('t-rows');
+  tb.innerHTML = '';
+  if (!t.entries.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty">Weigh your first bird above to start the tally.</td></tr>';
+    return;
+  }
+  t.entries.forEach(e => {
+    const tr = document.createElement('tr');
+    const headTag = e.head_count > 1 ? ` <small class="inline">(${e.head_count} head)</small>` : '';
+    tr.innerHTML = `<td><b>#${e.num}</b>${headTag}</td><td>${e.harvest_date}</td><td class="num"><b>${Number(e.dressed_lbs).toFixed(2)}</b></td><td><small class="inline">${e.lb_oz}</small></td><td></td><td class="num"><button type="button" class="link" onclick="removeBird(${e.id})">Remove</button></td>`;
+    tr.children[4].textContent = e.notes || '—';
+    tb.appendChild(tr);
+  });
+}
+
+async function submitBird(ev) {
+  ev.preventDefault();
+  const errEl = document.getElementById('t-err');
+  errEl.hidden = true;
+  let lbs = 0;
+  if (MODE === 'dec') {
+    lbs = parseFloat(document.getElementById('w-dec').value || '0');
+  } else {
+    const whole = parseFloat(document.getElementById('w-lb').value || '0') || 0;
+    const oz = parseFloat(document.getElementById('w-oz').value || '0') || 0;
+    lbs = whole + (oz / 16.0);
+  }
+  if (!lbs || lbs <= 0) {
+    errEl.textContent = 'Enter a weight greater than 0.';
+    errEl.hidden = false;
+    return;
+  }
+  const btn = document.getElementById('add-bird-btn');
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/batches/${BATCH_ID}/harvest`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        harvest_date: document.getElementById('w-date').value,
+        head_count: 1,
+        dressed_lbs: Math.round(lbs * 100) / 100,
+        notes: document.getElementById('w-notes').value.trim(),
+      }),
+    });
+    if (!resp.ok) throw new Error('Failed to save harvest entry.');
+    const data = await resp.json();
+    renderTally(data);
+    document.getElementById('w-dec').value = '';
+    document.getElementById('w-lb').value = '';
+    document.getElementById('w-oz').value = '';
+    document.getElementById('w-notes').value = '';
+    (MODE === 'dec' ? document.getElementById('w-dec') : document.getElementById('w-lb')).focus();
+  } catch (e) {
+    errEl.textContent = e.message || 'Error saving bird.';
+    errEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function removeBird(id) {
+  const resp = await fetch(`/api/batches/${BATCH_ID}/harvest/${id}`, { method: 'DELETE' });
+  if (resp.ok) renderTally(await resp.json());
+}
+
+async function undoLast() {
+  if (!TALLY.entries.length) return;
+  await removeBird(TALLY.entries[0].id);
+}
+
+function copyHarvestList() {
+  const header = `${TALLY.batch_name} — ${TALLY.harvested_head}/${TALLY.surviving_quantity} harvested · ${Number(TALLY.total_lbs).toFixed(1)} lb total (avg ${Number(TALLY.avg_lbs).toFixed(2)} lb)`;
+  const rows = [...TALLY.entries].reverse().map(e => `#${e.num}: ${Number(e.dressed_lbs).toFixed(2)} lb (${e.lb_oz})${e.notes ? ' — ' + e.notes : ''}`);
+  navigator.clipboard && navigator.clipboard.writeText([header, ...rows].join('\n'));
+  const b = document.getElementById('copy-weights-btn');
+  if (b) { b.textContent = 'Copied!'; setTimeout(() => { b.textContent = 'Copy list'; }, 1500); }
+}
+
+renderTally(TALLY);
+</script>
+{% endblock %}

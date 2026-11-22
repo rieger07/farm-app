@@ -159,6 +159,36 @@ class FarmWebTest(unittest.TestCase):
             self.assertTrue(mock_up.called)
         self.assertIn("https://drive.google.com/file/d/drv999/view", self.c.get("/financials").text)
 
+        # Harvest Tally page + live bird-by-bird API + Undo + CSV export
+        from homestead.database import list_batches
+        bid = list_batches()[0]["id"]
+        ht_html = self.c.get(f"/batches/{bid}/harvest").text
+        self.assertIn("Harvest Tally", ht_html)
+        self.assertIn("Decimal lb", ht_html)
+        self.assertIn("lb + oz", ht_html)
+
+        r_add = self.c.post(f"/api/batches/{bid}/harvest", json={
+            "harvest_date": "2026-11-22",
+            "head_count": 1,
+            "dressed_lbs": 19.75,
+            "notes": "Big tom",
+        })
+        self.assertEqual(r_add.status_code, 200)
+        t_data = r_add.json()
+        self.assertGreaterEqual(t_data["harvested_head"], 1)
+        self.assertEqual(t_data["entries"][0]["lb_oz"], "19 lb 12 oz")
+
+        csv_h = self.c.get(f"/batches/{bid}/harvest.csv")
+        self.assertEqual(csv_h.status_code, 200)
+        self.assertIn("19.75", csv_h.text)
+        self.assertIn("19 lb 12 oz", csv_h.text)
+
+        # Undo (delete) that bird
+        hid = t_data["entries"][0]["id"]
+        r_del = self.c.delete(f"/api/batches/{bid}/harvest/{hid}")
+        self.assertEqual(r_del.status_code, 200)
+        self.assertEqual(r_del.json()["harvested_head"], t_data["harvested_head"] - 1)
+
 
 if __name__ == "__main__":
     unittest.main()
