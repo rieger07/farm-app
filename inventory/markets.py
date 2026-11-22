@@ -336,3 +336,186 @@ def marketplace_analytics(
         "market_day_rows": market_day_rows,
         "untagged_days": untagged_days,
     }
+
+
+def _estimate_tender_cents(total_cents: int) -> int:
+    if total_cents <= 0:
+        return 0
+    if total_cents < 1000:
+        return 1000
+    if total_cents == 1000:
+        return 2000
+    if total_cents <= 2000:
+        return 2000
+    if total_cents <= 4000:
+        return 4000
+    if total_cents <= 5000:
+        return 5000
+    return ((total_cents + 1999) // 2000) * 2000
+
+
+def _round_up_mult(val: float, step: int, minimum: int = 0) -> int:
+    import math
+    n = max(minimum, math.ceil(val))
+    if step <= 1:
+        return n
+    return ((n + step - 1) // step) * step
+
+
+def _fmt_price_short(cents: int) -> str:
+    return f"${cents // 100}" if cents % 100 == 0 else f"${cents / 100:.2f}"
+
+
+def recommend_cash_drawer(
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    tz,
+    utc_windows: list[tuple[str, str]] | None = None,
+) -> dict:
+    """Estimate a recommended cash drawer float & bill breakdown from cash history + product prices."""
+    from inventory.sales import _window_filter
+
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
+    conn = get_connection()
+    try:
+        cash_sales = conn.execute(
+            f"""
+            SELECT s.occurred_at, s.total_cents, s.cash_received_cents
+            FROM sales s
+            WHERE s.merchant_id = ? AND s.status = 'completed'
+              AND (s.source = 'cash' OR LOWER(COALESCE(s.payment_type, '')) = 'cash')
+              AND s.total_cents > 0
+              AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
+            """,
+            [int(merchant_id), since_iso, until_iso, *win_args],
+        ).fetchall()
+
+        sold_prices = conn.execute(
+            f"""
+            SELECT si.unit_price_cents, SUM(si.quantity) AS q
+            FROM sale_items si
+            JOIN sales s ON s.id = si.sale_id
+            LEFT JOIN skus k ON k.id = si.sku_id
+            WHERE s.merchant_id = ? AND s.status = 'completed'
+              AND COALESCE(k.item_type, 'product') != 'fee'
+              AND si.unit_price_cents > 0
+              AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
+            GROUP BY si.unit_price_cents
+            ORDER BY q DESC
+            LIMIT 6
+            """,
+            [int(merchant_id), since_iso, until_iso, *win_args],
+        ).fetchall()
+
+        if not sold_prices:
+            sold_prices = conn.execute(
+                """
+                SELECT price_cents AS unit_price_cents, 1 AS q
+                FROM skus
+                WHERE merchant_id = ? AND active = 1
+                  AND COALESCE(item_type, 'product') != 'fee'
+                  AND price_cents > 0
+                ORDER BY price_cents ASC
+                LIMIT 6
+                """,
+                (int(merchant_id),),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    price_list = [int(r["unit_price_cents"]) for r in sold_prices if int(r["unit_price_cents"]) > 0]
+    sample_prices = [_fmt_price_short(p) for p in sorted(set(price_list))[:5]]
+    has_cents = any(p % 100 != 0 for p in price_list)
+    has_small_coins = any(p % 25 != 0 for p in price_list)
+
+    if not cash_sales:
+        # Starter recommendation derived purely from catalog pricing
+        ones = 20
+        fives = 8
+        tens = 2
+        quarters = 20 if has_cents else 0
+        small_cents = 200 if has_small_coins else 0
+        total_cents = tens * 1000 + fives * 500 + ones * 100 + quarters * 25 + small_cents
+        denoms = [
+            {"label": "$1 bills", "count": ones, "cents": ones * 100},
+            {"label": "$5 bills", "count": fives, "cents": fives * 500},
+            {"label": "$10 bills", "count": tens, "cents": tens * 1000},
+        ]
+        if quarters:
+            denoms.append({"label": "Quarters", "count": quarters, "cents": quarters * 25})
+        if small_cents:
+            denoms.append({"label": "Dimes / nickels / pennies", "count": None, "cents": small_cents})
+        return {
+            "has_history": False,
+            "cash_days": 0,
+            "avg_cash_txns": 0.0,
+            "avg_cash_cents": 0,
+            "recommended_total_cents": total_cents,
+            "denominations": denoms,
+            "needs_coins": bool(quarters or small_cents),
+            "sample_prices": sample_prices,
+        }
+
+    days_seen: set[str] = set()
+    total_cash_cents = 0
+    sum_tens = 0
+    sum_fives = 0
+    sum_ones = 0
+    sum_quarters = 0
+    sum_small = 0
+
+    for row in cash_sales:
+        dt = datetime.fromisoformat(str(row["occurred_at"]).replace("Z", "")[:19]).replace(tzinfo=timezone.utc)
+        days_seen.add(dt.astimezone(tz).date().isoformat())
+        tot = int(row["total_cents"] or 0)
+        total_cash_cents += tot
+        if tot % 100 != 0:
+            has_cents = True
+        if tot % 25 != 0:
+            has_small_coins = True
+        rec = row["cash_received_cents"]
+        if rec is not None and int(rec) >= tot:
+            change = int(rec) - tot
+        else:
+            change = max(0, _estimate_tender_cents(tot) - tot)
+        rem = change
+        sum_tens += rem // 1000
+        rem %= 1000
+        sum_fives += rem // 500
+        rem %= 500
+        sum_ones += rem // 100
+        rem %= 100
+        sum_quarters += rem // 25
+        rem %= 25
+        sum_small += rem
+
+    n_days = max(1, len(days_seen))
+    buf = 1.3  # 30% morning-rush safety buffer
+    ones = _round_up_mult((sum_ones / n_days) * buf, step=5, minimum=15)
+    fives = _round_up_mult((sum_fives / n_days) * buf, step=2, minimum=6)
+    tens = _round_up_mult((sum_tens / n_days) * buf, step=1, minimum=2)
+    quarters = _round_up_mult((sum_quarters / n_days) * buf, step=4, minimum=20) if has_cents else 0
+    small_cents = _round_up_mult((sum_small / n_days) * buf, step=100, minimum=200) if has_small_coins else 0
+
+    total_cents = tens * 1000 + fives * 500 + ones * 100 + quarters * 25 + small_cents
+    denoms = [
+        {"label": "$1 bills", "count": ones, "cents": ones * 100},
+        {"label": "$5 bills", "count": fives, "cents": fives * 500},
+        {"label": "$10 bills", "count": tens, "cents": tens * 1000},
+    ]
+    if quarters:
+        denoms.append({"label": "Quarters", "count": quarters, "cents": quarters * 25})
+    if small_cents:
+        denoms.append({"label": "Dimes / nickels / pennies", "count": None, "cents": small_cents})
+
+    return {
+        "has_history": True,
+        "cash_days": n_days,
+        "avg_cash_txns": round(len(cash_sales) / n_days, 1),
+        "avg_cash_cents": round(total_cash_cents / n_days),
+        "recommended_total_cents": total_cents,
+        "denominations": denoms,
+        "needs_coins": bool(quarters or small_cents),
+        "sample_prices": sample_prices,
+    }

@@ -682,6 +682,12 @@ class WebTest(unittest.TestCase):
         self.assertIn("$65.00", ins_after)
         self.assertIn("Sunny", ins_after)
         self.assertIn("Great turnout", ins_after)
+        self.assertIn("Recommended cash drawer", ins_after)
+        self.assertIn("$1 bills", ins_after)
+        self.assertIn("30% morning-rush buffer", ins_after)
+
+        ins_montclair = c.get(f"/insights?period=quarter&marketplace={montclair['id']}").text
+        self.assertIn("Starter float estimate", ins_montclair)
 
         # 4. Marketplace filter on Sales & Insights scopes to assigned days
         sales_sussex = c.get(f"/sales?period=today&marketplace={sussex['id']}").text

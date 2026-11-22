@@ -49,6 +49,33 @@
   <div class="card"><small>Sell-outs</small><div class="big">{{ insights.sellouts|length }}</div><small>Hit 0 left in range</small></div>
 </div>
 
+<div class="card" style="margin-bottom:16px">
+  <div class="row" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+    <div>
+      <b>Recommended cash drawer</b>
+      <small class="inline muted" style="margin-left:6px">{{ selected_mp_name or 'All markets' }} · {{ period_label }}</small>
+    </div>
+    <div style="font:600 24px Georgia,serif;color:var(--green)">{{ drawer.recommended_total_cents|money }}</div>
+  </div>
+  <div class="chips" style="margin-bottom:10px">
+    {% for d in drawer.denominations %}
+    <span class="pill {{ 'green' if loop.index <= 3 else 'amber' }}">
+      {% if d.count is not none %}{{ d.count }} × {% endif %}{{ d.label }} ({{ d.cents|money }})
+    </span>
+    {% endfor %}
+    {% if not drawer.needs_coins %}
+    <span class="pill" style="background:#f3f1e7;color:var(--muted)">No coins needed (whole-dollar pricing)</span>
+    {% endif %}
+  </div>
+  <small class="muted">
+    {% if drawer.has_history %}
+      Based on ~{{ drawer.avg_cash_txns }} cash sales/day ({{ drawer.avg_cash_cents|money }} avg across {{ drawer.cash_days }} market day{{ '' if drawer.cash_days == 1 else 's' }}){% if drawer.sample_prices %} and typical prices ({{ drawer.sample_prices|join(', ') }}){% endif %}, including a 30% morning-rush buffer.
+    {% else %}
+      Starter float estimate{% if drawer.sample_prices %} based on your catalog prices ({{ drawer.sample_prices|join(', ') }}){% endif %}. Record cash sales and tag market days to tailor this per location.
+    {% endif %}
+  </small>
+</div>
+
 <div class="card table-card" style="margin-bottom:16px">
   <div class="filters">
     <b>Marketplace comparison</b>
