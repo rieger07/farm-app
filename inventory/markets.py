@@ -519,3 +519,102 @@ def recommend_cash_drawer(
         "needs_coins": bool(quarters or small_cents),
         "sample_prices": sample_prices,
     }
+
+
+def suggest_pack_list(
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    tz,
+    utc_windows: list[tuple[str, str]] | None = None,
+) -> dict:
+    """Build a suggested pack list per market day with 1.25x (or 1.5x if sold out) buffer & stock shortage flags."""
+    import math
+    from inventory.sales import _window_filter
+    from inventory.stock import fmt_qty
+
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT s.occurred_at, si.sku_id, si.name_snapshot, si.quantity,
+                   COALESCE(k.sell_mode, 'unit') AS sell_mode
+            FROM sale_items si
+            JOIN sales s ON s.id = si.sale_id
+            LEFT JOIN skus k ON k.id = si.sku_id
+            WHERE s.merchant_id = ? AND s.status = 'completed'
+              AND COALESCE(k.item_type, 'product') != 'fee'
+              AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
+            """,
+            [int(merchant_id), since_iso, until_iso, *win_args],
+        ).fetchall()
+
+        stock_rows = conn.execute(
+            """
+            SELECT k.id AS sku_id,
+                   COALESCE(SUM(l.delta), 0) AS on_hand
+            FROM skus k
+            LEFT JOIN stock_ledger l ON l.sku_id = k.id
+            WHERE k.merchant_id = ? AND k.active = 1
+              AND COALESCE(k.item_type, 'product') != 'fee'
+            GROUP BY k.id
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    on_hand_by_sku = {int(r["sku_id"]): float(r["on_hand"] or 0) for r in stock_rows}
+    days_seen: set[str] = set()
+    by_key: dict[tuple, dict] = {}
+
+    for r in rows:
+        dt = datetime.fromisoformat(str(r["occurred_at"]).replace("Z", "")[:19]).replace(tzinfo=timezone.utc)
+        days_seen.add(dt.astimezone(tz).date().isoformat())
+        sid = int(r["sku_id"]) if r["sku_id"] is not None else None
+        name = str(r["name_snapshot"] or "Item")
+        key = (sid, name)
+        entry = by_key.setdefault(
+            key,
+            {"sku_id": sid, "name": name, "sell_mode": r["sell_mode"] or "unit", "total_qty": 0.0},
+        )
+        entry["total_qty"] += float(r["quantity"] or 0)
+
+    n_days = len(days_seen)
+    if not n_days:
+        return {"days": 0, "items": [], "short_count": 0}
+
+    items = []
+    short_count = 0
+    for entry in by_key.values():
+        sid = entry["sku_id"]
+        avg_day = entry["total_qty"] / n_days
+        on_hand = on_hand_by_sku.get(sid) if sid is not None else None
+        sold_out = on_hand is not None and on_hand <= 1e-6
+        mult = 1.5 if sold_out else 1.25
+        if entry["sell_mode"] == "lb_stock_lb":
+            pack_qty = fmt_qty(math.ceil(avg_day * mult * 2) / 2.0)
+            unit = "lb"
+        else:
+            pack_qty = max(1, math.ceil(avg_day * mult))
+            unit = "units"
+        short_by = 0
+        if on_hand is not None and on_hand < pack_qty:
+            short_by = fmt_qty(pack_qty - max(0.0, on_hand))
+            if short_by > 0:
+                short_count += 1
+        items.append(
+            {
+                "key": f"{sid or 'x'}:{entry['name']}",
+                "name": entry["name"],
+                "avg_per_day": round(avg_day, 1),
+                "pack_qty": pack_qty,
+                "unit": unit,
+                "on_hand": fmt_qty(on_hand) if on_hand is not None else None,
+                "sold_out": sold_out,
+                "short_by": short_by,
+            }
+        )
+    items.sort(key=lambda x: (-x["pack_qty"], x["name"]))
+    return {"days": n_days, "items": items, "short_count": short_count}

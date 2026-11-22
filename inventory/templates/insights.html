@@ -78,6 +78,73 @@
 
 <div class="card table-card" style="margin-bottom:16px">
   <div class="filters">
+    <div>
+      <b>Suggested pack list</b>
+      <small class="inline muted" style="margin-left:6px">{{ selected_mp_name or 'All markets' }}{% if pack_list.days %} · {{ pack_list.days }} sale day{{ '' if pack_list.days == 1 else 's' }}{% endif %}</small>
+      {% if pack_list.short_count %}<span class="pill red" style="margin-left:6px">{{ pack_list.short_count }} short</span>{% endif %}
+    </div>
+    <div class="right row" style="align-items:center">
+      <button type="button" class="link" style="padding:0" onclick="resetPackChecks()">Reset checks</button>
+      <button type="button" class="btn" style="padding:5px 10px;font-size:12px" id="copy-pack-btn" onclick="copyPackList()">Copy pack list</button>
+    </div>
+  </div>
+  <table id="pack-table">
+    <thead><tr><th style="width:32px"></th><th>Product</th><th class="num">Avg/day</th><th class="num">Pack</th><th class="num">On hand</th></tr></thead>
+    <tbody>
+    {% for it in pack_list['items'] %}
+      <tr data-pack-row data-pack-line="{{ it.pack_qty }} {{ it.unit }} — {{ it.name }}{% if it.short_by %} (SHORT {{ it.short_by }}){% endif %}">
+        <td><input type="checkbox" class="pack-chk" data-pack-key="{{ it.key }}" aria-label="Packed {{ it.name }}"></td>
+        <td>
+          <b>{{ it.name }}</b>
+          {% if it.sold_out %}<span class="pill amber" style="margin-left:6px">Sold out · 1.5×</span>{% endif %}
+        </td>
+        <td class="num">{{ it.avg_per_day }}</td>
+        <td class="num"><b>{{ it.pack_qty }}</b> <small class="inline">{{ it.unit }}</small></td>
+        <td class="num">
+          {% if it.on_hand is not none %}
+            {{ it.on_hand }}
+            {% if it.short_by %}<span class="pill red" style="margin-left:6px">Short {{ it.short_by }}</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="empty">No sales history in this period to build a pack list yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <script>
+  (function () {
+    const KEY = 'il_pack_' + {{ (selected_marketplace or 'all')|tojson }};
+    function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } }
+    function save(m) { try { localStorage.setItem(KEY, JSON.stringify(m)); } catch {} }
+    const state = load();
+    document.querySelectorAll('.pack-chk').forEach(cb => {
+      const k = cb.dataset.packKey;
+      cb.checked = !!state[k];
+      cb.closest('tr').style.opacity = cb.checked ? '0.55' : '1';
+      cb.addEventListener('change', () => {
+        state[k] = cb.checked;
+        save(state);
+        cb.closest('tr').style.opacity = cb.checked ? '0.55' : '1';
+      });
+    });
+    window.resetPackChecks = () => {
+      save({});
+      document.querySelectorAll('.pack-chk').forEach(cb => { cb.checked = false; cb.closest('tr').style.opacity = '1'; });
+    };
+    window.copyPackList = () => {
+      const title = 'Pack list — ' + {{ (selected_mp_name or 'All markets')|tojson }};
+      const lines = [title, ...Array.from(document.querySelectorAll('[data-pack-row]')).map(r => '[ ] ' + r.dataset.packLine)];
+      navigator.clipboard && navigator.clipboard.writeText(lines.join('\n'));
+      const b = document.getElementById('copy-pack-btn');
+      if (b) { b.textContent = 'Copied!'; setTimeout(() => { b.textContent = 'Copy pack list'; }, 1500); }
+    };
+  })();
+  </script>
+</div>
+
+<div class="card table-card" style="margin-bottom:16px">
+  <div class="filters">
     <b>Marketplace comparison</b>
     <a href="/settings#marketplaces" class="right link" style="padding:0">Manage marketplaces →</a>
   </div>

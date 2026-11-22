@@ -70,6 +70,7 @@ from inventory.markets import (
     recommend_cash_drawer,
     save_market_day,
     save_marketplace,
+    suggest_pack_list,
 )
 from inventory.stock import (
     ITEM_TYPES,
@@ -835,6 +836,9 @@ def insights_page(
     drawer = recommend_cash_drawer(
         ctx.merchant_id, rng["since"], rng["until"], local_tz(), utc_windows=utc_windows
     )
+    pack_list = suggest_pack_list(
+        ctx.merchant_id, rng["since"], rng["until"], local_tz(), utc_windows=utc_windows
+    )
     marketplaces = list_marketplaces(ctx.merchant_id)
     selected_mp_name = next((m["name"] for m in marketplaces if str(m["id"]) == str(mp_id or "")), "")
     for so in data["sellouts"]:
@@ -852,6 +856,7 @@ def insights_page(
         summary=summary,
         mp_analytics=mp_analytics,
         drawer=drawer,
+        pack_list=pack_list,
         marketplaces=marketplaces,
         selected_marketplace=str(mp_id or ""),
         selected_mp_name=selected_mp_name,

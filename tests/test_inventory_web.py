@@ -685,6 +685,8 @@ class WebTest(unittest.TestCase):
         self.assertIn("Recommended cash drawer", ins_after)
         self.assertIn("$1 bills", ins_after)
         self.assertIn("30% morning-rush buffer", ins_after)
+        self.assertIn("Suggested pack list", ins_after)
+        self.assertIn("Copy pack list", ins_after)
 
         ins_montclair = c.get(f"/insights?period=quarter&marketplace={montclair['id']}").text
         self.assertIn("Starter float estimate", ins_montclair)
