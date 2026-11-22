@@ -5,24 +5,42 @@
 <div class="pagehead">
   <div><h1>Insights</h1><p class="sub">{{ period_label }} · {{ insights.basket_count }} basket{{ '' if insights.basket_count == 1 else 's' }}</p></div>
 </div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
 <div class="chips" style="margin-bottom:10px;align-items:center">
-  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
-  <a class="chip {{ 'on' if period == key }}" href="/insights?period={{ key }}" style="text-decoration:none">{{ label }}</a>
+  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days'),('quarter','90 days'),('all','All time')) %}
+  <a class="chip {{ 'on' if period == key }}" href="/insights?period={{ key }}{% if selected_marketplace %}&marketplace={{ selected_marketplace }}{% endif %}" style="text-decoration:none">{{ label }}</a>
   {% endfor %}
   <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('insrange').hidden = !document.getElementById('insrange').hidden">Custom</button>
+  {% if marketplaces %}
+  <form method="get" style="display:inline-flex;align-items:center;gap:6px">
+    <input type="hidden" name="period" value="{{ period }}">
+    {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    {% if period == 'day' %}<input type="hidden" name="date" value="{{ market_date }}">{% endif %}
+    <select name="marketplace" onchange="this.form.submit()" style="padding:6px 10px;font-size:13px">
+      <option value="">All marketplaces</option>
+      {% for mp in marketplaces %}
+      <option value="{{ mp.id }}" {{ 'selected' if selected_marketplace == (mp.id|string) }}>{{ mp.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
   <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:auto">
     <input type="hidden" name="period" value="day">
+    {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
     <label style="font-size:12px;color:var(--muted)">Market day</label>
     <input type="date" name="date" value="{{ market_date }}" onchange="this.form.submit()" class="datein" style="padding:6px 10px;font-size:13px">
   </form>
 </div>
 <form id="insrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
   <input type="hidden" name="period" value="custom">
+  {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
   <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">From<input type="date" name="from" value="{{ date_from }}" required class="datein"></label>
   <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">To<input type="date" name="to" value="{{ date_to }}" required class="datein"></label>
   <button class="btn primary">Apply</button>
 </form>
+
+{% include "_market_day_banner.html" %}
 
 <div class="cards four">
   <div class="card"><small>Product sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ summary.units }} units sold</small></div>
@@ -30,6 +48,84 @@
   <div class="card"><small>Card fees collected</small><div class="big">{{ insights.fee_cents|money }}</div><small>{{ insights.fee_count }} fee line{{ '' if insights.fee_count == 1 else 's' }}</small></div>
   <div class="card"><small>Sell-outs</small><div class="big">{{ insights.sellouts|length }}</div><small>Hit 0 left in range</small></div>
 </div>
+
+<div class="card table-card" style="margin-bottom:16px">
+  <div class="filters">
+    <b>Marketplace comparison</b>
+    <a href="/settings#marketplaces" class="right link" style="padding:0">Manage marketplaces →</a>
+  </div>
+  <table>
+    <thead><tr><th>Marketplace</th><th class="num">Days</th><th class="num">Revenue</th><th class="num">Costs</th><th class="num">Net</th><th class="num">Avg/day</th><th class="num">Avg net/day</th><th>Top item</th></tr></thead>
+    <tbody>
+    {% for m in mp_analytics.comparison %}
+      <tr>
+        <td><b><a href="/insights?period={{ period }}&marketplace={{ m.marketplace_id }}" style="text-decoration:none">{{ m.name }}</a></b>{% if m.location %}<small>{{ m.location }}</small>{% endif %}</td>
+        <td class="num">{{ m.days }}</td>
+        <td class="num">{{ m.revenue_cents|money }}</td>
+        <td class="num">{{ m.cost_cents|money }}</td>
+        <td class="num"><b style="color:{{ 'var(--green)' if m.net_cents >= 0 else 'var(--redink)' }}">{{ m.net_cents|money }}</b></td>
+        <td class="num">{{ m.avg_revenue_cents|money }}</td>
+        <td class="num"><b>{{ m.avg_net_cents|money }}</b></td>
+        <td>{{ m.top_product }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty">No tagged market days in this period yet. Add marketplaces in Settings and tag your market dates below.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if mp_analytics.untagged_days and marketplaces %}
+<div class="card table-card" style="margin-bottom:16px">
+  <div class="filters"><b>Untagged sale days</b><small class="right muted">Quick-assign a marketplace</small></div>
+  <table>
+    <thead><tr><th>Date</th><th class="num">Sales</th><th class="num">Revenue</th><th>Assign marketplace</th></tr></thead>
+    <tbody>
+    {% for u in mp_analytics.untagged_days %}
+      <tr>
+        <td><b><a href="/insights?period=day&date={{ u.date }}">{{ u.date }}</a></b></td>
+        <td class="num">{{ u.txns }}</td>
+        <td class="num">{{ u.revenue_cents|money }}</td>
+        <td>
+          <form method="post" action="/market-days/save" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="market_date" value="{{ u.date }}">
+            <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <select name="marketplace_id" required style="padding:5px 8px;font-size:13px">
+              {% for mp in marketplaces %}
+              <option value="{{ mp.id }}">{{ mp.name }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn primary" style="padding:5px 10px;font-size:12px">Tag</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if mp_analytics.market_day_rows %}
+<div class="card table-card" style="margin-bottom:16px">
+  <div class="filters"><b>Past market days</b><small class="right muted">{{ mp_analytics.market_day_rows|length }} tagged</small></div>
+  <table>
+    <thead><tr><th>Date</th><th>Marketplace</th><th>Weather</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Net</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for md in mp_analytics.market_day_rows %}
+      <tr>
+        <td><b><a href="/insights?period=day&date={{ md.market_date }}">{{ md.market_date }}</a></b></td>
+        <td><b>{{ md.marketplace_name }}</b>{% if md.marketplace_location %}<small>{{ md.marketplace_location }}</small>{% endif %}</td>
+        <td>{{ md.weather or '—' }}</td>
+        <td class="num">{{ md.revenue_cents|money }}</td>
+        <td class="num">{{ md.cost_cents|money }}</td>
+        <td class="num"><b style="color:{{ 'var(--green)' if md.net_cents >= 0 else 'var(--redink)' }}">{{ md.net_cents|money }}</b></td>
+        <td>{{ md.notes or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <div class="cards two">
   <div class="card table-card">

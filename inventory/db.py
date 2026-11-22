@@ -157,6 +157,35 @@ CREATE TABLE IF NOT EXISTS billing_checkout_invites (
     plan_key TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS marketplaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    location TEXT NOT NULL DEFAULT '',
+    booth_fee_cents INTEGER NOT NULL DEFAULT 0,
+    travel_cost_cents INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_marketplaces_merchant ON marketplaces(merchant_id);
+
+CREATE TABLE IF NOT EXISTS market_days (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant_id INTEGER NOT NULL,
+    market_date TEXT NOT NULL,
+    marketplace_id INTEGER NOT NULL,
+    booth_fee_cents INTEGER NOT NULL DEFAULT 0,
+    travel_cost_cents INTEGER NOT NULL DEFAULT 0,
+    weather TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (merchant_id, market_date),
+    FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE,
+    FOREIGN KEY (marketplace_id) REFERENCES marketplaces(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_market_days_merchant_date ON market_days(merchant_id, market_date);
 """
 
 

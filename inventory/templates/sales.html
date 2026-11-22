@@ -6,15 +6,31 @@
   <div><h1>Sales</h1><p class="sub">{{ period_label }} · {{ total_count }} transaction{{ '' if total_count == 1 else 's' }}</p></div>
   <a class="btn" href="/sales/export.csv?{{ export_qs }}" style="text-decoration:none">Export CSV</a>
 </div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
 <div class="chips" style="margin-bottom:10px;align-items:center">
   {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
-  <a class="chip {{ 'on' if period == key }}" href="/sales?period={{ key }}&source={{ source }}" style="text-decoration:none">{{ label }}</a>
+  <a class="chip {{ 'on' if period == key }}" href="/sales?period={{ key }}&source={{ source }}{% if selected_marketplace %}&marketplace={{ selected_marketplace }}{% endif %}" style="text-decoration:none">{{ label }}</a>
   {% endfor %}
   <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('customrange').hidden = !document.getElementById('customrange').hidden">Custom</button>
+  {% if marketplaces %}
+  <form method="get" style="display:inline-flex;align-items:center;gap:6px">
+    <input type="hidden" name="period" value="{{ period }}">
+    <input type="hidden" name="source" value="{{ source }}">
+    {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    {% if period == 'day' %}<input type="hidden" name="date" value="{{ market_date }}">{% endif %}
+    <select name="marketplace" onchange="this.form.submit()" style="padding:6px 10px;font-size:13px">
+      <option value="">All marketplaces</option>
+      {% for mp in marketplaces %}
+      <option value="{{ mp.id }}" {{ 'selected' if selected_marketplace == (mp.id|string) }}>{{ mp.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
   <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:auto">
     <input type="hidden" name="period" value="day">
     <input type="hidden" name="source" value="{{ source }}">
+    {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
     <label style="font-size:12px;color:var(--muted)">Market day</label>
     <input type="date" name="date" value="{{ market_date }}" onchange="this.form.submit()" class="datein" style="padding:6px 10px;font-size:13px">
   </form>
@@ -22,10 +38,13 @@
 <form id="customrange" method="get" class="card rangeform" {{ 'hidden' if period != 'custom' }}>
   <input type="hidden" name="period" value="custom">
   <input type="hidden" name="source" value="{{ source }}">
+  {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
   <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">From<input type="date" name="from" value="{{ date_from }}" required class="datein"></label>
   <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">To<input type="date" name="to" value="{{ date_to }}" required class="datein"></label>
   <button class="btn primary">Apply</button>
 </form>
+
+{% include "_market_day_banner.html" %}
 
 <div class="cards four">
   <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}</small></div>
@@ -69,10 +88,13 @@
     <form method="get" class="right">
       <input type="hidden" name="period" value="{{ period }}">
       {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+      {% if period == 'day' %}<input type="hidden" name="date" value="{{ market_date }}">{% endif %}
       <select name="source" onchange="this.form.submit()">
-        <option value="all">All sources</option>
-        <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle</option>
-        <option value="cash" {{ 'selected' if source=='cash' }}>Cash</option>
+        <option value="all" {{ 'selected' if source=='all' }}>All transactions</option>
+        <option value="cash" {{ 'selected' if source=='cash' }}>Cash (Zettle + Quick sale)</option>
+        <option value="card" {{ 'selected' if source=='card' }}>Card (Zettle)</option>
+        <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle (all)</option>
+        <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale only</option>
       </select>
     </form>
   </div>
@@ -111,7 +133,7 @@
 
   <div class="foot">
     <span>Showing {{ txns|length }} of {{ total_count }}. Zettle sales appear automatically. Cash sales come from Quick sale.</span>
-    {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
+    {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% elif period == 'day' %}&date={{ market_date }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
   </div>
 </div>
 
