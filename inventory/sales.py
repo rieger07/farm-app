@@ -106,12 +106,33 @@ def record_cash_sale(
         conn.close()
 
 
-def sales_summary(merchant_id: int, since_iso: str, until_iso: str) -> dict:
+def _window_filter(
+    utc_windows: list[tuple[str, str]] | None, alias: str = "s"
+) -> tuple[str, list]:
+    if utc_windows is None:
+        return "", []
+    if not utc_windows:
+        return " AND 1=0", []
+    p = f"{alias}." if alias else ""
+    clause = " OR ".join(
+        f"({p}occurred_at >= ? AND {p}occurred_at < ?)" for _ in utc_windows
+    )
+    params = [v for pair in utc_windows for v in pair]
+    return f" AND ({clause})", params
+
+
+def sales_summary(
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    utc_windows: list[tuple[str, str]] | None = None,
+) -> dict:
     """Totals, payment method (card vs cash), and source split for sales in [since, until)."""
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
     conn = get_connection()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.source,
                    CASE
                      WHEN s.source = 'cash' OR LOWER(COALESCE(s.payment_type, '')) = 'cash' THEN 'cash'
@@ -127,10 +148,10 @@ def sales_summary(merchant_id: int, since_iso: str, until_iso: str) -> dict:
                    )), 0) AS units
             FROM sales s
             WHERE s.merchant_id = ? AND s.status = 'completed'
-              AND s.occurred_at >= ? AND s.occurred_at < ?
+              AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
             GROUP BY s.source, pay_method
             """,
-            (int(merchant_id), since_iso, until_iso),
+            [int(merchant_id), since_iso, until_iso, *win_args],
         ).fetchall()
     finally:
         conn.close()
@@ -213,14 +234,20 @@ def _source_filter_clause(source: str | None, alias: str = "") -> str:
 
 
 def count_sales(
-    merchant_id: int, since_iso: str, until_iso: str, source: str | None = None
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    source: str | None = None,
+    utc_windows: list[tuple[str, str]] | None = None,
 ) -> int:
+    win_sql, win_args = _window_filter(utc_windows, alias="")
     sql = (
         "SELECT COUNT(*) FROM sales WHERE merchant_id = ?"
         " AND occurred_at >= ? AND occurred_at < ?"
         + _source_filter_clause(source)
+        + win_sql
     )
-    args: list = [int(merchant_id), since_iso, until_iso]
+    args: list = [int(merchant_id), since_iso, until_iso, *win_args]
     conn = get_connection()
     try:
         return int(conn.execute(sql, args).fetchone()[0])
@@ -231,8 +258,10 @@ def count_sales(
 def recent_sales(
     merchant_id: int, since_iso: str, until_iso: str,
     source: str | None = None, limit: int = 25, offset: int = 0,
+    utc_windows: list[tuple[str, str]] | None = None,
 ) -> list[dict]:
     """Newest-first sales in [since, until), each with its line items attached."""
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
     sql = (
         "SELECT s.id, s.source, s.occurred_at, s.total_cents, s.status,"
         " s.payment_type, s.cash_received_cents,"
@@ -243,8 +272,9 @@ def recent_sales(
         " ), 0) AS units"
         " FROM sales s WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
         + _source_filter_clause(source, alias="s")
+        + win_sql
     )
-    args: list = [int(merchant_id), since_iso, until_iso]
+    args: list = [int(merchant_id), since_iso, until_iso, *win_args]
     sql += " ORDER BY s.occurred_at DESC, s.id DESC LIMIT ? OFFSET ?"
     args += [int(limit), int(offset)]
     conn = get_connection()
@@ -286,9 +316,14 @@ def recent_sales(
 
 
 def export_rows(
-    merchant_id: int, since_iso: str, until_iso: str, source: str | None = None
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    source: str | None = None,
+    utc_windows: list[tuple[str, str]] | None = None,
 ) -> list[dict]:
     """One row per sale line item (sales with no items still produce one row)."""
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
     sql = (
         "SELECT s.id AS sale_id, s.occurred_at, s.source, s.payment_type, s.status,"
         " u.username AS cashier, i.name_snapshot AS item, i.quantity,"
@@ -298,8 +333,9 @@ def export_rows(
         " LEFT JOIN users u ON u.id = s.created_by"
         " WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
         + _source_filter_clause(source, alias="s")
+        + win_sql
     )
-    args: list = [int(merchant_id), since_iso, until_iso]
+    args: list = [int(merchant_id), since_iso, until_iso, *win_args]
     sql += " ORDER BY s.occurred_at ASC, s.id ASC, i.id ASC"
     conn = get_connection()
     try:
@@ -312,15 +348,21 @@ def money(cents: int) -> str:
     return f"${cents / 100:,.2f}"
 
 
-def market_insights(merchant_id: int, since_iso: str, until_iso: str) -> dict:
+def market_insights(
+    merchant_id: int,
+    since_iso: str,
+    until_iso: str,
+    utc_windows: list[tuple[str, str]] | None = None,
+) -> dict:
     """Event-driven market analytics: top products, fees, sell-outs, and baskets."""
     from collections import Counter
     from itertools import combinations
 
+    win_sql, win_args = _window_filter(utc_windows, alias="s")
     conn = get_connection()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT si.sale_id,
                    si.sku_id,
                    si.name_snapshot,
@@ -332,10 +374,10 @@ def market_insights(merchant_id: int, since_iso: str, until_iso: str) -> dict:
             JOIN sales s ON s.id = si.sale_id
             LEFT JOIN skus k ON k.id = si.sku_id
             WHERE s.merchant_id = ? AND s.status = 'completed'
-              AND s.occurred_at >= ? AND s.occurred_at < ?
+              AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
             ORDER BY s.occurred_at ASC, si.id ASC
             """,
-            (int(merchant_id), since_iso, until_iso),
+            [int(merchant_id), since_iso, until_iso, *win_args],
         ).fetchall()
 
         sellout_rows = conn.execute(

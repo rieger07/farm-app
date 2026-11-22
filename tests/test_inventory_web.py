@@ -624,6 +624,77 @@ class WebTest(unittest.TestCase):
         finally:
             os.environ.pop("APP_BASE_URL", None)
 
+    def test_marketplaces_and_market_days(self):
+        from datetime import datetime
+        from inventory.db import get_connection
+        from inventory.markets import list_marketplaces
+
+        c = self.client("zach")
+        # 1. Create two marketplaces in Settings
+        r1 = c.post("/settings/marketplaces", data={
+            "name": "Sussex Farmers Market",
+            "location": "Augusta, NJ",
+            "booth_fee": "45.00",
+            "travel_cost": "20.00",
+        }, follow_redirects=False)
+        self.assertEqual(r1.status_code, 303)
+        c.post("/settings/marketplaces", data={
+            "name": "Montclair Market",
+            "location": "Montclair, NJ",
+            "booth_fee": "60.00",
+            "travel_cost": "15.00",
+        }, follow_redirects=False)
+
+        mps = list_marketplaces(1)
+        self.assertEqual(len(mps), 2)
+        sussex = next(m for m in mps if m["name"] == "Sussex Farmers Market")
+        montclair = next(m for m in mps if m["name"] == "Montclair Market")
+
+        # 2. Record a cash sale today -> should appear as an untagged sale day on Insights
+        conn = get_connection()
+        try:
+            sku_id = conn.execute("SELECT id FROM skus WHERE merchant_id = 1 LIMIT 1").fetchone()["id"]
+        finally:
+            conn.close()
+        c.post("/api/cash-sale", json={
+            "client_uuid": "mp-sale-1",
+            "items": [{"sku_id": sku_id, "quantity": 5}],
+        })
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        ins_before = c.get("/insights?period=all").text
+        self.assertIn("Untagged sale days", ins_before)
+        self.assertIn(today_str, ins_before)
+
+        # 3. Tag today as Sussex Farmers Market
+        r_tag = c.post("/market-days/save", data={
+            "market_date": today_str,
+            "marketplace_id": str(sussex["id"]),
+            "booth_fee": "45.00",
+            "travel_cost": "20.00",
+            "weather": "Sunny",
+            "notes": "Great turnout",
+            "next_url": "/insights?period=quarter",
+        }, follow_redirects=False)
+        self.assertEqual(r_tag.status_code, 303)
+
+        ins_after = c.get("/insights?period=quarter").text
+        self.assertIn("Sussex Farmers Market", ins_after)
+        self.assertIn("$65.00", ins_after)
+        self.assertIn("Sunny", ins_after)
+        self.assertIn("Great turnout", ins_after)
+
+        # 4. Marketplace filter on Sales & Insights scopes to assigned days
+        sales_sussex = c.get(f"/sales?period=today&marketplace={sussex['id']}").text
+        self.assertNotIn("0 transactions", sales_sussex)
+        self.assertIn("$30.00", sales_sussex)
+        sales_montclair = c.get(f"/sales?period=today&marketplace={montclair['id']}").text
+        self.assertIn("0 transactions", sales_montclair)
+
+        # 5. Archive Montclair marketplace
+        r_arch = c.post(f"/settings/marketplaces/{montclair['id']}/archive", follow_redirects=False)
+        self.assertEqual(r_arch.status_code, 303)
+        self.assertEqual(len(list_marketplaces(1)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

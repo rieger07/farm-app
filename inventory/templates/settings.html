@@ -116,4 +116,39 @@
   <small class="muted">No items marked as fees yet (e.g., Card charge).</small>
   {% endif %}
 </div>
+
+<div class="card" id="marketplaces" style="margin-top:20px">
+  <h2>Marketplaces</h2>
+  <p class="sub">Save the farmers markets and venues you attend along with typical booth and travel costs, then tag market days on Sales or Insights to compare net performance by location.</p>
+  <form method="post" action="/settings/marketplaces" class="filters" style="padding:0;flex-wrap:wrap;margin-bottom:14px">
+    <input name="name" placeholder="Marketplace name (e.g. Sussex Farmers Market)" required style="flex:1;min-width:200px">
+    <input name="location" placeholder="Location (e.g. Augusta, NJ)" style="max-width:180px">
+    <input name="booth_fee" type="number" step="0.01" min="0" placeholder="Booth fee ($)" style="max-width:120px">
+    <input name="travel_cost" type="number" step="0.01" min="0" placeholder="Travel ($)" style="max-width:110px">
+    <button class="btn primary">Add marketplace</button>
+  </form>
+  {% if marketplaces %}
+  <table>
+    <thead><tr><th>Marketplace</th><th>Location</th><th class="num">Booth fee</th><th class="num">Travel</th><th class="num">Total cost</th><th></th></tr></thead>
+    <tbody>
+    {% for mp in marketplaces %}
+      <tr>
+        <td><b>{{ mp.name }}</b></td>
+        <td>{{ mp.location or '—' }}</td>
+        <td class="num">{{ mp.booth_fee_cents|money }}</td>
+        <td class="num">{{ mp.travel_cost_cents|money }}</td>
+        <td class="num"><b>{{ (mp.booth_fee_cents + mp.travel_cost_cents)|money }}</b></td>
+        <td style="text-align:right">
+          <form method="post" action="/settings/marketplaces/{{ mp.id }}/archive" style="display:inline">
+            <button class="link" style="color:var(--redink)">Archive</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <small class="muted">No marketplaces added yet.</small>
+  {% endif %}
+</div>
 {% endblock %}

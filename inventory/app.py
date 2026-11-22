@@ -59,6 +59,17 @@ from inventory.sales import (
     record_cash_sale,
     sales_summary,
 )
+from inventory.markets import (
+    WEATHER_OPTIONS,
+    archive_marketplace,
+    delete_market_day,
+    get_market_day,
+    list_marketplaces,
+    marketplace_analytics,
+    marketplace_utc_windows,
+    save_market_day,
+    save_marketplace,
+)
 from inventory.stock import (
     ITEM_TYPES,
     add_ledger_entry,
@@ -190,12 +201,18 @@ def resolve_range(
         start, end, label = today - one, today, "Yesterday"
     elif period == "month":
         start, end, label = today - timedelta(days=29), today + one, "Last 30 days"
+    elif period == "quarter":
+        start, end, label = today - timedelta(days=89), today + one, "Last 90 days"
+    elif period == "all":
+        start, end, label = date(2020, 1, 1), today + one, "All time"
     elif period == "week":
         start, end, label = today - timedelta(days=6), today + one, "Last 7 days"
     else:
         period, start, end, label = "today", today, today + one, "Today"
     if period in ("today", "yesterday"):
         chart_start, chart_end = today - timedelta(days=6), today + one
+    elif period == "all":
+        chart_start, chart_end = today - timedelta(days=89), today + one
     else:
         chart_start, chart_end = start, end
     return {"period": period, "label": label, "start": start, "end": end,
@@ -697,6 +714,24 @@ def _sales_query(
     return rng
 
 
+def _parse_dollars_to_cents(raw: str | None) -> int | None:
+    text = (raw or "").strip().replace("$", "").replace(",", "")
+    if not text:
+        return None
+    return max(0, round(float(text) * 100))
+
+
+def _resolve_marketplace_windows(
+    merchant_id: int, marketplace: str, rng: dict
+) -> tuple[int | None, list[tuple[str, str]] | None]:
+    mp_id = int(marketplace) if (marketplace or "").strip().isdigit() else None
+    if not mp_id:
+        return None, None
+    return mp_id, marketplace_utc_windows(
+        merchant_id, mp_id, rng["date_from"], rng["date_to"], local_tz()
+    )
+
+
 @app.get("/sales")
 def sales_page(
     request: Request,
@@ -705,18 +740,21 @@ def sales_page(
     date_from: str = Query("", alias="from"),
     date_to: str = Query("", alias="to"),
     market_date: str = Query("", alias="date"),
+    marketplace: str = Query(""),
     limit: int = 25,
+    msg: str = "",
     ctx: Ctx = Depends(require("sales")),
 ):
     rng = _sales_query(period, date_from, date_to, market_date)
     src = None if source == "all" else source
     limit = max(25, min(int(limit), 500))
-    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"])
+    mp_id, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
+    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"], utc_windows=utc_windows)
 
     days = []
     for b in chart_buckets(rng["chart_start"], rng["chart_end"]):
         s0, s1 = utc_bounds(b["d0"], b["d1"])
-        d = sales_summary(ctx.merchant_id, s0, s1)
+        d = sales_summary(ctx.merchant_id, s0, s1, utc_windows=utc_windows)
         days.append({
             "label": b["label"],
             "title": b["title"],
@@ -729,8 +767,12 @@ def sales_page(
     peak = max((d["card_cents"] + d["cash_cents"] for d in days), default=0) or 1
     best = max(days, key=lambda d: d["card_cents"] + d["cash_cents"])
 
-    txns = recent_sales(ctx.merchant_id, rng["since"], rng["until"], src, limit=limit)
-    total_count = count_sales(ctx.merchant_id, rng["since"], rng["until"], src)
+    txns = recent_sales(
+        ctx.merchant_id, rng["since"], rng["until"], src, limit=limit, utc_windows=utc_windows
+    )
+    total_count = count_sales(
+        ctx.merchant_id, rng["since"], rng["until"], src, utc_windows=utc_windows
+    )
     today = datetime.now(local_tz()).date()
     for t in txns:
         local = to_local(t["occurred_at"])
@@ -742,35 +784,53 @@ def sales_page(
         t["time_label"] = local.strftime("%-I:%M %p").lower()
         t["full_label"] = local.strftime("%a %b %-d, %Y · %-I:%M %p").replace("AM", "am").replace("PM", "pm")
 
+    active_day_str = rng["date_from"] if rng["period"] in ("today", "yesterday", "day") else ""
+    active_market_day = get_market_day(ctx.merchant_id, active_day_str) if active_day_str else None
+    marketplaces = list_marketplaces(ctx.merchant_id)
+
     export_qs = f"period={rng['period']}&source={source}"
     if rng["period"] == "custom":
         export_qs += f"&from={rng['date_from']}&to={rng['date_to']}"
     elif rng["period"] == "day":
         export_qs += f"&date={rng['market_date']}"
+    if mp_id:
+        export_qs += f"&marketplace={mp_id}"
     return render(
         request, "sales.html", ctx, "sales",
         summary=summary, days=days, peak=peak, best=best, txns=txns,
         period=rng["period"], period_label=rng["label"], source=source,
         date_from=rng["date_from"], date_to=rng["date_to"],
-        market_date=rng["market_date"] or datetime.now(local_tz()).date().isoformat(),
+        market_date=rng["market_date"] or today.isoformat(),
+        marketplaces=marketplaces,
+        selected_marketplace=str(mp_id or ""),
+        active_day_str=active_day_str,
+        active_market_day=active_market_day,
+        weather_options=WEATHER_OPTIONS,
         today_label=datetime.now(local_tz()).strftime("%-d %b %Y"),
         total_count=total_count, has_more=len(txns) < total_count, next_limit=limit + 25,
         export_qs=export_qs, weekly=(rng["chart_end"] - rng["chart_start"]).days > 31,
+        msg=msg,
     )
 
 
 @app.get("/insights")
 def insights_page(
     request: Request,
-    period: str = "week",
+    period: str = "quarter",
     date_from: str = Query("", alias="from"),
     date_to: str = Query("", alias="to"),
     market_date: str = Query("", alias="date"),
+    marketplace: str = Query(""),
+    msg: str = "",
     ctx: Ctx = Depends(require("insights")),
 ):
     rng = _sales_query(period, date_from, date_to, market_date)
-    data = market_insights(ctx.merchant_id, rng["since"], rng["until"])
-    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"])
+    mp_id, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
+    data = market_insights(ctx.merchant_id, rng["since"], rng["until"], utc_windows=utc_windows)
+    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"], utc_windows=utc_windows)
+    mp_analytics = marketplace_analytics(
+        ctx.merchant_id, rng["date_from"], rng["date_to"], rng["since"], rng["until"], local_tz()
+    )
     for so in data["sellouts"]:
         local = to_local(so["last_sold_at"])
         so["last_sold_label"] = (
@@ -778,15 +838,68 @@ def insights_page(
             .replace("AM", "am")
             .replace("PM", "pm")
         )
+    active_day_str = rng["date_from"] if rng["period"] in ("today", "yesterday", "day") else ""
+    active_market_day = get_market_day(ctx.merchant_id, active_day_str) if active_day_str else None
     return render(
         request, "insights.html", ctx, "insights",
         insights=data,
         summary=summary,
+        mp_analytics=mp_analytics,
+        marketplaces=list_marketplaces(ctx.merchant_id),
+        selected_marketplace=str(mp_id or ""),
+        active_day_str=active_day_str,
+        active_market_day=active_market_day,
+        weather_options=WEATHER_OPTIONS,
         period=rng["period"],
         period_label=rng["label"],
         date_from=rng["date_from"],
         date_to=rng["date_to"],
         market_date=rng["market_date"] or datetime.now(local_tz()).date().isoformat(),
+        msg=msg,
+    )
+
+
+@app.post("/market-days/save")
+def market_day_save(
+    market_date: str = Form(...),
+    marketplace_id: int = Form(...),
+    booth_fee: str = Form(""),
+    travel_cost: str = Form(""),
+    weather: str = Form(""),
+    notes: str = Form(""),
+    next_url: str = Form("/insights"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        save_market_day(
+            ctx.merchant_id,
+            market_date,
+            marketplace_id,
+            booth_fee_cents=_parse_dollars_to_cents(booth_fee),
+            travel_cost_cents=_parse_dollars_to_cents(travel_cost),
+            weather=weather,
+            notes=notes,
+        )
+        msg = f"Tagged {market_date} market day."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    target = next_url if next_url.startswith("/") else "/insights"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/market-days/delete")
+def market_day_delete(
+    market_date: str = Form(...),
+    next_url: str = Form("/insights"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    delete_market_day(ctx.merchant_id, market_date)
+    target = next_url if next_url.startswith("/") else "/insights"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(
+        f"{target}{sep}msg={quote_plus(f'Removed market tag for {market_date}.')}",
+        status_code=303,
     )
 
 
@@ -802,11 +915,17 @@ def sales_export(
     date_from: str = Query("", alias="from"),
     date_to: str = Query("", alias="to"),
     market_date: str = Query("", alias="date"),
+    marketplace: str = Query(""),
     ctx: Ctx = Depends(require("sales")),
 ):
     rng = _sales_query(period, date_from, date_to, market_date)
+    _, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
     rows = export_rows(
-        ctx.merchant_id, rng["since"], rng["until"], None if source == "all" else source
+        ctx.merchant_id,
+        rng["since"],
+        rng["until"],
+        None if source == "all" else source,
+        utc_windows=utc_windows,
     )
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -927,8 +1046,45 @@ def settings_page(request: Request, msg: str = "", ctx: Ctx = Depends(require("s
         members=list_members(ctx.merchant_id),
         roles=ROLES,
         all_skus=list_stock(ctx.merchant_id, include_fees=True),
+        marketplaces=list_marketplaces(ctx.merchant_id),
         redirect_uri=_redirect_uri(request),
         msg=msg,
+    )
+
+
+@app.post("/settings/marketplaces")
+def settings_save_marketplace(
+    marketplace_id: str = Form(""),
+    name: str = Form(...),
+    location: str = Form(""),
+    booth_fee: str = Form("0"),
+    travel_cost: str = Form("0"),
+    ctx: Ctx = Depends(require("settings")),
+):
+    try:
+        mp_id = int(marketplace_id) if marketplace_id.strip().isdigit() else None
+        save_marketplace(
+            ctx.merchant_id,
+            name=name,
+            location=location,
+            booth_fee_cents=_parse_dollars_to_cents(booth_fee) or 0,
+            travel_cost_cents=_parse_dollars_to_cents(travel_cost) or 0,
+            marketplace_id=mp_id,
+        )
+        msg = f"Saved marketplace {name.strip()}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/settings?msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/settings/marketplaces/{marketplace_id}/archive")
+def settings_archive_marketplace(
+    marketplace_id: int,
+    ctx: Ctx = Depends(require("settings")),
+):
+    archive_marketplace(ctx.merchant_id, marketplace_id)
+    return RedirectResponse(
+        f"/settings?msg={quote_plus('Archived marketplace.')}", status_code=303
     )
 
 
