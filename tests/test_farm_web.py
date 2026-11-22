@@ -189,6 +189,32 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(r_del.status_code, 200)
         self.assertEqual(r_del.json()["harvested_head"], t_data["harvested_head"] - 1)
 
+        # Future batch -> Planned status, separated on Radar, toggleable on Financials, Start now works
+        self.c.post("/batches/save", data={
+            "name": "Thanksgiving 2028",
+            "species": "turkey chicks",
+            "start_date": "2028-06-01",
+            "initial_quantity": "25",
+            "unit_cost": "10.00",
+            "avg_dressed_weight": "18",
+            "sale_price_per_lb": "5.00",
+            "processing_cost": "0",
+        }, follow_redirects=False)
+        radar_html = self.c.get("/").text
+        self.assertIn("Planned batches", radar_html)
+        self.assertIn("Starts 2028-06-01", radar_html)
+        self.assertIn("+1 planned", radar_html)
+
+        fin_all = self.c.get("/financials?include_planned=1").text
+        self.assertIn("Thanksgiving 2028", fin_all)
+        fin_active = self.c.get("/financials?include_planned=0").text
+        self.assertNotIn("Thanksgiving 2028", fin_active)
+
+        planned_bid = next(b["id"] for b in list_batches() if b["name"] == "Thanksgiving 2028")
+        r_start = self.c.post(f"/batches/{planned_bid}/start-now", data={"next_url": "/"}, follow_redirects=False)
+        self.assertEqual(r_start.status_code, 303)
+        self.assertNotIn("Planned batches", self.c.get("/").text)
+
 
 if __name__ == "__main__":
     unittest.main()

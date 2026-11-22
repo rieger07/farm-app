@@ -9,8 +9,8 @@
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
 <div class="cards three">
-  <div class="card"><small>Active batches</small><div class="big">{{ schedules|length }}</div><small>Currently running</small></div>
-  <div class="card"><small>Surviving head</small><div class="big">{{ total_head }}</div><small>{{ total_losses }} recorded losses</small></div>
+  <div class="card"><small>Active batches</small><div class="big">{{ active_schedules|length }}</div><small>Currently running{% if planned_schedules %} · +{{ planned_schedules|length }} planned{% endif %}</small></div>
+  <div class="card"><small>On-farm head</small><div class="big">{{ total_head }}</div><small>Live on farm · {{ total_losses }} losses</small></div>
   <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
 </div>
 
@@ -68,9 +68,9 @@
 </div>
 {% endif %}
 
-{% if schedules %}
+{% if active_schedules %}
 <div class="batch-grid">
-  {% for s in schedules %}
+  {% for s in active_schedules %}
   {% set b = s.batch %}
   <div class="batch-card">
     <div class="batch-head">
@@ -78,10 +78,10 @@
         <a href="/batches/{{ b.id }}" class="batch-title">{{ b.name }}</a>
         <small>{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</small>
       </div>
-      <span class="pill green">{{ s.status_badge }}</span>
+      <span class="pill {{ 'amber' if s.is_fully_harvested else 'green' }}">{{ s.status_badge }}</span>
     </div>
     <div class="batch-stats">
-      <div><small>Surviving</small><b>{{ s.surviving_quantity }} / {{ s.initial_quantity }}</b></div>
+      <div><small>On farm</small><b>{{ s.on_farm_head }} / {{ s.initial_quantity }}</b></div>
       <div><small>Harvested</small><b>{{ s.harvested_head }} head{% if s.actual_dressed_lbs %} · {{ '%.1f'|format(s.actual_dressed_lbs) }} lb{% endif %}</b></div>
       <div><small>Est. Profit</small><b>${{ '%.0f'|format(s.estimated_profit) }}</b></div>
     </div>
@@ -94,9 +94,39 @@
   </div>
   {% endfor %}
 </div>
-{% else %}
+{% elif not planned_schedules %}
 <div class="card empty">
   <p>No active batches yet. Tap <b>+ New batch</b> to start planning your first flock.</p>
+</div>
+{% endif %}
+
+{% if planned_schedules %}
+<h2 style="margin:6px 0 10px">Planned batches</h2>
+<div class="batch-grid">
+  {% for s in planned_schedules %}
+  {% set b = s.batch %}
+  <div class="batch-card" style="background:#fcfbf7">
+    <div class="batch-head">
+      <div>
+        <a href="/batches/{{ b.id }}" class="batch-title">{{ b.name }}</a>
+        <small>{{ b.species|title }} · Starts {{ b.start_date }} (in {{ s.days_until_start }}d) · Process {{ s.proc_date }}</small>
+      </div>
+      <span class="pill amber">{{ s.status_badge }}</span>
+    </div>
+    <div class="batch-stats">
+      <div><small>Planned head</small><b>{{ s.initial_quantity }}</b></div>
+      <div><small>Est. Feed</small><b>{{ s.total_bags }} bags</b></div>
+      <div><small>Est. Profit</small><b>${{ '%.0f'|format(s.estimated_profit) }}</b></div>
+    </div>
+    <div class="batch-actions">
+      <form method="post" action="/batches/{{ b.id }}/start-now" style="display:inline">
+        <input type="hidden" name="next_url" value="/">
+        <button class="btn sm primary">Start now</button>
+      </form>
+      <a href="/batches/{{ b.id }}" class="btn sm right">Details →</a>
+    </div>
+  </div>
+  {% endfor %}
 </div>
 {% endif %}
 

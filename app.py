@@ -313,6 +313,8 @@ def radar_page(request: Request, msg: str = "", user: dict | None = Depends(opti
     if user is None:
         return templates.TemplateResponse(request, "home.html", {"request": request})
     schedules = _schedules_for_user(user["id"], include_archived=False)
+    active_schedules = [s for s in schedules if not s["is_planned"]]
+    planned_schedules = [s for s in schedules if s["is_planned"]]
     acked = list_acknowledged_milestones([s["batch"]["id"] for s in schedules])
     milestones = [
         m for m in compute_upcoming_milestones(schedules)
@@ -321,10 +323,12 @@ def radar_page(request: Request, msg: str = "", user: dict | None = Depends(opti
     return _render(
         request, "radar.html", user, "radar",
         schedules=schedules,
+        active_schedules=active_schedules,
+        planned_schedules=planned_schedules,
         milestones=milestones,
         timeline=_build_timeline(schedules),
-        total_head=sum(s["surviving_quantity"] for s in schedules),
-        total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in schedules),
+        total_head=sum(s["on_farm_head"] for s in active_schedules),
+        total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in active_schedules),
         bag_weight=get_bag_weight(user_id=user["id"]),
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
@@ -571,6 +575,26 @@ def batch_toggle_active(batch_id: int, user: dict = Depends(current_user)):
     return RedirectResponse("/batches?msg=" + quote_plus("Updated batch status."), status_code=303)
 
 
+@app.post("/batches/{batch_id}/start-now")
+def batch_start_now(
+    batch_id: int,
+    next_url: str = Form("/"),
+    user: dict = Depends(current_user),
+):
+    b = _get_owned_batch(batch_id, user)
+    old_start = date.fromisoformat(b["start_date"])
+    old_end = date.fromisoformat(b.get("end_date") or b["start_date"])
+    win_days = max(0, (old_end - old_start).days)
+    today = date.today()
+    updated = dict(b)
+    updated["start_date"] = today.isoformat()
+    updated["end_date"] = (today + timedelta(days=win_days)).isoformat()
+    updated["active"] = 1
+    save_batch(updated, batch_id=batch_id, user_id=user["id"])
+    target = next_url if next_url.startswith("/") else "/"
+    return RedirectResponse(f"{target}?msg=" + quote_plus(f"Started {b['name']} today."), status_code=303)
+
+
 @app.post("/batches/{batch_id}/delete")
 def batch_delete_submit(batch_id: int, user: dict = Depends(current_user)):
     _get_owned_batch(batch_id, user)
@@ -779,8 +803,15 @@ def feed_settings_submit(
 
 
 @app.get("/financials")
-def financials_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
-    schedules = _schedules_for_user(user["id"], include_archived=False)
+def financials_page(
+    request: Request,
+    msg: str = "",
+    include_planned: int = 1,
+    user: dict = Depends(current_user),
+):
+    all_schedules = _schedules_for_user(user["id"], include_archived=False)
+    planned_count = sum(1 for s in all_schedules if s["is_planned"])
+    schedules = all_schedules if include_planned else [s for s in all_schedules if not s["is_planned"]]
     unified_rows = compute_unified_financials_table(schedules)
     roi_rows = compute_roi_summary_table(schedules)
     expenses = list_farm_expenses(user["id"])
@@ -798,6 +829,8 @@ def financials_page(request: Request, msg: str = "", user: dict = Depends(curren
     return _render(
         request, "financials.html", user, "financials",
         schedules=schedules,
+        include_planned=bool(include_planned),
+        planned_count=planned_count,
         unified_rows=unified_rows,
         roi_rows=roi_rows,
         expenses=expenses,

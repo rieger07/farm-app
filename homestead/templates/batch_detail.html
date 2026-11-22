@@ -4,11 +4,18 @@
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>{{ b.name }}</h1>
-    <p class="sub">{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</p>
+    <h1>{{ b.name }}{% if s.is_planned %} <span class="pill amber" style="font-size:13px;vertical-align:middle">{{ s.status_badge }}</span>{% endif %}</h1>
+    <p class="sub">{{ b.species|title }} · {{ 'Starts' if s.is_planned else 'Started' }} {{ b.start_date }}{% if s.is_planned %} (in {{ s.days_until_start }}d){% endif %} · Process {{ s.proc_date }}</p>
   </div>
   <div class="row">
+    {% if s.is_planned %}
+    <form method="post" action="/batches/{{ b.id }}/start-now" style="display:inline">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <button class="btn primary">Start now</button>
+    </form>
+    {% else %}
     <a href="/batches/{{ b.id }}/harvest" class="btn primary">Harvest tally</a>
+    {% endif %}
     {% if gcal_arrival_url %}<a href="{{ gcal_arrival_url }}" target="_blank" rel="noopener" class="btn">GCal: {{ s.initial_label }}</a>{% endif %}
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
     <button type="button" class="btn" onclick='openEditBatchModal({{ b|tojson }})'>Edit batch</button>

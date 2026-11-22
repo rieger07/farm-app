@@ -4,7 +4,13 @@
 <div class="eyebrow">BATCH ECONOMICS</div>
 <div class="pagehead">
   <div><h1>Financials</h1><p class="sub">Planned ROI, actual harvest yield, cash sales, and home freezer cost.</p></div>
-  <a href="/backup.json" class="btn">Export JSON backup</a>
+  <div class="row">
+    {% if planned_count %}
+      <a href="/financials?include_planned=1" class="btn sm {{ 'primary' if include_planned }}">Include planned ({{ planned_count }})</a>
+      <a href="/financials?include_planned=0" class="btn sm {{ 'primary' if not include_planned }}">Active only</a>
+    {% endif %}
+    <a href="/backup.json" class="btn">Export JSON backup</a>
+  </div>
 </div>
 
 <div class="cards four">
@@ -21,7 +27,7 @@
     {% for s in schedules %}
     <div class="bar-item">
       <div class="bar-labels">
-        <b>{{ s.batch.name }}</b>
+        <b>{{ s.batch.name }}{% if s.is_planned %} <span class="pill amber" style="font-size:11px;padding:1px 6px;margin-left:4px">Planned</span>{% endif %}</b>
         <small class="inline">Cost {{ s.total_budget_cost|money0 }} · Est. Rev {{ s.estimated_revenue|money0 }}</small>
       </div>
       <div class="bar-track" title="Cost">
