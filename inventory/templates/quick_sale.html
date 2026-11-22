@@ -8,23 +8,40 @@
   </div>
   <div id="offline" class="notice" hidden></div>
 
-  <input id="q" type="search" class="search" placeholder="Search products...">
+  <div class="qs-toolbar">
+    <input id="q" type="search" class="search" placeholder="Search products..." style="margin-bottom:0;flex:1">
+    <button type="button" id="hide-oos" class="chip-toggle" aria-pressed="false">Hide out of stock</button>
+  </div>
   <div class="chips" id="chips">
     <button class="chip on" data-cat="">All products</button>
     {% for c in categories %}<button class="chip" data-cat="{{ c }}">{{ c }}</button>{% endfor %}
   </div>
   <div class="tiles" id="tiles"></div>
 
-  <div class="card cart">
+  <div class="card cart" id="cart-card">
     <div class="legend"><b>Current sale</b><small id="itemcount">0 items</small></div>
     <div id="lines" class="lines"><small class="muted">Tap a product to add it.</small></div>
     <div class="total"><span>Total</span><b id="total">$0.00</b></div>
     <div class="cashrow"><label for="cash">Cash received</label>
       <div class="cashin"><span>$</span><input id="cash" inputmode="decimal" placeholder="0.00"></div></div>
+    <div class="fast-cash">
+      <button type="button" class="chip" data-cash="exact">Exact</button>
+      <button type="button" class="chip" data-cash="10">$10</button>
+      <button type="button" class="chip" data-cash="20">$20</button>
+      <button type="button" class="chip" data-cash="50">$50</button>
+    </div>
     <div class="change"><span>Change to give</span><b id="change">$0.00</b></div>
     <button id="record" class="btn primary wide" disabled>Record cash sale</button>
     <small class="muted center">Saves the sale and updates your stock.</small>
   </div>
+</div>
+
+<div id="sticky-cart" class="sticky-cart" hidden>
+  <div>
+    <small style="margin:0;color:var(--muted)">Current sale</small>
+    <b id="sticky-summary">0 items · $0.00</b>
+  </div>
+  <button type="button" id="sticky-checkout" class="btn primary">Checkout →</button>
 </div>
 
 <dialog id="weightm" class="card" style="width:100%;max-width:360px">

@@ -53,16 +53,19 @@ from inventory.merchants import (
 from inventory.sales import (
     count_sales,
     export_rows,
+    market_insights,
     money,
     recent_sales,
     record_cash_sale,
     sales_summary,
 )
 from inventory.stock import (
+    ITEM_TYPES,
     add_ledger_entry,
     fmt_qty,
     list_sku_history,
     list_stock,
+    set_item_type,
     set_low_stock_threshold,
     set_quick_sale_visibility,
     set_sell_mode,
@@ -147,10 +150,27 @@ def _parse_date(value: str) -> date | None:
 MAX_RANGE_DAYS = 366
 
 
-def resolve_range(period: str, date_from: str = "", date_to: str = "") -> dict:
+def resolve_range(
+    period: str, date_from: str = "", date_to: str = "", market_date: str = ""
+) -> dict:
     """Turn a period choice into local date bounds plus the window the chart covers."""
     today = datetime.now(local_tz()).date()
     one = timedelta(days=1)
+    if period == "day":
+        d = _parse_date(market_date)
+        if d:
+            return {
+                "period": "day",
+                "label": d.strftime("%a %b %-d, %Y"),
+                "start": d,
+                "end": d + one,
+                "chart_start": max(d - timedelta(days=6), d - timedelta(days=6)),
+                "chart_end": d + one,
+                "date_from": d.isoformat(),
+                "date_to": d.isoformat(),
+                "market_date": d.isoformat(),
+            }
+        period = "today"
     if period == "custom":
         d0, d1 = _parse_date(date_from), _parse_date(date_to)
         if d0 and d1:
@@ -163,7 +183,8 @@ def resolve_range(period: str, date_from: str = "", date_to: str = "") -> dict:
             )
             return {"period": "custom", "label": label, "start": start, "end": end,
                     "chart_start": start, "chart_end": end,
-                    "date_from": start.isoformat(), "date_to": d1.isoformat()}
+                    "date_from": start.isoformat(), "date_to": d1.isoformat(),
+                    "market_date": ""}
         period = "week"  # incomplete custom range: fall back
     if period == "yesterday":
         start, end, label = today - one, today, "Yesterday"
@@ -179,7 +200,8 @@ def resolve_range(period: str, date_from: str = "", date_to: str = "") -> dict:
         chart_start, chart_end = start, end
     return {"period": period, "label": label, "start": start, "end": end,
             "chart_start": chart_start, "chart_end": chart_end,
-            "date_from": start.isoformat(), "date_to": (end - one).isoformat()}
+            "date_from": start.isoformat(), "date_to": (end - one).isoformat(),
+            "market_date": ""}
 
 
 def chart_buckets(chart_start: date, chart_end: date) -> list[dict]:
@@ -287,6 +309,7 @@ def render(request: Request, name: str, ctx: Ctx, active: str, **extra):
             for k, label, path in (
                 ("inventory", "Inventory", "/inventory"),
                 ("sales", "Sales", "/sales"),
+                ("insights", "Insights", "/insights"),
                 ("quick_sale", "Quick sale", "/quick-sale"),
                 ("settings", "Settings", "/settings"),
             )
@@ -666,8 +689,10 @@ def api_stock_history(sku_id: int, ctx: Ctx = Depends(require("inventory"))):
     return {"entries": rows}
 
 
-def _sales_query(period: str, date_from: str, date_to: str) -> dict:
-    rng = resolve_range(period, date_from, date_to)
+def _sales_query(
+    period: str, date_from: str, date_to: str, market_date: str = ""
+) -> dict:
+    rng = resolve_range(period, date_from, date_to, market_date)
     rng["since"], rng["until"] = utc_bounds(rng["start"], rng["end"])
     return rng
 
@@ -679,10 +704,11 @@ def sales_page(
     source: str = "all",
     date_from: str = Query("", alias="from"),
     date_to: str = Query("", alias="to"),
+    market_date: str = Query("", alias="date"),
     limit: int = 25,
     ctx: Ctx = Depends(require("sales")),
 ):
-    rng = _sales_query(period, date_from, date_to)
+    rng = _sales_query(period, date_from, date_to, market_date)
     src = None if source == "all" else source
     limit = max(25, min(int(limit), 500))
     summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"])
@@ -691,10 +717,17 @@ def sales_page(
     for b in chart_buckets(rng["chart_start"], rng["chart_end"]):
         s0, s1 = utc_bounds(b["d0"], b["d1"])
         d = sales_summary(ctx.merchant_id, s0, s1)
-        days.append({"label": b["label"], "title": b["title"],
-                     "zettle_cents": d["zettle_cents"], "cash_cents": d["cash_cents"]})
-    peak = max((d["zettle_cents"] + d["cash_cents"] for d in days), default=0) or 1
-    best = max(days, key=lambda d: d["zettle_cents"] + d["cash_cents"])
+        days.append({
+            "label": b["label"],
+            "title": b["title"],
+            "card_cents": d["card_cents"],
+            "cash_cents": d["cash_cents"],
+            "zettle_card_cents": d["zettle_card_cents"],
+            "zettle_cash_cents": d["zettle_cash_cents"],
+            "quick_cash_cents": d["quick_cash_cents"],
+        })
+    peak = max((d["card_cents"] + d["cash_cents"] for d in days), default=0) or 1
+    best = max(days, key=lambda d: d["card_cents"] + d["cash_cents"])
 
     txns = recent_sales(ctx.merchant_id, rng["since"], rng["until"], src, limit=limit)
     total_count = count_sales(ctx.merchant_id, rng["since"], rng["until"], src)
@@ -712,14 +745,48 @@ def sales_page(
     export_qs = f"period={rng['period']}&source={source}"
     if rng["period"] == "custom":
         export_qs += f"&from={rng['date_from']}&to={rng['date_to']}"
+    elif rng["period"] == "day":
+        export_qs += f"&date={rng['market_date']}"
     return render(
         request, "sales.html", ctx, "sales",
         summary=summary, days=days, peak=peak, best=best, txns=txns,
         period=rng["period"], period_label=rng["label"], source=source,
         date_from=rng["date_from"], date_to=rng["date_to"],
+        market_date=rng["market_date"] or datetime.now(local_tz()).date().isoformat(),
         today_label=datetime.now(local_tz()).strftime("%-d %b %Y"),
         total_count=total_count, has_more=len(txns) < total_count, next_limit=limit + 25,
         export_qs=export_qs, weekly=(rng["chart_end"] - rng["chart_start"]).days > 31,
+    )
+
+
+@app.get("/insights")
+def insights_page(
+    request: Request,
+    period: str = "week",
+    date_from: str = Query("", alias="from"),
+    date_to: str = Query("", alias="to"),
+    market_date: str = Query("", alias="date"),
+    ctx: Ctx = Depends(require("insights")),
+):
+    rng = _sales_query(period, date_from, date_to, market_date)
+    data = market_insights(ctx.merchant_id, rng["since"], rng["until"])
+    summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"])
+    for so in data["sellouts"]:
+        local = to_local(so["last_sold_at"])
+        so["last_sold_label"] = (
+            local.strftime("%b %-d · %-I:%M %p")
+            .replace("AM", "am")
+            .replace("PM", "pm")
+        )
+    return render(
+        request, "insights.html", ctx, "insights",
+        insights=data,
+        summary=summary,
+        period=rng["period"],
+        period_label=rng["label"],
+        date_from=rng["date_from"],
+        date_to=rng["date_to"],
+        market_date=rng["market_date"] or datetime.now(local_tz()).date().isoformat(),
     )
 
 
@@ -809,21 +876,74 @@ def manifest():
 
 
 def _redirect_uri(request: Request) -> str:
-    return os.environ.get("ZETTLE_REDIRECT_URI") or str(request.url_for("zettle_callback"))
+    env_uri = os.environ.get("ZETTLE_REDIRECT_URI", "").strip()
+    if env_uri:
+        return env_uri
+    base_url = os.environ.get("APP_BASE_URL", "").strip()
+    if base_url:
+        return base_url.rstrip("/") + "/zettle/callback"
+    host = (request.url.hostname or "").lower()
+    if host in ("", "localhost", "127.0.0.1", "0.0.0.0") or "rieger.page" in host:
+        return "https://ledger.ironcladsystems.dev/zettle/callback"
+    return str(request.url_for("zettle_callback"))
+
+
+def _format_last_sync(iso_ts: str | None) -> str:
+    if not iso_ts:
+        return "Never"
+    try:
+        local_dt = to_local(iso_ts)
+        now_local = datetime.now(local_tz())
+        diff_sec = max(0, int((now_local - local_dt).total_seconds()))
+        if diff_sec < 60:
+            rel = "just now"
+        elif diff_sec < 3600:
+            rel = f"{diff_sec // 60} min ago"
+        elif diff_sec < 86400:
+            hrs = diff_sec // 3600
+            rel = f"{hrs} hr ago" if hrs == 1 else f"{hrs} hrs ago"
+        else:
+            days = diff_sec // 86400
+            rel = f"{days} day ago" if days == 1 else f"{days} days ago"
+        time_str = local_dt.strftime("%-I:%M %p")
+        if local_dt.date() != now_local.date():
+            time_str = f"{local_dt.strftime('%b %-d')}, {time_str}"
+        return f"{rel} ({time_str})"
+    except Exception:
+        return str(iso_ts)
 
 
 @app.get("/settings")
 def settings_page(request: Request, msg: str = "", ctx: Ctx = Depends(require("settings"))):
+    status = sync.connection_status(ctx.merchant_id)
     return render(
         request, "settings.html", ctx, "settings",
-        status=sync.connection_status(ctx.merchant_id),
+        status=status,
+        last_sync_display=_format_last_sync(status.get("last_sync")),
         configured=zettle.configured(),
         sub=billing.get_subscription(ctx.merchant_id),
         stripe_configured=billing.configured(),
         members=list_members(ctx.merchant_id),
         roles=ROLES,
+        all_skus=list_stock(ctx.merchant_id, include_fees=True),
         redirect_uri=_redirect_uri(request),
         msg=msg,
+    )
+
+
+@app.post("/settings/item-type")
+def settings_item_type(
+    sku_id: int = Form(...),
+    item_type: str = Form("product"),
+    ctx: Ctx = Depends(require("settings")),
+):
+    if item_type not in ITEM_TYPES:
+        item_type = "product"
+    set_item_type(ctx.merchant_id, sku_id, item_type)
+    label = "excluded fee / non-inventory" if item_type == "fee" else "regular inventory product"
+    return RedirectResponse(
+        f"/settings?msg={quote_plus(f'Updated item classification to {label}.')}",
+        status_code=303,
     )
 
 

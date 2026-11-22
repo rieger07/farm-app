@@ -522,6 +522,100 @@ class WebTest(unittest.TestCase):
             self.assertEqual(r_ok.status_code, 200)
             mock_send.assert_called_once()
 
+    def test_fees_payment_split_insights_quicksale_and_settings(self):
+        from datetime import datetime, timezone
+        from inventory.db import get_connection
+        from inventory.stock import set_stock_count
+
+        c = self.client("zach")
+        # Create a regular product (stock=1 -> will sell out) and a fee item ("Card charge")
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        conn = get_connection()
+        try:
+            honey_id = int(conn.execute(
+                "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid, name, category, price_cents, updated_at)"
+                " VALUES (1, 'prod-whiskey-honey', '', 'Whiskey Honey', 'Honey', 1500, ?)",
+                (now_iso,),
+            ).lastrowid)
+            fee_id = int(conn.execute(
+                "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid, name, category, price_cents, updated_at)"
+                " VALUES (1, 'prod-card-charge', '', 'Card charge', 'Fees', 75, ?)",
+                (now_iso,),
+            ).lastrowid)
+            conn.commit()
+        finally:
+            conn.close()
+        set_stock_count(1, honey_id, 1)
+
+        # Mark "Card charge" as fee/non-inventory in Settings
+        r_type = c.post("/settings/item-type", data={"sku_id": str(fee_id), "item_type": "fee"}, follow_redirects=False)
+        self.assertEqual(r_type.status_code, 303)
+        inv_html = c.get("/inventory").text
+        self.assertIn("Whiskey Honey", inv_html)
+        self.assertNotIn("Card charge", inv_html)
+
+        # Record a Zettle card sale with 1 x Whiskey Honey + 1 x Card charge, and a Zettle cash sale
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        from inventory.sync import import_purchase
+        conn = get_connection()
+        try:
+            honey_uuid = conn.execute("SELECT zettle_product_uuid FROM skus WHERE id = ?", (honey_id,)).fetchone()[0]
+            fee_uuid = conn.execute("SELECT zettle_product_uuid FROM skus WHERE id = ?", (fee_id,)).fetchone()[0]
+            import_purchase(conn, 1, {
+                "purchaseUUID": "p-card-1",
+                "timestamp": now_iso + "+00:00",
+                "amount": 1575,
+                "payments": [{"type": "IZETTLE_CARD"}],
+                "products": [
+                    {"productUuid": honey_uuid, "variantUuid": "", "name": "Whiskey Honey", "quantity": "1", "unitPrice": 1500},
+                    {"productUuid": fee_uuid, "variantUuid": "", "name": "Card charge", "quantity": "1", "unitPrice": 75},
+                ],
+            }, "2020-01-01T00:00:00")
+            import_purchase(conn, 1, {
+                "purchaseUUID": "p-cash-1",
+                "timestamp": now_iso + "+00:00",
+                "amount": 1500,
+                "payments": [{"type": "CASH"}],
+                "products": [
+                    {"productUuid": honey_uuid, "variantUuid": "", "name": "Whiskey Honey", "quantity": "1", "unitPrice": 1500},
+                ],
+            }, "2020-01-01T00:00:00")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Sales page: Card vs Cash breakdown + transaction header shows "1 unit" (not 2) + Market day filter
+        sales_html = c.get("/sales?period=today").text
+        self.assertIn("PAYMENT BREAKDOWN", sales_html)
+        self.assertIn("1 unit", sales_html)
+        self.assertIn("Card charge", sales_html)
+        self.assertIn("Market day", sales_html)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        self.assertEqual(c.get(f"/sales?period=day&date={today_str}").status_code, 200)
+
+        # Quick sale usability: sticky cart bar, hide out of stock, fast cash buttons
+        qs_html = c.get("/quick-sale").text
+        self.assertIn("sticky-cart", qs_html)
+        self.assertIn("Hide out of stock", qs_html)
+        self.assertIn("Exact", qs_html)
+
+        # Insights page: Top products, Card fees collected, Early sell-out flags (Whiskey Honey <= 0 left)
+        set_stock_count(1, honey_id, 0)
+        ins_html = c.get("/insights?period=today").text
+        self.assertIn("Card fees collected", ins_html)
+        self.assertIn("$0.75", ins_html)
+        self.assertIn("Early sell-out flags", ins_html)
+        self.assertIn("Whiskey Honey", ins_html)
+
+        # Settings polish: redirect_uri uses APP_BASE_URL / ironcladsystems.dev fallback + Non-Inventory section
+        os.environ["APP_BASE_URL"] = "https://ledger.ironcladsystems.dev"
+        try:
+            set_html = c.get("/settings").text
+            self.assertIn("https://ledger.ironcladsystems.dev/zettle/callback", set_html)
+            self.assertIn("Non-Inventory &amp; Fee Items", set_html)
+        finally:
+            os.environ.pop("APP_BASE_URL", None)
+
 
 if __name__ == "__main__":
     unittest.main()

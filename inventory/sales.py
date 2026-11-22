@@ -52,7 +52,7 @@ def record_cash_sale(
         skus = {}
         for it in clean:
             row = conn.execute(
-                "SELECT id, name, variant_name, price_cents, sell_mode FROM skus"
+                "SELECT id, name, variant_name, price_cents, sell_mode, item_type FROM skus"
                 " WHERE id = ? AND merchant_id = ?",
                 (it["sku_id"], int(merchant_id)),
             ).fetchone()
@@ -85,20 +85,21 @@ def record_cash_sale(
                 " unit_price_cents) VALUES (?, ?, ?, ?, ?)",
                 (sale_id, it["sku_id"], label, it["quantity"], sku["price_cents"]),
             )
-            stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -it["quantity"]
-            conn.execute(
-                "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"
-                " sale_item_id, created_by, created_at)"
-                " VALUES (?, ?, ?, 'sale', ?, ?, ?)",
-                (
-                    int(merchant_id),
-                    it["sku_id"],
-                    stock_delta,
-                    int(item_cur.lastrowid),
-                    created_by,
-                    now,
-                ),
-            )
+            if (sku["item_type"] or "product") != "fee":
+                stock_delta = -1 if sku["sell_mode"] == "lb_stock_unit" else -it["quantity"]
+                conn.execute(
+                    "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"
+                    " sale_item_id, created_by, created_at)"
+                    " VALUES (?, ?, ?, 'sale', ?, ?, ?)",
+                    (
+                        int(merchant_id),
+                        it["sku_id"],
+                        stock_delta,
+                        int(item_cur.lastrowid),
+                        created_by,
+                        now,
+                    ),
+                )
         conn.commit()
         return {"sale_id": sale_id, "total_cents": total, "duplicate": False}
     finally:
@@ -106,40 +107,75 @@ def record_cash_sale(
 
 
 def sales_summary(merchant_id: int, since_iso: str, until_iso: str) -> dict:
-    """Totals and source split for sales in [since, until)."""
+    """Totals, payment method (card vs cash), and source split for sales in [since, until)."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT s.source, COUNT(*) AS n, SUM(s.total_cents) AS cents,"
-            " COALESCE(SUM((SELECT SUM(quantity) FROM sale_items WHERE sale_id = s.id)), 0)"
-            "   AS units"
-            " FROM sales s WHERE s.merchant_id = ? AND s.status = 'completed'"
-            " AND s.occurred_at >= ? AND s.occurred_at < ? GROUP BY s.source",
+            """
+            SELECT s.source,
+                   CASE
+                     WHEN s.source = 'cash' OR LOWER(COALESCE(s.payment_type, '')) = 'cash' THEN 'cash'
+                     ELSE 'card'
+                   END AS pay_method,
+                   COUNT(*) AS n,
+                   SUM(s.total_cents) AS cents,
+                   COALESCE(SUM((
+                     SELECT SUM(si.quantity)
+                     FROM sale_items si
+                     LEFT JOIN skus k ON k.id = si.sku_id
+                     WHERE si.sale_id = s.id AND COALESCE(k.item_type, 'product') != 'fee'
+                   )), 0) AS units
+            FROM sales s
+            WHERE s.merchant_id = ? AND s.status = 'completed'
+              AND s.occurred_at >= ? AND s.occurred_at < ?
+            GROUP BY s.source, pay_method
+            """,
             (int(merchant_id), since_iso, until_iso),
         ).fetchall()
     finally:
         conn.close()
-    by = {r["source"]: r for r in rows}
 
-    def pick(src, col):
-        return int(by[src][col] or 0) if src in by else 0
+    def bucket(src: str | None = None, pay: str | None = None, col: str = "cents") -> int:
+        return int(sum(
+            (r[col] or 0) for r in rows
+            if (src is None or r["source"] == src) and (pay is None or r["pay_method"] == pay)
+        ))
 
-    count = pick("zettle", "n") + pick("cash", "n")
-    total = pick("zettle", "cents") + pick("cash", "cents")
+    count = bucket(col="n")
+    total = bucket(col="cents")
+    units = fmt_qty(sum(float(r["units"] or 0) for r in rows))
+    zettle_card_cents = bucket("zettle", "card", "cents")
+    zettle_card_count = bucket("zettle", "card", "n")
+    zettle_cash_cents = bucket("zettle", "cash", "cents")
+    zettle_cash_count = bucket("zettle", "cash", "n")
+    quick_cash_cents = bucket("cash", "cash", "cents")
+    quick_cash_count = bucket("cash", "cash", "n")
+    card_cents = zettle_card_cents
+    card_count = zettle_card_count
+    cash_cents = zettle_cash_cents + quick_cash_cents
+    cash_count = zettle_cash_count + quick_cash_count
     return {
         "total_cents": total,
         "count": count,
         "avg_cents": round(total / count) if count else 0,
-        "units": pick("zettle", "units") + pick("cash", "units"),
-        "zettle_count": pick("zettle", "n"),
-        "zettle_cents": pick("zettle", "cents"),
-        "cash_count": pick("cash", "n"),
-        "cash_cents": pick("cash", "cents"),
+        "units": units,
+        "card_count": card_count,
+        "card_cents": card_cents,
+        "cash_count": cash_count,
+        "cash_cents": cash_cents,
+        "zettle_card_count": zettle_card_count,
+        "zettle_card_cents": zettle_card_cents,
+        "zettle_cash_count": zettle_cash_count,
+        "zettle_cash_cents": zettle_cash_cents,
+        "quick_cash_count": quick_cash_count,
+        "quick_cash_cents": quick_cash_cents,
+        "zettle_count": bucket("zettle", col="n"),
+        "zettle_cents": bucket("zettle", col="cents"),
     }
 
 
 def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[dict]:
-    """Per-day Zettle/cash totals, one entry per day starting at start_day."""
+    """Per-day payment/source totals, one entry per day starting at start_day."""
     out = []
     for i in range(days):
         day = start_day + timedelta(days=i)
@@ -152,8 +188,12 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
             {
                 "label": day.strftime("%a"),
                 "date": day.date().isoformat(),
-                "zettle_cents": s["zettle_cents"],
+                "card_cents": s["card_cents"],
                 "cash_cents": s["cash_cents"],
+                "zettle_card_cents": s["zettle_card_cents"],
+                "zettle_cash_cents": s["zettle_cash_cents"],
+                "quick_cash_cents": s["quick_cash_cents"],
+                "zettle_cents": s["zettle_cents"],
             }
         )
     return out
@@ -185,7 +225,11 @@ def recent_sales(
     sql = (
         "SELECT s.id, s.source, s.occurred_at, s.total_cents, s.status,"
         " s.payment_type, s.cash_received_cents,"
-        " COALESCE((SELECT SUM(quantity) FROM sale_items WHERE sale_id = s.id), 0) AS units"
+        " COALESCE(("
+        "   SELECT SUM(si.quantity) FROM sale_items si"
+        "   LEFT JOIN skus k ON k.id = si.sku_id"
+        "   WHERE si.sale_id = s.id AND COALESCE(k.item_type, 'product') != 'fee'"
+        " ), 0) AS units"
         " FROM sales s WHERE s.merchant_id = ? AND s.occurred_at >= ? AND s.occurred_at < ?"
     )
     args: list = [int(merchant_id), since_iso, until_iso]
@@ -201,8 +245,11 @@ def recent_sales(
             ids = [s["id"] for s in sales]
             marks = ",".join("?" * len(ids))
             items = conn.execute(
-                "SELECT sale_id, name_snapshot, quantity, unit_price_cents"
-                f" FROM sale_items WHERE sale_id IN ({marks}) ORDER BY id",
+                "SELECT si.sale_id, si.name_snapshot, si.quantity, si.unit_price_cents,"
+                " COALESCE(k.item_type, 'product') AS item_type"
+                " FROM sale_items si"
+                " LEFT JOIN skus k ON k.id = si.sku_id"
+                f" WHERE si.sale_id IN ({marks}) ORDER BY si.id",
                 ids,
             ).fetchall()
         else:
@@ -214,10 +261,16 @@ def recent_sales(
         d = dict(it)
         d["quantity"] = fmt_qty(d["quantity"])
         d["subtotal_cents"] = round(d["quantity"] * d["unit_price_cents"])
+        d["is_fee"] = d["item_type"] == "fee"
         by_sale.setdefault(d["sale_id"], []).append(d)
     for s in sales:
         s["units"] = fmt_qty(s["units"])
         s["items"] = by_sale.get(s["id"], [])
+        s["pay_method"] = (
+            "cash"
+            if s["source"] == "cash" or (s.get("payment_type") or "").lower() == "cash"
+            else "card"
+        )
         rec = s["cash_received_cents"]
         s["change_cents"] = (rec - s["total_cents"]) if rec is not None else None
     return sales
@@ -250,3 +303,133 @@ def export_rows(
 
 def money(cents: int) -> str:
     return f"${cents / 100:,.2f}"
+
+
+def market_insights(merchant_id: int, since_iso: str, until_iso: str) -> dict:
+    """Event-driven market analytics: top products, fees, sell-outs, and baskets."""
+    from collections import Counter
+    from itertools import combinations
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT si.sale_id,
+                   si.sku_id,
+                   si.name_snapshot,
+                   si.quantity,
+                   si.unit_price_cents,
+                   s.occurred_at,
+                   COALESCE(k.item_type, 'product') AS item_type
+            FROM sale_items si
+            JOIN sales s ON s.id = si.sale_id
+            LEFT JOIN skus k ON k.id = si.sku_id
+            WHERE s.merchant_id = ? AND s.status = 'completed'
+              AND s.occurred_at >= ? AND s.occurred_at < ?
+            ORDER BY s.occurred_at ASC, si.id ASC
+            """,
+            (int(merchant_id), since_iso, until_iso),
+        ).fetchall()
+
+        sellout_rows = conn.execute(
+            """
+            SELECT k.id AS sku_id,
+                   k.name,
+                   k.variant_name,
+                   COALESCE(SUM(l.delta), 0) AS on_hand
+            FROM skus k
+            LEFT JOIN stock_ledger l ON l.sku_id = k.id
+            WHERE k.merchant_id = ? AND k.active = 1
+              AND COALESCE(k.item_type, 'product') != 'fee'
+            GROUP BY k.id
+            HAVING COALESCE(SUM(l.delta), 0) <= 1e-6
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_prod: dict[str, dict] = {}
+    baskets: dict[int, set[str]] = {}
+    basket_units: dict[int, float] = {}
+    last_sold_by_sku: dict[int, tuple[str, float]] = {}
+    fee_cents = 0
+    fee_count = 0
+
+    for r in rows:
+        qty = float(r["quantity"] or 0)
+        rev = round(qty * int(r["unit_price_cents"] or 0))
+        if r["item_type"] == "fee":
+            fee_cents += rev
+            fee_count += 1
+            continue
+        name = str(r["name_snapshot"] or "Item")
+        entry = by_prod.setdefault(
+            name,
+            {"name": name, "units": 0.0, "revenue_cents": 0, "sale_ids": set()},
+        )
+        entry["units"] += qty
+        entry["revenue_cents"] += rev
+        entry["sale_ids"].add(r["sale_id"])
+
+        baskets.setdefault(r["sale_id"], set()).add(name)
+        basket_units[r["sale_id"]] = basket_units.get(r["sale_id"], 0.0) + qty
+
+        if r["sku_id"] is not None:
+            sid = int(r["sku_id"])
+            prev_ts, prev_q = last_sold_by_sku.get(sid, ("", 0.0))
+            occ = str(r["occurred_at"])
+            last_sold_by_sku[sid] = (occ if occ > prev_ts else prev_ts, prev_q + qty)
+
+    products = [
+        {
+            "name": v["name"],
+            "units": fmt_qty(v["units"]),
+            "revenue_cents": v["revenue_cents"],
+            "sales_count": len(v["sale_ids"]),
+        }
+        for v in by_prod.values()
+    ]
+    top_by_units = sorted(products, key=lambda x: (-x["units"], -x["revenue_cents"]))[:10]
+    top_by_revenue = sorted(products, key=lambda x: (-x["revenue_cents"], -x["units"]))[:10]
+
+    sellouts = []
+    for sr in sellout_rows:
+        sid = int(sr["sku_id"])
+        if sid not in last_sold_by_sku:
+            continue
+        last_ts, sold_q = last_sold_by_sku[sid]
+        label = sr["name"] + (f" · {sr['variant_name']}" if sr["variant_name"] else "")
+        sellouts.append(
+            {
+                "sku_id": sid,
+                "name": label,
+                "units_sold": fmt_qty(sold_q),
+                "last_sold_at": last_ts,
+            }
+        )
+    sellouts.sort(key=lambda x: x["last_sold_at"])
+
+    pair_counts: Counter[tuple[str, str]] = Counter()
+    for items in baskets.values():
+        if len(items) >= 2:
+            for a, b in combinations(sorted(items), 2):
+                pair_counts[(a, b)] += 1
+    top_pairs = [
+        {"a": a, "b": b, "count": c}
+        for (a, b), c in pair_counts.most_common(8)
+    ]
+
+    basket_count = len(baskets)
+    avg_basket_items = round(sum(basket_units.values()) / basket_count, 2) if basket_count else 0.0
+
+    return {
+        "top_by_units": top_by_units,
+        "top_by_revenue": top_by_revenue,
+        "fee_cents": fee_cents,
+        "fee_count": fee_count,
+        "sellouts": sellouts,
+        "basket_count": basket_count,
+        "avg_basket_items": avg_basket_items,
+        "top_pairs": top_pairs,
+    }

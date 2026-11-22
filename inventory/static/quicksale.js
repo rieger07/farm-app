@@ -2,7 +2,7 @@
   const SKUS = JSON.parse(document.getElementById('skus').textContent);
   const QKEY = 'hh_cash_queue'; // legacy key name kept so queued sales survive the rename
   const lines = []; // [{ sku_id, qty }]
-  let cat = '', query = '';
+  let cat = '', query = '', hideOos = false;
   let wmState = null; // { sku, editIdx }
   const $ = id => document.getElementById(id);
   const money = c => '$' + (Math.round(c) / 100).toFixed(2);
@@ -97,8 +97,17 @@
 
   function renderTiles() {
     const t = $('tiles'); t.innerHTML = '';
-    SKUS.filter(s => (!cat || s.category === cat) &&
-        (s.name + ' ' + s.variant).toLowerCase().includes(query)).forEach(s => {
+    const list = SKUS.filter(s => {
+      if (cat && s.category !== cat) return false;
+      if (!(s.name + ' ' + s.variant).toLowerCase().includes(query)) return false;
+      if (hideOos && typeof s.on_hand === 'number' && round3(s.on_hand - usedForStock(s)) <= 0) return false;
+      return true;
+    }).sort((a, b) => {
+      const aOos = (typeof a.on_hand === 'number' && round3(a.on_hand - usedForStock(a)) <= 0) ? 1 : 0;
+      const bOos = (typeof b.on_hand === 'number' && round3(b.on_hand - usedForStock(b)) <= 0) ? 1 : 0;
+      return aOos - bOos;
+    });
+    list.forEach(s => {
       const lbMode = isLb(s);
       const mineCount = lines.filter(l => l.sku_id === s.id).length;
       const q = lbMode ? mineCount : unitQty(s.id);
@@ -166,6 +175,11 @@
     const btn = $('record');
     btn.disabled = !lines.length;
     btn.textContent = lines.length ? `Record cash sale · ${money(t)}` : 'Record cash sale';
+    const sticky = $('sticky-cart');
+    if (sticky) {
+      sticky.hidden = !lines.length;
+      $('sticky-summary').textContent = `${cnt} ${cnt === 1 ? 'item' : 'items'} · ${money(t)}`;
+    }
   }
   const render = () => { renderTiles(); renderCart(); };
 
@@ -208,11 +222,32 @@
   };
 
   $('cash').addEventListener('input', renderCart);
+  document.querySelectorAll('.fast-cash [data-cash]').forEach(btn => {
+    btn.onclick = () => {
+      const val = btn.dataset.cash;
+      $('cash').value = val === 'exact' ? (total() / 100).toFixed(2) : Number(val).toFixed(2);
+      renderCart();
+    };
+  });
+  if ($('hide-oos')) {
+    $('hide-oos').onclick = () => {
+      hideOos = !hideOos;
+      $('hide-oos').classList.toggle('on', hideOos);
+      $('hide-oos').setAttribute('aria-pressed', hideOos ? 'true' : 'false');
+      renderTiles();
+    };
+  }
+  if ($('sticky-checkout')) {
+    $('sticky-checkout').onclick = () => {
+      $('cart-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => $('cash').focus(), 250);
+    };
+  }
   $('q').addEventListener('input', e => { query = e.target.value.toLowerCase(); renderTiles(); });
   $('chips').addEventListener('click', e => {
     const b = e.target.closest('.chip'); if (!b) return;
     cat = b.dataset.cat;
-    document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === b));
+    document.querySelectorAll('#chips .chip').forEach(c => c.classList.toggle('on', c === b));
     renderTiles();
   });
   addEventListener('online', flush); addEventListener('offline', banner);
