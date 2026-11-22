@@ -385,6 +385,131 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
     )
 
 
+def _fmt_lb_oz(lbs: float) -> str:
+    total_oz = round(max(0.0, float(lbs or 0)) * 16)
+    whole_lb, rem_oz = divmod(total_oz, 16)
+    return f"{whole_lb} lb {rem_oz} oz"
+
+
+def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
+    bag_weight = get_bag_weight(user_id=user_id)
+    s = compute_batch_schedule(batch, bag_weight=bag_weight)
+    harvests = sorted(
+        list_batch_harvests(batch["id"]),
+        key=lambda h: int(h.get("id") or 0),
+        reverse=True,
+    )
+    harvested_head = sum(int(h.get("head_count") or 0) for h in harvests)
+    surviving = int(s["surviving_quantity"])
+    remaining = max(0, surviving - harvested_head)
+    total_lbs = round(sum(float(h.get("dressed_lbs") or 0) for h in harvests), 2)
+    per_bird = [
+        round(float(h["dressed_lbs"]) / max(1, int(h["head_count"])), 2)
+        for h in harvests
+        if float(h.get("dressed_lbs") or 0) > 0
+    ]
+    avg_lbs = round(total_lbs / harvested_head, 2) if harvested_head > 0 else 0.0
+    min_lbs = min(per_bird) if per_bird else 0.0
+    max_lbs = max(per_bird) if per_bird else 0.0
+    sale_price = float(batch.get("sale_price_per_lb") or 0.0)
+    est_value = round(total_lbs * sale_price, 2)
+    est_total_lbs = round(surviving * float(batch.get("avg_dressed_weight") or 0.0), 1)
+    progress_pct = min(100, round(harvested_head / surviving * 100)) if surviving > 0 else 0
+    entries = []
+    for idx, h in enumerate(harvests):
+        hc = max(1, int(h.get("head_count") or 1))
+        dl = round(float(h.get("dressed_lbs") or 0), 2)
+        entries.append({
+            "id": int(h["id"]),
+            "num": len(harvests) - idx,
+            "harvest_date": h["harvest_date"],
+            "head_count": hc,
+            "dressed_lbs": dl,
+            "lb_oz": _fmt_lb_oz(dl),
+            "per_bird_lbs": round(dl / hc, 2),
+            "notes": h.get("notes") or "",
+        })
+    return {
+        "batch_id": int(batch["id"]),
+        "batch_name": batch["name"],
+        "harvested_head": harvested_head,
+        "surviving_quantity": surviving,
+        "remaining_head": remaining,
+        "progress_pct": progress_pct,
+        "total_lbs": total_lbs,
+        "est_total_lbs": est_total_lbs,
+        "avg_lbs": avg_lbs,
+        "min_lbs": min_lbs,
+        "max_lbs": max_lbs,
+        "sale_price_per_lb": sale_price,
+        "est_value": est_value,
+        "entries": entries,
+    }
+
+
+@app.get("/batches/{batch_id}/harvest")
+def batch_harvest_tally_page(
+    request: Request, batch_id: int, user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    tally = _harvest_tally_payload(b, user["id"])
+    return _render(
+        request, "harvest_tally.html", user, "batches",
+        b=b, tally=tally,
+    )
+
+
+@app.post("/api/batches/{batch_id}/harvest")
+async def api_batch_harvest_add(
+    batch_id: int, request: Request, user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    payload = await request.json()
+    hdate = str(payload.get("harvest_date") or date.today().isoformat()).strip()
+    head_count = max(1, int(payload.get("head_count") or 1))
+    dressed_lbs = float(payload.get("dressed_lbs") or 0)
+    if dressed_lbs <= 0:
+        raise HTTPException(status_code=400, detail="Weight must be greater than 0.")
+    notes = str(payload.get("notes") or "").strip()
+    proc_cost = float(payload.get("processing_cost_total") or 0.0)
+    add_batch_harvest(batch_id, hdate, head_count, round(dressed_lbs, 2), proc_cost, notes)
+    return _harvest_tally_payload(b, user["id"])
+
+
+@app.delete("/api/batches/{batch_id}/harvest/{harvest_id}")
+def api_batch_harvest_delete(
+    batch_id: int, harvest_id: int, user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    delete_batch_harvest(harvest_id)
+    return _harvest_tally_payload(b, user["id"])
+
+
+@app.get("/batches/{batch_id}/harvest.csv")
+def batch_harvest_csv(batch_id: int, user: dict = Depends(current_user)):
+    b = _get_owned_batch(batch_id, user)
+    tally = _harvest_tally_payload(b, user["id"])
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["#", "Date", "Head", "Dressed (lb)", "Lb + Oz", "Notes"])
+    for e in reversed(tally["entries"]):
+        writer.writerow([
+            e["num"], e["harvest_date"], e["head_count"],
+            f"{e['dressed_lbs']:.2f}", e["lb_oz"], e["notes"],
+        ])
+    writer.writerow([
+        "TOTAL", "", tally["harvested_head"],
+        f"{tally['total_lbs']:.2f}", _fmt_lb_oz(tally["total_lbs"]),
+        f"Avg {tally['avg_lbs']:.2f} lb/bird",
+    ])
+    slug = "".join(ch if ch.isalnum() else "-" for ch in b["name"].lower()).strip("-") or f"batch-{batch_id}"
+    return Response(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{slug}-harvest.csv"'},
+    )
+
+
 @app.post("/batches/save")
 def batch_save_submit(
     batch_id: str = Form(""),
