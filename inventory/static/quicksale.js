@@ -135,12 +135,20 @@
         if (lbMode) openWeightModal(s);
         else setUnitQty(s.id, q + 1);
       };
-      if (q && !lbMode) {
-        const minus = Object.assign(document.createElement('button'), { textContent: '−' });
-        minus.onclick = e => { e.stopPropagation(); setUnitQty(s.id, q - 1); };
+      if (q) {
+        const minus = Object.assign(document.createElement('button'), { textContent: '−', title: lbMode ? 'Remove last weighed item' : 'Decrease quantity' });
+        minus.onclick = e => {
+          e.stopPropagation();
+          if (lbMode) {
+            for (let i = lines.length - 1; i >= 0; i--) {
+              if (lines[i].sku_id === s.id) { lines.splice(i, 1); break; }
+            }
+            render();
+          } else {
+            setUnitQty(s.id, q - 1);
+          }
+        };
         step.append(minus, Object.assign(document.createElement('span'), { textContent: q }));
-      } else if (q && lbMode) {
-        step.append(Object.assign(document.createElement('span'), { textContent: q }));
       }
       step.append(plus); pr.append(step);
       el.onclick = () => {
@@ -155,10 +163,24 @@
     $('lines').innerHTML = lines.length ? '' : '<small class="muted">Tap a product to add it.</small>';
     lines.forEach((l, idx) => {
       const s = byId[l.sku_id], d = document.createElement('div');
-      d.innerHTML = '<span></span><span></span>';
+      d.innerHTML = '<span></span><span class="line-right"><b></b></span>';
       const qtyLabel = isLb(s) ? `${l.qty} lb` : `${l.qty}`;
       d.children[0].textContent = `${qtyLabel} × ${s.name}${s.variant ? ' · ' + s.variant : ''}`;
-      d.children[1].textContent = money(lineCents(l));
+      const right = d.querySelector('.line-right');
+      right.querySelector('b').textContent = money(lineCents(l));
+      const rm = Object.assign(document.createElement('button'), {
+        type: 'button',
+        className: 'line-rm',
+        textContent: '×',
+        title: 'Remove line',
+      });
+      rm.setAttribute('aria-label', `Remove ${s.name}`);
+      rm.onclick = e => {
+        e.stopPropagation();
+        lines.splice(idx, 1);
+        render();
+      };
+      right.append(rm);
       if (isLb(s)) {
         d.style.cursor = 'pointer';
         d.title = 'Tap to edit weight';

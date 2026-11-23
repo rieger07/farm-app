@@ -256,6 +256,10 @@ details.collapse-card[open] > summary .chev { transform: rotate(180deg); }
 .qr-stage svg { width: 100%; max-width: 240px; height: auto; display: block; }
 .qr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .qr-actions .btn { flex: 1; text-align: center; text-decoration: none; font-size: 13px; padding: 8px 10px; white-space: nowrap; }
+.line-right { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.line-right b { font-weight: 600; }
+.line-rm { border: 0; background: transparent; color: var(--muted); font: 700 16px/1 inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.line-rm:hover { background: #fbe9e7; color: var(--redink); }
 @media(max-width:800px){
   .cards.four { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .cards.four .card { padding: 12px; }
