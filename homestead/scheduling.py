@@ -155,6 +155,8 @@ def compute_batch_schedule(
                 ),
                 "notes": str(h.get("notes", "")),
                 "for_sale": bool(1 if h.get("for_sale") is None else h.get("for_sale")),
+                "customer_id": int(h["customer_id"]) if h.get("customer_id") else None,
+                "deposit_paid": max(0.0, float(h.get("deposit_paid") or 0.0)),
                 "payment_status": str(h.get("payment_status") or "unpaid"),
                 "pickup_status": str(h.get("pickup_status") or "unassigned"),
                 "actual_sale_price": (
@@ -461,26 +463,60 @@ def compute_batch_schedule(
         else 0.0
     )
 
-    harvest_freezer_lbs = sum(
-        h["dressed_lbs"] for h in parsed_harvests if not h["for_sale"]
-    )
+    harvest_freezer_head = 0
+    harvest_freezer_lbs = 0.0
+    harvest_available_head = 0
+    harvest_available_lbs = 0.0
+    harvest_assigned_head = 0
+    harvest_assigned_lbs = 0.0
+    harvest_assigned_value = 0.0
+    harvest_picked_up_head = 0
+    harvest_picked_up_lbs = 0.0
+    harvest_paid_head = 0
+    harvest_sold_head = 0
     harvest_sold_lbs = 0.0
     harvest_sales_revenue = 0.0
+    harvest_deposits_paid = 0.0
+    harvest_balance_due = 0.0
     for h in parsed_harvests:
+        hc = h["head_count"]
+        dl = h["dressed_lbs"]
         if not h["for_sale"]:
+            harvest_freezer_head += hc
+            harvest_freezer_lbs += dl
             continue
-        is_sold = (
-            h["payment_status"] == "paid"
-            or h["pickup_status"] == "picked_up"
-            or h["actual_sale_price"] is not None
+        eff_price = (
+            h["actual_sale_price"]
+            if h["actual_sale_price"] is not None
+            else round(dl * sale_price_per_lb, 2)
         )
+        dep = h["deposit_paid"]
+        harvest_deposits_paid += dep
+        is_paid = h["payment_status"] == "paid"
+        is_picked = h["pickup_status"] == "picked_up"
+        has_cust = h["customer_id"] is not None
+        is_sold = is_paid or is_picked or h["actual_sale_price"] is not None
+
+        if is_paid:
+            harvest_paid_head += hc
+        if is_picked:
+            harvest_picked_up_head += hc
+            harvest_picked_up_lbs += dl
+        elif has_cust:
+            harvest_assigned_head += hc
+            harvest_assigned_lbs += dl
+            harvest_assigned_value += eff_price
+        elif not is_sold:
+            harvest_available_head += hc
+            harvest_available_lbs += dl
+
         if is_sold:
-            harvest_sold_lbs += h["dressed_lbs"]
-            harvest_sales_revenue += (
-                h["actual_sale_price"]
-                if h["actual_sale_price"] is not None
-                else round(h["dressed_lbs"] * sale_price_per_lb, 2)
-            )
+            harvest_sold_head += hc
+            harvest_sold_lbs += dl
+            harvest_sales_revenue += eff_price
+
+        if (has_cust or is_picked) and not is_paid:
+            harvest_balance_due += max(0.0, eff_price - dep)
 
     sold_lbs = round(
         sum(
@@ -703,6 +739,21 @@ def compute_batch_schedule(
         "sold_lbs": sold_lbs,
         "actual_sales_revenue": actual_sales_revenue,
         "freezer_lbs": freezer_lbs,
+        "harvest_available_head": harvest_available_head,
+        "harvest_available_lbs": round(harvest_available_lbs, 2),
+        "harvest_assigned_head": harvest_assigned_head,
+        "harvest_assigned_lbs": round(harvest_assigned_lbs, 2),
+        "harvest_assigned_value": round(harvest_assigned_value, 2),
+        "harvest_picked_up_head": harvest_picked_up_head,
+        "harvest_picked_up_lbs": round(harvest_picked_up_lbs, 2),
+        "harvest_paid_head": harvest_paid_head,
+        "harvest_sold_head": harvest_sold_head,
+        "harvest_sold_lbs": round(harvest_sold_lbs, 2),
+        "harvest_sales_revenue": round(harvest_sales_revenue, 2),
+        "harvest_freezer_head": harvest_freezer_head,
+        "harvest_freezer_lbs": round(harvest_freezer_lbs, 2),
+        "harvest_deposits_paid": round(harvest_deposits_paid, 2),
+        "harvest_balance_due": round(harvest_balance_due, 2),
         "allocated_lbs": allocated_lbs,
         "unallocated_harvested_lbs": unallocated_harvested_lbs,
         "imputed_freezer_value": imputed_freezer_value,

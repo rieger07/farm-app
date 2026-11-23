@@ -399,12 +399,39 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         s["proc_date"],
         f"{s['surviving_quantity']} {b['species']}",
     )
+    tally = _harvest_tally_payload(b, user["id"])
+    tally_by_id = {int(e["id"]): e for e in tally["entries"]}
+    raw_harvests = list_batch_harvests(batch_id)
+    enriched_harvests = []
+    for h in raw_harvests:
+        row = dict(h)
+        ti = tally_by_id.get(int(h["id"]))
+        row["tally"] = ti
+        enriched_harvests.append(row)
+
+    tally_allocations = []
+    for e in tally["entries"]:
+        if not e["for_sale"]:
+            tally_allocations.append({**e, "alloc_kind": "freezer"})
+        else:
+            is_sold = (
+                e["payment_status"] == "paid"
+                or e["pickup_status"] == "picked_up"
+                or e["actual_sale_price"] is not None
+            )
+            if is_sold:
+                tally_allocations.append({**e, "alloc_kind": "sale"})
+            elif e["customer_id"]:
+                tally_allocations.append({**e, "alloc_kind": "assigned"})
+
     return _render(
         request, "batch_detail.html", user, "batches",
         b=b, s=s, gcal_url=gcal_url, gcal_arrival_url=gcal_arrival_url,
         losses=list_batch_losses(batch_id),
-        harvests=list_batch_harvests(batch_id),
+        harvests=enriched_harvests,
         sales=list_batch_sales(batch_id),
+        tally=tally,
+        tally_allocations=tally_allocations,
         feed_logs=list_batch_feed_logs(batch_id),
         bag_weight=bag_weight,
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
