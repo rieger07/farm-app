@@ -99,6 +99,7 @@
         <option value="card" {{ 'selected' if source=='card' }}>Card (Zettle)</option>
         <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle (all)</option>
         <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale (all)</option>
+        <option value="voided" {{ 'selected' if source=='voided' }}>Voided (Quick sale)</option>
       </select>
     </form>
   </div>
@@ -128,17 +129,34 @@
         <div class="line"><span>Cash received</span><span>{{ t.cash_received_cents|money }}</span></div>
         <div class="line"><span>Change given</span><span>{{ t.change_cents|money }}</span></div>
         {% endif %}
-        <form method="post" action="/sales/{{ t.id }}/payment-type" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
-          <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-          <small class="muted">Re-tag payment:</small>
-          <select name="payment_type" style="padding:4px 8px;font-size:12px">
-            <option value="cash" {{ 'selected' if t.pay_method=='cash' }}>Physical Cash</option>
-            <option value="venmo" {{ 'selected' if t.pay_method=='venmo' }}>Venmo (Digital)</option>
-            <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
-            <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
-          </select>
-          <button class="btn" style="padding:4px 10px;font-size:12px">Save</button>
-        </form>
+        {% if t.status != 'voided' %}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <form method="post" action="/sales/{{ t.id }}/payment-type" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <small class="muted">Re-tag payment:</small>
+            <select name="payment_type" style="padding:4px 8px;font-size:12px">
+              <option value="cash" {{ 'selected' if t.pay_method=='cash' }}>Physical Cash</option>
+              <option value="venmo" {{ 'selected' if t.pay_method=='venmo' }}>Venmo (Digital)</option>
+              <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
+              <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
+            </select>
+            <button class="btn" style="padding:4px 10px;font-size:12px">Save</button>
+          </form>
+          {% if t.source == 'cash' %}
+          <form method="post" action="/sales/{{ t.id }}/void" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap" onsubmit="return confirm('Void Quick sale #{{ t.id }}? It will be removed from sales totals, charts, and insights.')">
+            <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);cursor:pointer">
+              <input type="checkbox" name="restore_stock" value="1" checked> Restore stock
+            </label>
+            <button class="btn" style="padding:4px 10px;font-size:12px;color:var(--redink);border-color:#e4b4ad;background:#fff5f4">Void sale</button>
+          </form>
+          {% endif %}
+        </div>
+        {% else %}
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <small class="muted">This Quick sale was voided and excluded from all totals, charts, and insights.</small>
+        </div>
+        {% endif %}
       </div>
     </details>
   {% else %}

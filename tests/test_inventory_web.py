@@ -855,6 +855,74 @@ class WebTest(unittest.TestCase):
         self.assertEqual(turkey_ins["units"], 2)
         self.assertEqual(turkey_ins["revenue_cents"], 32 * 750)
 
+    def test_void_quick_sale_restores_stock_and_excludes_from_totals(self):
+        from inventory.db import get_connection
+        from inventory.stock import list_stock
+
+        c = self.client("zach")
+        sku = list_stock(1)[0]
+        sku_id = sku["id"]
+        start_on_hand = sku["on_hand"]
+
+        # Record two Quick sales today: sale A (2 units) and sale B (3 units)
+        r_a = c.post("/api/cash-sale", json={
+            "client_uuid": "void-test-a",
+            "payment_type": "cash",
+            "items": [{"sku_id": sku_id, "quantity": 2}],
+        })
+        self.assertEqual(r_a.status_code, 200)
+        sale_a_id = r_a.json()["sale_id"]
+
+        r_b = c.post("/api/cash-sale", json={
+            "client_uuid": "void-test-b",
+            "payment_type": "venmo",
+            "items": [{"sku_id": sku_id, "quantity": 3}],
+        })
+        self.assertEqual(r_b.status_code, 200)
+        sale_b_id = r_b.json()["sale_id"]
+
+        after_sales_on_hand = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id)
+        self.assertEqual(after_sales_on_hand, start_on_hand - 5)
+
+        # 1. Void sale A WITH restore_stock=1 -> restores +2 stock and removes from default /sales list
+        rv_a = c.post(
+            f"/sales/{sale_a_id}/void",
+            data={"restore_stock": "1", "next_url": "/sales?period=today"},
+            follow_redirects=False,
+        )
+        self.assertEqual(rv_a.status_code, 303)
+        after_void_a = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id)
+        self.assertEqual(after_void_a, start_on_hand - 3)
+
+        default_list = c.get("/sales?period=today").text.split('id="sales-list"', 1)[1]
+        self.assertNotIn(f"#{sale_a_id} ", default_list)
+        self.assertIn(f"#{sale_b_id} ", default_list)
+
+        # Visible under source=voided
+        voided_list = c.get("/sales?period=today&source=voided").text.split('id="sales-list"', 1)[1]
+        self.assertIn(f"#{sale_a_id} ", voided_list)
+
+        # 2. Void sale B WITHOUT restore_stock -> stock remains unchanged (for old dev test sales)
+        rv_b = c.post(
+            f"/sales/{sale_b_id}/void",
+            data={"restore_stock": "", "next_url": "/sales?period=today"},
+            follow_redirects=False,
+        )
+        self.assertEqual(rv_b.status_code, 303)
+        after_void_b = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id)
+        self.assertEqual(after_void_b, start_on_hand - 3)
+
+        # 3. Attempting to void a Zettle sale is rejected
+        conn = get_connection()
+        try:
+            z_row = conn.execute("SELECT id FROM sales WHERE merchant_id = 1 AND source = 'zettle' LIMIT 1").fetchone()
+            z_id = int(z_row["id"])
+        finally:
+            conn.close()
+        rv_z = c.post(f"/sales/{z_id}/void", data={"restore_stock": "1", "next_url": "/sales"}, follow_redirects=False)
+        self.assertEqual(rv_z.status_code, 303)
+        self.assertIn("Only+Quick+sale+transactions", rv_z.headers["location"])
+
 
 if __name__ == "__main__":
     unittest.main()
