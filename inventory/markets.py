@@ -384,7 +384,8 @@ def recommend_cash_drawer(
             SELECT s.occurred_at, s.total_cents, s.cash_received_cents
             FROM sales s
             WHERE s.merchant_id = ? AND s.status = 'completed'
-              AND (s.source = 'cash' OR LOWER(COALESCE(s.payment_type, '')) = 'cash')
+              AND (LOWER(COALESCE(s.payment_type, '')) LIKE '%cash%'
+                   OR (s.source = 'cash' AND COALESCE(s.payment_type, '') = ''))
               AND s.total_cents > 0
               AND s.occurred_at >= ? AND s.occurred_at < ?{win_sql}
             """,

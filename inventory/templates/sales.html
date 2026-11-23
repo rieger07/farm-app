@@ -42,21 +42,22 @@
 
 <div class="cards four">
   <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}</small></div>
-  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.card_count }} card · {{ summary.cash_count }} cash</small></div>
+  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.card_count }} card · {{ summary.digital_count }} digital · {{ summary.cash_count }} cash</small></div>
   <div class="card"><small>Average sale</small><div class="big">{{ summary.avg_cents|money }}</div><small>Per transaction</small></div>
   <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across products</small></div>
 </div>
 
 <div class="cards two">
   <div class="card">
-    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot y"></i>Cash</span></div>
+    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot b"></i>Digital <i class="dot y"></i>Cash</span></div>
     <div class="chartwrap">
       <div class="chart" style="min-width: {{ days|length * 26 }}px">
         {% for d in days %}
-        {% set tot = d.card_cents + d.cash_cents %}
+        {% set tot = d.card_cents + d.digital_cents + d.cash_cents %}
         <div class="barcol">
-          <div class="bar" title="{{ d.title }}: {{ tot|money }} (Card {{ d.card_cents|money }}, Cash {{ d.cash_cents|money }})" style="height: {{ (tot / peak * 100)|round|int }}%">
+          <div class="bar" title="{{ d.title }}: {{ tot|money }} (Card {{ d.card_cents|money }}, Digital {{ d.digital_cents|money }}, Cash {{ d.cash_cents|money }})" style="height: {{ (tot / peak * 100)|round|int }}%">
             <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
+            <div class="seg b" style="flex: {{ d.digital_cents }}"></div>
             <div class="seg g" style="flex: {{ d.card_cents }}"></div>
           </div>
           <small>{{ d.label }}</small>
@@ -64,15 +65,20 @@
         {% endfor %}
       </div>
     </div>
-    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.card_cents + best.cash_cents)|money }}).</small>
+    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.card_cents + best.digital_cents + best.cash_cents)|money }}).</small>
   </div>
   <div class="card">
-    <b>Cash or card. All accounted for.</b>
+    <b>Cash, digital, or card. All accounted for.</b>
     <small class="muted block">{{ period_label|upper }} · PAYMENT BREAKDOWN</small>
-    {% set tot = (summary.card_cents + summary.cash_cents) or 1 %}
-    <div class="split"><div class="g" style="width: {{ (summary.card_cents / tot * 100)|round|int }}%"></div><div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div></div>
+    {% set tot = (summary.card_cents + summary.digital_cents + summary.cash_cents) or 1 %}
+    <div class="split">
+      <div class="g" style="width: {{ (summary.card_cents / tot * 100)|round|int }}%"></div>
+      <div class="b" style="width: {{ (summary.digital_cents / tot * 100)|round|int }}%"></div>
+      <div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div>
+    </div>
     <div class="srcrow"><div><b>Card</b><small>{{ summary.card_count }} sales · Zettle</small></div><b>{{ summary.card_cents|money }}</b></div>
-    <div class="srcrow"><div><b>Cash</b><small>{{ summary.cash_count }} sales · Zettle ({{ summary.zettle_cash_cents|money }}) + Quick sale ({{ summary.quick_cash_cents|money }})</small></div><b>{{ summary.cash_cents|money }}</b></div>
+    <div class="srcrow"><div><b>Digital cash</b><small>{{ summary.digital_count }} sales · Venmo ({{ summary.venmo_cents|money }}) + PayPal ({{ summary.paypal_cents|money }})</small></div><b>{{ summary.digital_cents|money }}</b></div>
+    <div class="srcrow"><div><b>Physical cash</b><small>{{ summary.cash_count }} sales · Zettle ({{ summary.zettle_cash_cents|money }}) + Quick sale ({{ summary.quick_cash_cents|money }})</small></div><b>{{ summary.cash_cents|money }}</b></div>
   </div>
 </div>
 
@@ -83,12 +89,16 @@
       <input type="hidden" name="period" value="{{ period }}">
       {% if period == 'custom' %}<input type="hidden" name="from" value="{{ date_from }}"><input type="hidden" name="to" value="{{ date_to }}">{% endif %}
       {% if period == 'day' %}<input type="hidden" name="date" value="{{ market_date }}">{% endif %}
+      {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
       <select name="source" onchange="this.form.submit()">
         <option value="all" {{ 'selected' if source=='all' }}>All transactions</option>
-        <option value="cash" {{ 'selected' if source=='cash' }}>Cash (Zettle + Quick sale)</option>
+        <option value="cash" {{ 'selected' if source=='cash' }}>Physical Cash</option>
+        <option value="digital" {{ 'selected' if source=='digital' }}>Digital Cash (Venmo + PayPal)</option>
+        <option value="venmo" {{ 'selected' if source=='venmo' }}>Venmo only</option>
+        <option value="paypal" {{ 'selected' if source=='paypal' }}>PayPal only</option>
         <option value="card" {{ 'selected' if source=='card' }}>Card (Zettle)</option>
         <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle (all)</option>
-        <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale only</option>
+        <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale (all)</option>
       </select>
     </form>
   </div>
@@ -118,6 +128,17 @@
         <div class="line"><span>Cash received</span><span>{{ t.cash_received_cents|money }}</span></div>
         <div class="line"><span>Change given</span><span>{{ t.change_cents|money }}</span></div>
         {% endif %}
+        <form method="post" action="/sales/{{ t.id }}/payment-type" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+          <small class="muted">Re-tag payment:</small>
+          <select name="payment_type" style="padding:4px 8px;font-size:12px">
+            <option value="cash" {{ 'selected' if t.pay_method=='cash' }}>Physical Cash</option>
+            <option value="venmo" {{ 'selected' if t.pay_method=='venmo' }}>Venmo (Digital)</option>
+            <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
+            <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
+          </select>
+          <button class="btn" style="padding:4px 10px;font-size:12px">Save</button>
+        </form>
       </div>
     </details>
   {% else %}

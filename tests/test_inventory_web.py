@@ -703,6 +703,81 @@ class WebTest(unittest.TestCase):
         self.assertEqual(r_arch.status_code, 303)
         self.assertEqual(len(list_marketplaces(1)), 1)
 
+    def test_three_way_payment_categories_venmo_paypal_and_retag(self):
+        from datetime import datetime, timezone
+        from inventory.db import get_connection
+        from inventory.sync import import_purchase
+
+        c = self.client("zach")
+        conn = get_connection()
+        try:
+            sku_row = conn.execute("SELECT id, zettle_product_uuid, name FROM skus WHERE merchant_id = 1 LIMIT 1").fetchone()
+            sku_id, prod_uuid, prod_name = sku_row["id"], sku_row["zettle_product_uuid"], sku_row["name"]
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            # 1. Zettle PayPal QR sale ($12.00) + Zettle Cash sale ($18.00)
+            import_purchase(conn, 1, {
+                "purchaseUUID": "p-paypal-1",
+                "timestamp": now_iso + "+00:00",
+                "amount": 1200,
+                "payments": [{"type": "PAYPAL_QRC"}],
+                "products": [{"productUuid": prod_uuid, "variantUuid": "", "name": prod_name, "quantity": "1", "unitPrice": 1200}],
+            }, "2020-01-01T00:00:00")
+            import_purchase(conn, 1, {
+                "purchaseUUID": "p-zcash-retag",
+                "timestamp": now_iso + "+00:00",
+                "amount": 1800,
+                "payments": [{"type": "IZETTLE_CASH"}],
+                "products": [{"productUuid": prod_uuid, "variantUuid": "", "name": prod_name, "quantity": "1", "unitPrice": 1800}],
+            }, "2020-01-01T00:00:00")
+            conn.commit()
+            zcash_sale_id = conn.execute(
+                "SELECT id FROM sales WHERE external_id = 'p-zcash-retag'"
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+
+        # 2. Quick sale Venmo transaction
+        r_v = c.post("/api/cash-sale", json={
+            "client_uuid": "qs-venmo-1",
+            "payment_type": "venmo",
+            "items": [{"sku_id": sku_id, "quantity": 1}],
+        })
+        self.assertEqual(r_v.status_code, 200)
+
+        # 3. Re-tag the Zettle Cash sale ($18.00) to Venmo via Sales page
+        r_retag = c.post(
+            f"/sales/{zcash_sale_id}/payment-type",
+            data={"payment_type": "venmo", "next_url": "/sales?period=today"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_retag.status_code, 303)
+
+        # Verify Sales breakdown shows Digital cash, Venmo, PayPal, and filters work
+        sales_html = c.get("/sales?period=today").text
+        self.assertIn("Digital cash", sales_html)
+        self.assertIn("Physical cash", sales_html)
+        self.assertIn("PayPal ($12.00)", sales_html)
+
+        dig_list = c.get("/sales?period=today&source=digital").text.split('id="sales-list"', 1)[1]
+        self.assertIn("$12.00", dig_list)
+        self.assertIn("$18.00", dig_list)
+        self.assertIn("$6.00", dig_list)
+
+        pp_list = c.get("/sales?period=today&source=paypal").text.split('id="sales-list"', 1)[1]
+        self.assertIn("$12.00", pp_list)
+        self.assertNotIn("$18.00", pp_list)
+
+        venmo_list = c.get("/sales?period=today&source=venmo").text.split('id="sales-list"', 1)[1]
+        self.assertIn("$18.00", venmo_list)
+        self.assertIn("$6.00", venmo_list)
+        self.assertNotIn("$12.00", venmo_list)
+        self.assertNotIn("pay-badge paypal", venmo_list)
+
+        # Physical cash filter excludes both PayPal ($12) and re-tagged Venmo ($18)
+        phys_list = c.get("/sales?period=today&source=cash").text.split('id="sales-list"', 1)[1]
+        self.assertNotIn("$12.00", phys_list)
+        self.assertNotIn("$18.00", phys_list)
+
 
 if __name__ == "__main__":
     unittest.main()
