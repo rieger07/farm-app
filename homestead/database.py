@@ -498,6 +498,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 feed_date TEXT NOT NULL,
+                feed_type TEXT NOT NULL DEFAULT 'layer',
                 bags REAL NOT NULL DEFAULT 1.0,
                 feed_lbs REAL NOT NULL DEFAULT 50.0,
                 cost_total REAL NOT NULL DEFAULT 0.0,
@@ -512,6 +513,12 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_layer_feed_user_date ON layer_feed_logs(user_id, feed_date)"
         )
+        lf_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(layer_feed_logs)").fetchall()
+        }
+        if "feed_type" not in lf_cols:
+            conn.execute("ALTER TABLE layer_feed_logs ADD COLUMN feed_type TEXT NOT NULL DEFAULT 'layer'")
         for tbl in ("batch_feed_logs", "batch_harvests"):
             cols = {
                 row["name"]
@@ -3335,20 +3342,32 @@ def settle_customer_batch_pickup(
 # ---------------------------------------------------------------------------
 def get_layer_settings(user_id: int) -> dict:
     raw_rate = get_text_setting("layer_feed_lbs_per_hen_day", "0.25", user_id=user_id).strip()
+    raw_scratch_rate = get_text_setting("layer_scratch_lbs_per_day", "0.0", user_id=user_id).strip()
     raw_price = get_text_setting("layer_bag_price", "22.00", user_id=user_id).strip()
+    raw_scratch_price = get_text_setting("layer_scratch_bag_price", "16.00", user_id=user_id).strip()
     raw_sku = get_text_setting("layer_ledger_sku_id", "", user_id=user_id).strip()
     try:
         rate = max(0.01, float(raw_rate))
     except ValueError:
         rate = 0.25
     try:
+        scratch_rate = max(0.0, float(raw_scratch_rate))
+    except ValueError:
+        scratch_rate = 0.0
+    try:
         price = max(0.0, float(raw_price))
     except ValueError:
         price = 22.00
+    try:
+        scratch_price = max(0.0, float(raw_scratch_price))
+    except ValueError:
+        scratch_price = 16.00
     sku_id = int(raw_sku) if raw_sku.isdigit() and int(raw_sku) > 0 else None
     return {
         "feed_lbs_per_hen_day": round(rate, 3),
+        "scratch_lbs_per_day": round(scratch_rate, 2),
         "bag_price": round(price, 2),
+        "scratch_bag_price": round(scratch_price, 2),
         "ledger_sku_id": sku_id,
     }
 
@@ -3358,12 +3377,18 @@ def save_layer_settings(
     feed_lbs_per_hen_day: float = 0.25,
     bag_price: float = 22.00,
     ledger_sku_id: int | None = None,
+    scratch_lbs_per_day: float = 0.0,
+    scratch_bag_price: float = 16.00,
 ) -> dict:
     rate = round(max(0.01, float(feed_lbs_per_hen_day or 0.25)), 3)
+    s_rate = round(max(0.0, float(scratch_lbs_per_day or 0.0)), 2)
     price = round(max(0.0, float(bag_price or 0.0)), 2)
+    s_price = round(max(0.0, float(scratch_bag_price or 0.0)), 2)
     sku_str = str(int(ledger_sku_id)) if ledger_sku_id and int(ledger_sku_id) > 0 else ""
     set_text_setting("layer_feed_lbs_per_hen_day", str(rate), user_id=user_id)
+    set_text_setting("layer_scratch_lbs_per_day", str(s_rate), user_id=user_id)
     set_text_setting("layer_bag_price", f"{price:.2f}", user_id=user_id)
+    set_text_setting("layer_scratch_bag_price", f"{s_price:.2f}", user_id=user_id)
     set_text_setting("layer_ledger_sku_id", sku_str, user_id=user_id)
     return get_layer_settings(user_id)
 
@@ -3686,20 +3711,23 @@ def add_layer_feed_log(
     notes: str = "",
     receipt_url: str = "",
     drive_file_id: str = "",
+    feed_type: str = "layer",
 ) -> int:
     clean_date = (feed_date or date.today().isoformat()).strip()[:10]
+    ftype = feed_type if feed_type in ("layer", "scratch", "supplement") else "layer"
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO layer_feed_logs (
-                user_id, feed_date, bags, feed_lbs, cost_total,
+                user_id, feed_date, feed_type, bags, feed_lbs, cost_total,
                 notes, receipt_url, drive_file_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user_id),
                 clean_date,
+                ftype,
                 max(0.0, float(bags or 0.0)),
                 max(0.0, float(feed_lbs or 0.0)),
                 max(0.0, float(cost_total or 0.0)),
@@ -3842,21 +3870,102 @@ def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
     avg_7d_eggs = round(eggs_7d / 7.0, 1)
     avg_7d_lay_rate = round(rate_sum_7d / rate_days_7d, 1) if rate_days_7d > 0 else 0.0
 
-    # Layer feed economics
-    daily_feed_burn_lbs = round(active_hens * cfg["feed_lbs_per_hen_day"], 2)
+    # Layer + Scratch feed economics, Barn Stockpile & Amortized Cost/Dozen
+    daily_layer_burn_lbs = round(active_hens * cfg["feed_lbs_per_hen_day"], 2)
+    daily_scratch_burn_lbs = round(cfg["scratch_lbs_per_day"], 2) if active_hens > 0 else 0.0
+    daily_feed_burn_lbs = round(daily_layer_burn_lbs + daily_scratch_burn_lbs, 2)
     weekly_feed_lbs = round(daily_feed_burn_lbs * 7, 1)
     monthly_feed_lbs = round(daily_feed_burn_lbs * 30, 1)
     monthly_bags = round(monthly_feed_lbs / max(1, bag_weight), 1)
 
+    layer_bought_lbs = round(
+        sum(float(f["feed_lbs"] or 0.0) for f in feed_logs if (f.get("feed_type") or "layer") == "layer"), 1
+    )
+    layer_bought_cost = round(
+        sum(float(f["cost_total"] or 0.0) for f in feed_logs if (f.get("feed_type") or "layer") == "layer"), 2
+    )
+    scratch_bought_lbs = round(
+        sum(float(f["feed_lbs"] or 0.0) for f in feed_logs if f.get("feed_type") == "scratch"), 1
+    )
+    scratch_bought_cost = round(
+        sum(float(f["cost_total"] or 0.0) for f in feed_logs if f.get("feed_type") == "scratch"), 2
+    )
+    supp_bought_cost = round(
+        sum(float(f["cost_total"] or 0.0) for f in feed_logs if f.get("feed_type") == "supplement"), 2
+    )
+
     logged_feed_lbs = round(sum(float(f["feed_lbs"] or 0.0) for f in feed_logs), 1)
     logged_feed_cost = round(sum(float(f["cost_total"] or 0.0) for f in feed_logs), 2)
-    if logged_feed_cost > 0:
+
+    layer_price_per_lb = (
+        (layer_bought_cost / layer_bought_lbs)
+        if layer_bought_lbs > 0 and layer_bought_cost > 0
+        else (cfg["bag_price"] / max(1, bag_weight))
+    )
+    scratch_price_per_lb = (
+        (scratch_bought_cost / scratch_bought_lbs)
+        if scratch_bought_lbs > 0 and scratch_bought_cost > 0
+        else (cfg["scratch_bag_price"] / max(1, bag_weight))
+    )
+
+    # Barn stockpile remaining (lbs bought minus daily burn since earliest purchase date of that feed type)
+    layer_dates = [str(f["feed_date"])[:10] for f in feed_logs if (f.get("feed_type") or "layer") == "layer"]
+    layer_burned_since_buy = 0.0
+    if layer_dates:
+        try:
+            d0 = date.fromisoformat(min(layer_dates))
+        except ValueError:
+            d0 = today
+        span_days = max(1, min(365, (today - d0).days + 1))
+        for idx in range(span_days):
+            di = (d0 + timedelta(days=idx)).isoformat()
+            h_i = _hens_on_date(di) or active_hens
+            layer_burned_since_buy += h_i * cfg["feed_lbs_per_hen_day"]
+    layer_remaining_lbs = round(max(0.0, layer_bought_lbs - layer_burned_since_buy), 1)
+    layer_days_left = (
+        round(layer_remaining_lbs / daily_layer_burn_lbs, 1)
+        if daily_layer_burn_lbs > 0 and layer_bought_lbs > 0
+        else None
+    )
+
+    scratch_dates = [str(f["feed_date"])[:10] for f in feed_logs if f.get("feed_type") == "scratch"]
+    scratch_burned_since_buy = 0.0
+    if scratch_dates:
+        try:
+            sd0 = date.fromisoformat(min(scratch_dates))
+        except ValueError:
+            sd0 = today
+        s_span = max(1, min(365, (today - sd0).days + 1))
+        scratch_burned_since_buy = s_span * cfg["scratch_lbs_per_day"]
+    scratch_remaining_lbs = round(max(0.0, scratch_bought_lbs - scratch_burned_since_buy), 1)
+    scratch_days_left = (
+        round(scratch_remaining_lbs / daily_scratch_burn_lbs, 1)
+        if daily_scratch_burn_lbs > 0 and scratch_bought_lbs > 0
+        else None
+    )
+
+    # Amortized feed cost eaten on active egg-collection days (so buying 5 bags in bulk doesn't spike Day 1 cost/dz)
+    consumed_layer_lbs = 0.0
+    consumed_scratch_lbs = 0.0
+    for d_iso in by_day:
+        h_d = _hens_on_date(d_iso) or active_hens
+        consumed_layer_lbs += h_d * cfg["feed_lbs_per_hen_day"]
+        if h_d > 0:
+            consumed_scratch_lbs += cfg["scratch_lbs_per_day"]
+    consumed_feed_cost = round(
+        consumed_layer_lbs * layer_price_per_lb
+        + consumed_scratch_lbs * scratch_price_per_lb
+        + supp_bought_cost,
+        2,
+    )
+    if consumed_feed_cost > 0:
+        reconciled_feed_cost = consumed_feed_cost
+        feed_cost_source = "amortized from logged bags" if logged_feed_cost > 0 else "estimated daily burn"
+    elif logged_feed_cost > 0:
         reconciled_feed_cost = logged_feed_cost
         feed_cost_source = "logged"
     else:
-        active_log_days = max(1, len(by_day)) if by_day else 0
-        est_lbs = active_log_days * daily_feed_burn_lbs
-        reconciled_feed_cost = round((est_lbs / max(1, bag_weight)) * cfg["bag_price"], 2)
+        reconciled_feed_cost = 0.0
         feed_cost_source = "estimated"
 
     lifetime_dozens_collected = round(lifetime_collected / 12.0, 2)
@@ -3909,10 +4018,20 @@ def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
         "loose_eggs": loose_eggs,
         "ready_dozens": ready_dozens,
         "remainder_loose": remainder_loose,
+        "daily_layer_burn_lbs": daily_layer_burn_lbs,
+        "daily_scratch_burn_lbs": daily_scratch_burn_lbs,
         "daily_feed_burn_lbs": daily_feed_burn_lbs,
         "weekly_feed_lbs": weekly_feed_lbs,
         "monthly_feed_lbs": monthly_feed_lbs,
         "monthly_bags": monthly_bags,
+        "layer_bought_lbs": layer_bought_lbs,
+        "layer_bought_cost": layer_bought_cost,
+        "layer_remaining_lbs": layer_remaining_lbs,
+        "layer_days_left": layer_days_left,
+        "scratch_bought_lbs": scratch_bought_lbs,
+        "scratch_bought_cost": scratch_bought_cost,
+        "scratch_remaining_lbs": scratch_remaining_lbs,
+        "scratch_days_left": scratch_days_left,
         "logged_feed_lbs": logged_feed_lbs,
         "logged_feed_cost": logged_feed_cost,
         "reconciled_feed_cost": reconciled_feed_cost,

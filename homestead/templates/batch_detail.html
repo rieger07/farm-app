@@ -289,8 +289,8 @@
         </select>
       </label>
       <label>Bags ({{ bag_weight }} lb)<input type="number" name="bags" id="bd-fbags" step="0.5" min="0" value="1" oninput="syncBdFeed()"></label>
-      <label>Feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
-      <label>Cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
+      <label>Total feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
+      <label>Total cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
       <label>Notes<input name="notes" placeholder="Store, receipt..."></label>
       <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
       <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>

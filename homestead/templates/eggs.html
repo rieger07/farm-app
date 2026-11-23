@@ -34,7 +34,7 @@
   <div class="card">
     <small>Feed Cost / Dozen</small>
     <div class="big">${{ '%.2f'|format(dash.cost_per_dozen) }}</div>
-    <small>${{ '%.2f'|format(dash.reconciled_feed_cost) }} feed ({{ dash.feed_cost_source }}){% if dash.linked_sku %} · Net <b>${{ '%.2f'|format(dash.net_egg_profit) }}</b>{% endif %}</small>
+    <small>${{ '%.2f'|format(dash.reconciled_feed_cost) }} eaten{% if dash.logged_feed_cost > 0 %} (${{ '%.2f'|format(dash.logged_feed_cost) }} bags bought){% endif %}{% if dash.linked_sku %} · Net <b>${{ '%.2f'|format(dash.net_egg_profit) }}</b>{% endif %}</small>
   </div>
 </div>
 
@@ -109,11 +109,17 @@
             {% endfor %}
           </select>
         </label>
-        <label>Daily Feed / Hen (lb)
+        <label>Layer Feed / Hen / Day (lb)
           <input type="number" step="0.01" min="0.05" name="feed_lbs_per_hen_day" value="{{ dash.settings.feed_lbs_per_hen_day }}">
         </label>
         <label>Layer Bag Price ($ / {{ bag_weight }} lb)
           <input type="number" step="0.01" min="0" name="bag_price" value="{{ '%.2f'|format(dash.settings.bag_price) }}">
+        </label>
+        <label>Scratch Grains / Flock / Day (lb)
+          <input type="number" step="0.1" min="0" name="scratch_lbs_per_day" value="{{ dash.settings.scratch_lbs_per_day }}" placeholder="e.g. 2.0 for 2 scoops">
+        </label>
+        <label>Scratch Bag Price ($ / {{ bag_weight }} lb)
+          <input type="number" step="0.01" min="0" name="scratch_bag_price" value="{{ '%.2f'|format(dash.settings.scratch_bag_price) }}">
         </label>
         <div class="full"><button class="btn sm primary">Save layer settings</button></div>
       </form>
@@ -239,27 +245,54 @@
       </tbody>
     </table>
 
-    <h2 style="margin-top:20px">Layer Feed Log</h2>
+    <h2 style="margin-top:20px">Layer &amp; Scratch Feed Log</h2>
     <p class="sub" style="margin-bottom:10px">
-      Est. burn: <b>{{ '%.1f'|format(dash.daily_feed_burn_lbs) }} lb/day</b> ({{ '%.1f'|format(dash.monthly_bags) }} bags/mo)
-      · Logged: <b>{{ '%.1f'|format(dash.logged_feed_lbs) }} lb (${{ '%.2f'|format(dash.logged_feed_cost) }})</b>
+      Daily burn: <b>{{ '%.1f'|format(dash.daily_layer_burn_lbs) }} lb layer</b>{% if dash.daily_scratch_burn_lbs > 0 %} + <b>{{ '%.1f'|format(dash.daily_scratch_burn_lbs) }} lb scratch</b>{% endif %} ({{ '%.1f'|format(dash.monthly_bags) }} bags/mo)
+      · Total spent: <b>${{ '%.2f'|format(dash.logged_feed_cost) }} ({{ '%.1f'|format(dash.logged_feed_lbs) }} lb bought)</b>
     </p>
+    {% if dash.layer_bought_lbs > 0 or dash.scratch_bought_lbs > 0 %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px">
+      {% if dash.layer_bought_lbs > 0 %}
+      <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <small>Layer Feed in Barn</small>
+        <div style="font:700 17px Georgia,serif">~{{ '%.1f'|format(dash.layer_remaining_lbs) }} lb left</div>
+        <small class="muted">{% if dash.layer_days_left is not none %}~{{ '%.0f'|format(dash.layer_days_left) }} days left{% else %}of {{ '%.0f'|format(dash.layer_bought_lbs) }} lb bought{% endif %}</small>
+      </div>
+      {% endif %}
+      {% if dash.scratch_bought_lbs > 0 %}
+      <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <small>Scratch in Barn</small>
+        <div style="font:700 17px Georgia,serif">~{{ '%.1f'|format(dash.scratch_remaining_lbs) }} lb left</div>
+        <small class="muted">{% if dash.scratch_days_left is not none %}~{{ '%.0f'|format(dash.scratch_days_left) }} days left{% else %}of {{ '%.0f'|format(dash.scratch_bought_lbs) }} lb bought{% endif %}</small>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
     <form method="post" action="/eggs/feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:12px">
       <label>Date<input type="date" name="feed_date" value="{{ dash.today_iso }}" required></label>
+      <label>Feed Type
+        <select name="feed_type" id="lf-type" onchange="syncLfFeed()">
+          <option value="layer">Layer Feed (pellets / crumble)</option>
+          <option value="scratch">Scratch Grains</option>
+          <option value="supplement">Grit / Oyster Shell / Supplement</option>
+        </select>
+      </label>
       <label>Bags ({{ bag_weight }} lb)<input type="number" id="lf-bags" name="bags" step="0.5" min="0.5" value="1" oninput="syncLfFeed()"></label>
-      <label>Feed (lb)<input type="number" id="lf-lbs" name="feed_lbs" step="0.1" min="1" value="{{ bag_weight }}" required></label>
-      <label>Cost ($)<input type="number" id="lf-cost" name="cost_total" step="0.01" min="0" value="{{ '%.2f'|format(dash.settings.bag_price) }}" required></label>
-      <label>Notes<input name="notes" placeholder="16% Layer Pellets, oyster shell..."></label>
-      <label>{% if gdrive_connected %}Receipt (→ Drive){% else %}Receipt photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
-      <div class="full"><button class="btn sm primary">+ Log layer feed</button></div>
+      <label>Total feed (lb)<input type="number" id="lf-lbs" name="feed_lbs" step="0.1" min="1" value="{{ bag_weight }}" required></label>
+      <label>Total cost ($)<input type="number" id="lf-cost" name="cost_total" step="0.01" min="0" value="{{ '%.2f'|format(dash.settings.bag_price) }}" required></label>
+      <label>Notes<input name="notes" placeholder="16% Layer Pellets, scratch, etc."></label>
+      <label class="full">{% if gdrive_connected %}Receipt (→ Drive){% else %}Receipt photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+      <div class="full"><button class="btn sm primary">+ Log feed purchase</button></div>
     </form>
     {% if dash.feed_logs %}
     <table>
-      <thead><tr><th>Date</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Total lb</th><th class="num">Total $</th><th>Receipt</th><th></th></tr></thead>
       <tbody>
       {% for fl in dash.feed_logs[:12] %}
+        {% set ft = fl.feed_type or 'layer' %}
         <tr>
           <td>{{ fl.feed_date }}</td>
+          <td><span class="pill {{ 'green' if ft == 'layer' else ('amber' if ft == 'scratch' else 'gray') }}">{{ 'Layer' if ft == 'layer' else ('Scratch' if ft == 'scratch' else 'Grit/Supp') }}</span></td>
           <td class="num">{{ fl.bags }}</td>
           <td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
           <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
@@ -286,8 +319,10 @@ function bumpEggs(n) {
 }
 function syncLfFeed() {
   const bags = parseFloat(document.getElementById('lf-bags').value || '0') || 0;
+  const ftype = (document.getElementById('lf-type') || {}).value || 'layer';
+  const bagPrice = ftype === 'scratch' ? {{ dash.settings.scratch_bag_price }} : {{ dash.settings.bag_price }};
   document.getElementById('lf-lbs').value = (bags * {{ bag_weight }}).toFixed(1).replace(/\.0$/, '');
-  document.getElementById('lf-cost').value = (bags * {{ dash.settings.bag_price }}).toFixed(2);
+  document.getElementById('lf-cost').value = (bags * bagPrice).toFixed(2);
 }
 </script>
 {% endblock %}
