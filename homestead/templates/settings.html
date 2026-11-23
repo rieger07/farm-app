@@ -83,6 +83,33 @@
   {% endif %}
 </div>
 
+<div class="card" id="pickup-payments">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
+    <h2 style="margin:0">Farm Pickup &amp; Digital Payments</h2>
+    {% if pickup_cfg.venmo_handle or pickup_cfg.paypal_handle %}
+      <span class="pill green">QR Ready</span>
+    {% else %}
+      <span class="pill gray">Optional</span>
+    {% endif %}
+  </div>
+  <p class="sub" style="margin-bottom:12px">Used to pre-fill pickup reminders, public pre-order deposit QR codes, and 1-tap Pickup Day Venmo/PayPal QR checkout.</p>
+  <form method="post" action="/settings/pickup-payments" class="fgrid">
+    <label>Farm Name<input name="farm_name" value="{{ pickup_cfg.farm_name }}" placeholder="e.g. Cassberry Lane Farm"></label>
+    <label>Default Pickup Address<input name="pickup_address" value="{{ pickup_cfg.pickup_address }}" placeholder="e.g. 123 Farm Rd, Barn Cooler"></label>
+    <label>Venmo Username<input name="venmo_handle" value="{{ pickup_cfg.venmo_handle }}" placeholder="e.g. CassberryFarm (no @ needed)"></label>
+    <label>PayPal.Me Handle<input name="paypal_handle" value="{{ pickup_cfg.paypal_handle }}" placeholder="e.g. CassberryFarm"></label>
+    <label class="full">Default Pickup Instructions<input name="pickup_instructions" value="{{ pickup_cfg.pickup_instructions }}" placeholder="e.g. Pull up by the red barn and bring a cooler!"></label>
+    <div class="full row" style="justify-content:space-between;align-items:center">
+      <small class="muted">
+        {% if pickup_cfg.venmo_handle %}Venmo: <code>venmo.com/{{ pickup_cfg.venmo_handle }}</code>{% endif %}
+        {% if pickup_cfg.venmo_handle and pickup_cfg.paypal_handle %} · {% endif %}
+        {% if pickup_cfg.paypal_handle %}PayPal: <code>paypal.me/{{ pickup_cfg.paypal_handle }}</code>{% endif %}
+      </small>
+      <button class="btn sm primary">Save pickup &amp; payment settings</button>
+    </div>
+  </form>
+</div>
+
 <div class="cards two">
   <div class="card">
     <h2>Backup &amp; restore</h2>

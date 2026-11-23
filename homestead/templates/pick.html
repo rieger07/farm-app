@@ -24,7 +24,13 @@
   <!-- Identify-first card -->
   <div class="card" id="ident-card">
     <h2 style="margin-bottom:4px">Step 1: Enter your details</h2>
-    <p class="sub" style="margin-bottom:12px">Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} bird per customer.{% endif %}</p>
+    <p class="sub" style="margin-bottom:12px">
+      {% if picking_preorder_only %}
+        <b>Early access for pre-order customers:</b> enter the name and phone or email from your reservation to pick your reserved bird(s).
+      {% else %}
+        Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} bird per customer.{% endif %}
+      {% endif %}
+    </p>
     <form class="fgrid" onsubmit="identifyCustomer(event)">
       <label>Your name<input id="p-name" required placeholder="e.g. Sarah Miller"></label>
       <label>Phone or email<input id="p-contact" required placeholder="(555) 123-4567 or email"></label>
@@ -75,12 +81,16 @@
       box.innerHTML = '<small class="muted">Tap any available bird below to claim it.</small>';
       return;
     }
-    box.innerHTML = CUSTOMER.my_birds.map(b =>
-      `<div style="padding:8px 10px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:6px;display:flex;justify-content:space-between;align-items:center">
-        <div><b>✓ Bird #${b.num}</b> · ${Number(b.dressed_lbs).toFixed(2)} lb <small class="inline">(${b.lb_oz})</small></div>
+    box.innerHTML = CUSTOMER.my_birds.map(b => {
+      const dep = Number(b.deposit_paid || 0);
+      const depLine = dep > 0
+        ? `<small class="muted" style="display:block;color:var(--green)">Deposit -$${dep.toFixed(2)} applied · Balance $${Math.max(0, Number(b.est_price) - dep).toFixed(2)}</small>`
+        : '';
+      return `<div style="padding:8px 10px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:6px;display:flex;justify-content:space-between;align-items:center">
+        <div><b>✓ Bird #${b.num}</b> · ${Number(b.dressed_lbs).toFixed(2)} lb <small class="inline">(${b.lb_oz})</small>${depLine}</div>
         <b>$${Number(b.est_price).toFixed(2)}</b>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
   }
 
   function renderBirds() {
@@ -93,7 +103,8 @@
       grid.innerHTML = '<div class="card empty" style="grid-column:1/-1">No birds listed yet.</div>';
       return;
     }
-    const atLimit = CUSTOMER && MAX_BIRDS && CUSTOMER.my_birds.length >= MAX_BIRDS;
+    const effMax = (CUSTOMER && CUSTOMER.effective_max_birds !== undefined) ? CUSTOMER.effective_max_birds : MAX_BIRDS;
+    const atLimit = CUSTOMER && effMax && CUSTOMER.my_birds.length >= effMax;
     sorted.forEach(b => {
       const card = document.createElement('div');
       const claimed = b.status === 'claimed';

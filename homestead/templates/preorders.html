@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}Pre-Orders · {{ b.name }} · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="pagehead">
+  <div>
+    <h1>Pre-Orders &amp; Waitlist</h1>
+    <p class="sub">{{ b.name }} ({{ b.species|title }}) · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb · Target process {{ s.proc_date }}</p>
+  </div>
+  <div class="row">
+    <a href="/batches/{{ b.id }}" class="btn">Batch Logs</a>
+    {% if not s.is_planned %}
+    <a href="/batches/{{ b.id }}/harvest" class="btn">Harvest Tally</a>
+    <a href="/batches/{{ b.id }}/pickup" class="btn">Pickup Day</a>
+    {% endif %}
+  </div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards four">
+  <div class="card">
+    <small>Reserved / Cap</small>
+    <div class="big">{{ reserved_qty }} / {{ cap }}</div>
+    <small>{% if spots_left > 0 %}{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left{% else %}Full — Waitlist active{% endif %}</small>
+  </div>
+  <div class="card">
+    <small>Waitlist</small>
+    <div class="big">{{ waitlist_qty }}</div>
+    <small>{{ waitlist|length }} customer{{ '' if waitlist|length == 1 else 's' }} waiting</small>
+  </div>
+  <div class="card">
+    <small>Deposits Collected</small>
+    <div class="big">${{ '%.2f'|format(dep_collected) }}</div>
+    <small>${{ '%.2f'|format(b.deposit_per_bird or 0) }} / bird</small>
+  </div>
+  <div class="card">
+    <small>Deposits Pending</small>
+    <div class="big">${{ '%.2f'|format(dep_pending) }}</div>
+    <small>of ${{ '%.2f'|format(dep_expected) }} expected</small>
+  </div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h2 style="margin:0">Public Pre-Order &amp; Pickup Settings</h2>
+      {% if b.preorder_enabled %}
+        <span class="pill green">Reserve link live</span>
+      {% else %}
+        <span class="pill gray">Reserve link off</span>
+      {% endif %}
+    </div>
+    {% if reserve_url %}
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <input type="text" id="reserve-url-in" value="{{ reserve_url }}" readonly style="flex:1;min-width:200px;background:#faf9f3;font-size:13px">
+      <button type="button" class="btn sm" onclick="copyText('reserve-url-in', this)">Copy link</button>
+      <a href="{{ reserve_url }}" target="_blank" rel="noopener" class="btn sm">Preview ↗</a>
+    </div>
+    {% endif %}
+    <form method="post" action="/batches/{{ b.id }}/preorders/settings" class="fgrid">
+      <label class="full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" name="preorder_enabled" value="1" {{ 'checked' if b.preorder_enabled }} style="width:auto">
+        <span><b>Enable public pre-order link</b> (auto-switches to Waitlist when full)</span>
+      </label>
+      <label>Reservation Cap (birds)
+        <input type="number" name="preorder_cap" min="1" value="{{ b.preorder_cap or '' }}" placeholder="Default: {{ s.surviving_quantity }}">
+      </label>
+      <label>Deposit per bird ($)
+        <input type="number" name="deposit_per_bird" step="0.01" min="0" value="{{ '%.2f'|format(b.deposit_per_bird or 0) }}">
+      </label>
+      <label>Pickup Date
+        <input type="date" name="pickup_date" value="{{ b.pickup_date or '' }}">
+      </label>
+      <label>Pickup Time Window
+        <input name="pickup_window" value="{{ b.pickup_window or '' }}" placeholder="e.g. Sat 9am–1pm">
+      </label>
+      <label class="full">Pickup Location Override (optional)
+        <input name="pickup_location" value="{{ b.pickup_location or '' }}" placeholder="{{ pickup_cfg.pickup_address or 'Uses default farm address from Settings' }}">
+      </label>
+      <label class="full">Public Pre-Order / Deposit Notes
+        <textarea name="preorder_notes" rows="2" placeholder="e.g. Fresh pasture-raised turkeys ~16–20 lb. $25/bird deposit holds your spot.">{{ b.preorder_notes or '' }}</textarea>
+      </label>
+      <div class="full row" style="justify-content:space-between;align-items:center">
+        <small class="muted">
+          {% if pickup_cfg.venmo_handle or pickup_cfg.paypal_handle %}
+            Deposit QR ready ({% if pickup_cfg.venmo_handle %}@{{ pickup_cfg.venmo_handle }}{% endif %}{% if pickup_cfg.venmo_handle and pickup_cfg.paypal_handle %} · {% endif %}{% if pickup_cfg.paypal_handle %}paypal.me/{{ pickup_cfg.paypal_handle }}{% endif %})
+          {% else %}
+            <a href="/settings#pickup-payments">Add Venmo / PayPal in Settings →</a>
+          {% endif %}
+        </small>
+        <button class="btn primary sm">Save settings</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Add Manual Pre-Order</h2>
+    <p class="sub" style="margin-bottom:12px">Log phone, text, or in-person reservations. Select an existing customer or enter a new name below.</p>
+    <form method="post" action="/batches/{{ b.id }}/preorders/add" class="fgrid">
+      <label class="full">Existing Customer
+        <select name="customer_id">
+          <option value="">— Or create new customer below —</option>
+          {% for c in customers %}
+          <option value="{{ c.id }}">{{ c.name }}{% if c.phone %} ({{ c.phone }}){% elif c.email %} ({{ c.email }}){% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>New Customer Name
+        <input name="new_name" placeholder="Jane Doe">
+      </label>
+      <label>Phone or Email
+        <input name="new_contact" placeholder="555-123-4567 or email">
+      </label>
+      <label>Quantity
+        <input type="number" name="quantity" min="1" value="1" required>
+      </label>
+      <label>Status
+        <select name="status">
+          <option value="reserved">Reserved</option>
+          <option value="waitlist">Waitlist</option>
+        </select>
+      </label>
+      <label>Deposit Already Paid ($)
+        <input type="number" name="deposit_paid" step="0.01" min="0" value="0">
+      </label>
+      <label>Notes
+        <input name="notes" placeholder="Prefers ~18 lb, etc.">
+      </label>
+      <div class="full"><button class="btn primary sm">+ Add reservation</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card table-card" style="margin-bottom:18px">
+  <div style="padding:14px 16px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <h2 style="margin:0">Confirmed Reservations ({{ reserved_qty }} birds · {{ reserved|length }} orders)</h2>
+      <small class="muted">Deposits marked Paid automatically credit onto each bird when claimed on /pick/{{ b.picking_slug }} or assigned in Harvest Tally.</small>
+    </div>
+    <div class="row">
+      {% if reserved_phones %}
+      <button type="button" class="btn sm" onclick="copyLiteral({{ reserved_phones|tojson }}, this)">Copy phones</button>
+      {% endif %}
+      {% if reserved_emails %}
+      <button type="button" class="btn sm" onclick="copyLiteral({{ reserved_emails|tojson }}, this)">Copy emails</button>
+      {% endif %}
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Customer</th><th class="num">Qty</th><th>Deposit</th><th>Notes</th><th>Notify / Actions</th></tr></thead>
+    <tbody>
+    {% for p in reserved %}
+      {% set exp_dep = (p.quantity * (p.deposit_per_bird or 0)) %}
+      <tr>
+        <td>
+          <a href="/customers?selected={{ p.customer_id }}" style="text-decoration:none"><b>{{ p.customer_name }}</b></a>
+          <small class="muted" style="display:block">{{ p.customer_phone or p.customer_email or 'No contact' }}</small>
+        </td>
+        <td class="num"><b>{{ p.quantity }}</b></td>
+        <td>
+          {% if p.deposit_status == 'paid' or (exp_dep > 0 and p.deposit_paid >= exp_dep) %}
+            <span class="pill green">Paid ${{ '%.2f'|format(p.deposit_paid) }}</span>
+          {% elif exp_dep > 0 %}
+            <span class="pill amber">${{ '%.2f'|format(p.deposit_paid) }} / ${{ '%.2f'|format(exp_dep) }}</span>
+            <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/mark-paid" style="display:inline;margin-left:4px">
+              <button class="btn sm">Mark Paid</button>
+            </form>
+          {% else %}
+            <span class="muted">No deposit</span>
+          {% endif %}
+        </td>
+        <td><small>{{ p.notes or '—' }}</small></td>
+        <td>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            {% if pick_url and p.customer_phone %}
+            <a class="btn sm" href="sms:{{ p.customer_phone }}?&body={{ ('Hi ' ~ p.customer_name ~ '! Your ' ~ b.name ~ ' birds are weighed and ready to pick! Choose yours here: ' ~ pick_url)|urlencode }}">Text Pick Link</a>
+            {% elif pick_url and p.customer_email %}
+            <a class="btn sm" href="mailto:{{ p.customer_email }}?subject={{ (b.name ~ ' — Pick Your Bird!')|urlencode }}&body={{ ('Hi ' ~ p.customer_name ~ ',\n\nYour ' ~ b.name ~ ' birds are weighed and ready! Pick yours here: ' ~ pick_url)|urlencode }}">Email Pick Link</a>
+            {% endif %}
+            <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/cancel" style="display:inline">
+              <button class="link" style="color:var(--muted)">Cancel</button>
+            </form>
+            <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this pre-order?')">
+              <button class="link" style="color:#a93424">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="empty">No confirmed reservations yet. Enable the public link above or add one manually.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card table-card" style="margin-bottom:18px">
+  <div style="padding:14px 16px 8px">
+    <h2 style="margin:0">Waitlist ({{ waitlist_qty }} birds · {{ waitlist|length }} waiting)</h2>
+    <small class="muted">When spots open up, click Promote to move a customer into Confirmed Reservations.</small>
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>Customer</th><th class="num">Qty</th><th>Notes</th><th>Joined</th><th></th></tr></thead>
+    <tbody>
+    {% for p in waitlist %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>
+          <a href="/customers?selected={{ p.customer_id }}" style="text-decoration:none"><b>{{ p.customer_name }}</b></a>
+          <small class="muted" style="display:block">{{ p.customer_phone or p.customer_email or 'No contact' }}</small>
+        </td>
+        <td class="num"><b>{{ p.quantity }}</b></td>
+        <td><small>{{ p.notes or '—' }}</small></td>
+        <td><small class="muted">{{ p.created_at[:10] }}</small></td>
+        <td class="num">
+          <div class="row" style="justify-content:flex-end;gap:6px">
+            <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/promote" style="display:inline">
+              <button class="btn sm primary">Promote</button>
+            </form>
+            <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/delete" style="display:inline" onsubmit="return confirm('Remove from waitlist?')">
+              <button class="link">Remove</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No one on the waitlist yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if cancelled %}
+<details class="card table-card">
+  <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Cancelled ({{ cancelled|length }})</summary>
+  <table>
+    <thead><tr><th>Customer</th><th class="num">Qty</th><th>Deposit</th><th></th></tr></thead>
+    <tbody>
+    {% for p in cancelled %}
+      <tr>
+        <td>{{ p.customer_name }}</td>
+        <td class="num">{{ p.quantity }}</td>
+        <td>${{ '%.2f'|format(p.deposit_paid or 0) }}</td>
+        <td class="num">
+          <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/promote" style="display:inline">
+            <button class="link">Restore</button>
+          </form>
+          ·
+          <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/delete" style="display:inline">
+            <button class="link" style="color:#a93424">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+<script>
+function copyText(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  copyLiteral(el.value, btn);
+}
+async function copyLiteral(text, btn) {
+  const orig = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch (e) {
+    window.prompt('Copy:', text);
+  }
+}
+</script>
+{% endblock %}

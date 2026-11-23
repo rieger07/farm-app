@@ -177,6 +177,14 @@ def init_db() -> None:
             ("picking_enabled", "INTEGER DEFAULT 0"),
             ("picking_slug", "TEXT"),
             ("max_birds_per_customer", "INTEGER"),
+            ("preorder_enabled", "INTEGER DEFAULT 0"),
+            ("preorder_cap", "INTEGER"),
+            ("deposit_per_bird", "REAL DEFAULT 0.0"),
+            ("preorder_notes", "TEXT DEFAULT ''"),
+            ("picking_preorder_only", "INTEGER DEFAULT 0"),
+            ("pickup_date", "TEXT DEFAULT ''"),
+            ("pickup_window", "TEXT DEFAULT ''"),
+            ("pickup_location", "TEXT DEFAULT ''"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing_cols:
@@ -401,6 +409,32 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_preorders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                customer_id INTEGER NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'reserved',
+                deposit_per_bird REAL NOT NULL DEFAULT 0.0,
+                deposit_paid REAL NOT NULL DEFAULT 0.0,
+                deposit_status TEXT NOT NULL DEFAULT 'unpaid',
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_preorders_batch ON batch_preorders(batch_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_preorders_cust ON batch_preorders(customer_id)"
         )
         for tbl in ("batch_feed_logs", "batch_harvests"):
             cols = {
@@ -2480,6 +2514,11 @@ def merge_customers(user_id: int, source_id: int, target_id: int) -> bool:
             (int(target_id), int(source_id), int(user_id)),
         )
         conn.execute(
+            "UPDATE batch_preorders SET customer_id = ?"
+            " WHERE customer_id = ? AND user_id = ?",
+            (int(target_id), int(source_id), int(user_id)),
+        )
+        conn.execute(
             "UPDATE customers SET phone = ?, email = ?, notes = ? WHERE id = ? AND user_id = ?",
             (merged_phone, merged_email, merged_notes, int(target_id), int(user_id)),
         )
@@ -2588,23 +2627,31 @@ def update_batch_picking_settings(
     batch_id: int,
     picking_enabled: bool,
     max_birds_per_customer: int | None = None,
+    picking_preorder_only: bool | None = None,
 ) -> dict | None:
     limit_val = int(max_birds_per_customer) if max_birds_per_customer and int(max_birds_per_customer) > 0 else None
     with get_db_connection() as conn:
         row = conn.execute(
-            "SELECT picking_slug FROM batches WHERE id = ? AND user_id = ?",
+            "SELECT picking_slug, COALESCE(picking_preorder_only, 0) AS picking_preorder_only"
+            " FROM batches WHERE id = ? AND user_id = ?",
             (int(batch_id), int(user_id)),
         ).fetchone()
         if not row:
             return None
         slug = row["picking_slug"] or secrets.token_urlsafe(10)
+        po_only = (
+            (1 if picking_preorder_only else 0)
+            if picking_preorder_only is not None
+            else int(row["picking_preorder_only"] or 0)
+        )
         conn.execute(
             """
             UPDATE batches
-            SET picking_enabled = ?, picking_slug = ?, max_birds_per_customer = ?
+            SET picking_enabled = ?, picking_slug = ?, max_birds_per_customer = ?,
+                picking_preorder_only = ?
             WHERE id = ? AND user_id = ?
             """,
-            (1 if picking_enabled else 0, slug, limit_val, int(batch_id), int(user_id)),
+            (1 if picking_enabled else 0, slug, limit_val, po_only, int(batch_id), int(user_id)),
         )
         conn.commit()
         updated = conn.execute(
@@ -2630,32 +2677,78 @@ def claim_bird_atomically(
     harvest_id: int,
     customer_id: int,
     max_birds_per_customer: int | None = None,
+    apply_preorder_deposit: bool = True,
 ) -> tuple[bool, str]:
-    """Atomically claim a for-sale unassigned bird; returns (ok, error_reason)."""
+    """Atomically claim a for-sale unassigned bird; returns (ok, error_reason).
+
+    If ``apply_preorder_deposit`` is True and the customer has unapplied paid
+    pre-order deposits on this batch, credits their per-bird deposit onto the
+    claimed bird atomically without ever double-counting across birds.
+    """
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        already_row = conn.execute(
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(deposit_paid), 0) AS applied_dep"
+            " FROM batch_harvests"
+            " WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1",
+            (int(batch_id), int(customer_id)),
+        ).fetchone()
+        already = int(already_row["cnt"] or 0)
+        applied_dep = float(already_row["applied_dep"] or 0.0)
         if max_birds_per_customer and int(max_birds_per_customer) > 0:
-            already = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM batch_harvests"
-                    " WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1",
-                    (int(batch_id), int(customer_id)),
-                ).fetchone()[0]
-            )
             if already >= int(max_birds_per_customer):
                 conn.rollback()
                 return False, "limit_reached"
-        cur = conn.execute(
-            """
-            UPDATE batch_harvests
-            SET customer_id = ?, pickup_status = 'assigned', claimed_at = ?
-            WHERE id = ? AND batch_id = ?
-              AND customer_id IS NULL
-              AND COALESCE(for_sale, 1) = 1
-            """,
-            (int(customer_id), now_iso, int(harvest_id), int(batch_id)),
-        )
+
+        credit = 0.0
+        if apply_preorder_deposit:
+            po_row = conn.execute(
+                "SELECT COALESCE(SUM(quantity), 0) AS qty,"
+                "       COALESCE(SUM(deposit_paid), 0) AS paid_dep,"
+                "       MAX(deposit_per_bird) AS per_bird"
+                " FROM batch_preorders"
+                " WHERE batch_id = ? AND customer_id = ? AND status = 'reserved'",
+                (int(batch_id), int(customer_id)),
+            ).fetchone()
+            po_qty = int(po_row["qty"] or 0)
+            po_paid = float(po_row["paid_dep"] or 0.0)
+            po_per_bird = float(po_row["per_bird"] or 0.0)
+            unapplied = round(max(0.0, po_paid - applied_dep), 2)
+            if unapplied > 0.0:
+                if po_qty > 0 and (already + 1) >= po_qty:
+                    credit = unapplied
+                elif po_per_bird > 0.0:
+                    credit = round(min(unapplied, po_per_bird), 2)
+                elif po_qty > 0:
+                    credit = round(min(unapplied, po_paid / po_qty), 2)
+                else:
+                    credit = unapplied
+
+        if credit > 0.0:
+            cur = conn.execute(
+                """
+                UPDATE batch_harvests
+                SET customer_id = ?, pickup_status = 'assigned', claimed_at = ?,
+                    deposit_paid = ?,
+                    payment_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'deposit' END
+                WHERE id = ? AND batch_id = ?
+                  AND customer_id IS NULL
+                  AND COALESCE(for_sale, 1) = 1
+                """,
+                (int(customer_id), now_iso, credit, int(harvest_id), int(batch_id)),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE batch_harvests
+                SET customer_id = ?, pickup_status = 'assigned', claimed_at = ?
+                WHERE id = ? AND batch_id = ?
+                  AND customer_id IS NULL
+                  AND COALESCE(for_sale, 1) = 1
+                """,
+                (int(customer_id), now_iso, int(harvest_id), int(batch_id)),
+            )
         if cur.rowcount == 0:
             conn.rollback()
             return False, "already_claimed"
@@ -2744,3 +2837,418 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
         "total_tips": round(total_actual - total_calc, 2),
         "repeat_customers": repeat_customers,
     }
+
+
+def _clean_payment_handle(raw: str, kind: str) -> str:
+    """Normalize a Venmo username or PayPal.Me handle (strips @ and URL prefixes)."""
+    val = str(raw or "").strip()
+    if not val:
+        return ""
+    low = val.lower()
+    if kind == "venmo":
+        for prefix in (
+            "https://venmo.com/u/",
+            "http://venmo.com/u/",
+            "https://www.venmo.com/u/",
+            "https://venmo.com/",
+            "http://venmo.com/",
+            "https://www.venmo.com/",
+            "venmo.com/u/",
+            "venmo.com/",
+        ):
+            if low.startswith(prefix):
+                val = val[len(prefix):]
+                break
+    elif kind == "paypal":
+        for prefix in (
+            "https://www.paypal.me/",
+            "http://www.paypal.me/",
+            "https://paypal.me/",
+            "http://paypal.me/",
+            "www.paypal.me/",
+            "paypal.me/",
+        ):
+            if low.startswith(prefix):
+                val = val[len(prefix):]
+                break
+    val = val.split("?", 1)[0].split("#", 1)[0].strip().strip("/").lstrip("@")
+    if "/" in val:
+        val = val.split("/", 1)[0]
+    return val[:64]
+
+
+def get_farm_pickup_settings(user_id: int) -> dict[str, str]:
+    return {
+        "farm_name": get_text_setting("farm_name", "", user_id=user_id).strip(),
+        "pickup_address": get_text_setting("pickup_address", "", user_id=user_id).strip(),
+        "pickup_instructions": get_text_setting("pickup_instructions", "", user_id=user_id).strip(),
+        "venmo_handle": get_text_setting("venmo_handle", "", user_id=user_id).strip(),
+        "paypal_handle": get_text_setting("paypal_handle", "", user_id=user_id).strip(),
+    }
+
+
+def save_farm_pickup_settings(
+    user_id: int,
+    farm_name: str = "",
+    pickup_address: str = "",
+    pickup_instructions: str = "",
+    venmo_handle: str = "",
+    paypal_handle: str = "",
+) -> dict[str, str]:
+    clean = {
+        "farm_name": str(farm_name or "").strip()[:120],
+        "pickup_address": str(pickup_address or "").strip()[:240],
+        "pickup_instructions": str(pickup_instructions or "").strip()[:400],
+        "venmo_handle": _clean_payment_handle(venmo_handle, "venmo"),
+        "paypal_handle": _clean_payment_handle(paypal_handle, "paypal"),
+    }
+    for k, v in clean.items():
+        set_text_setting(k, v, user_id=user_id)
+    return clean
+
+
+def update_batch_preorder_settings(
+    user_id: int,
+    batch_id: int,
+    preorder_enabled: bool,
+    preorder_cap: int | None = None,
+    deposit_per_bird: float = 0.0,
+    preorder_notes: str = "",
+    pickup_date: str = "",
+    pickup_window: str = "",
+    pickup_location: str = "",
+) -> dict | None:
+    cap_val = int(preorder_cap) if preorder_cap is not None and int(preorder_cap) > 0 else None
+    dep_val = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT picking_slug FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not row:
+            return None
+        slug = row["picking_slug"] or secrets.token_urlsafe(10)
+        conn.execute(
+            """
+            UPDATE batches
+            SET preorder_enabled = ?,
+                preorder_cap = ?,
+                deposit_per_bird = ?,
+                preorder_notes = ?,
+                pickup_date = ?,
+                pickup_window = ?,
+                pickup_location = ?,
+                picking_slug = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                1 if preorder_enabled else 0,
+                cap_val,
+                dep_val,
+                str(preorder_notes or "").strip(),
+                str(pickup_date or "").strip(),
+                str(pickup_window or "").strip(),
+                str(pickup_location or "").strip(),
+                slug,
+                int(batch_id),
+                int(user_id),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        return dict(updated) if updated else None
+
+
+def list_batch_preorders(batch_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.*,
+                   c.name AS customer_name,
+                   c.phone AS customer_phone,
+                   c.email AS customer_email,
+                   c.preferred_contact AS customer_pref
+            FROM batch_preorders p
+            JOIN customers c ON c.id = p.customer_id
+            WHERE p.batch_id = ?
+            ORDER BY CASE p.status WHEN 'reserved' THEN 0 WHEN 'waitlist' THEN 1 ELSE 2 END,
+                     p.created_at ASC, p.id ASC
+            """,
+            (int(batch_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_customer_batch_preorder_summary(batch_id: int, customer_id: int) -> dict:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT status, quantity, deposit_per_bird, deposit_paid
+            FROM batch_preorders
+            WHERE batch_id = ? AND customer_id = ? AND status IN ('reserved', 'waitlist')
+            """,
+            (int(batch_id), int(customer_id)),
+        ).fetchall()
+        applied_row = conn.execute(
+            """
+            SELECT COUNT(*) AS claimed_cnt, COALESCE(SUM(deposit_paid), 0) AS applied_dep
+            FROM batch_harvests
+            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+            """,
+            (int(batch_id), int(customer_id)),
+        ).fetchone()
+    reserved_qty = sum(int(r["quantity"] or 0) for r in rows if r["status"] == "reserved")
+    waitlist_qty = sum(int(r["quantity"] or 0) for r in rows if r["status"] == "waitlist")
+    total_paid = round(sum(float(r["deposit_paid"] or 0.0) for r in rows if r["status"] == "reserved"), 2)
+    per_bird = max((float(r["deposit_per_bird"] or 0.0) for r in rows if r["status"] == "reserved"), default=0.0)
+    applied_dep = round(float(applied_row["applied_dep"] or 0.0), 2)
+    claimed_cnt = int(applied_row["claimed_cnt"] or 0)
+    return {
+        "has_reservation": reserved_qty > 0,
+        "reserved_qty": reserved_qty,
+        "waitlist_qty": waitlist_qty,
+        "deposit_per_bird": round(per_bird, 2),
+        "total_deposit_paid": total_paid,
+        "already_applied_deposit": applied_dep,
+        "remaining_unapplied_deposit": round(max(0.0, total_paid - applied_dep), 2),
+        "claimed_count": claimed_cnt,
+    }
+
+
+def create_batch_preorder(
+    user_id: int,
+    batch_id: int,
+    customer_id: int,
+    quantity: int = 1,
+    status: str = "reserved",
+    deposit_per_bird: float = 0.0,
+    deposit_paid: float = 0.0,
+    deposit_status: str = "unpaid",
+    notes: str = "",
+) -> dict:
+    qty = max(1, int(quantity or 1))
+    st = status if status in ("reserved", "waitlist", "cancelled") else "reserved"
+    dpb = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
+    dp = round(max(0.0, float(deposit_paid or 0.0)), 2)
+    dst = "paid" if (deposit_status == "paid" or (dpb > 0 and dp >= round(dpb * qty, 2) and dp > 0)) else "unpaid"
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO batch_preorders (
+                batch_id, user_id, customer_id, quantity, status,
+                deposit_per_bird, deposit_paid, deposit_status, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(batch_id), int(user_id), int(customer_id), qty, st,
+                dpb, dp, dst, str(notes or "").strip(), now_iso,
+            ),
+        )
+        pid = int(cur.lastrowid)
+        conn.commit()
+        row = conn.execute("SELECT * FROM batch_preorders WHERE id = ?", (pid,)).fetchone()
+        return dict(row)
+
+
+def create_public_preorder_atomic(
+    batch_id: int,
+    user_id: int,
+    customer_id: int,
+    quantity: int,
+    cap: int | None,
+    deposit_per_bird: float = 0.0,
+    notes: str = "",
+) -> dict:
+    """Atomically reserve quantity if under cap, else place on waitlist."""
+    qty = max(1, min(50, int(quantity or 1)))
+    dpb = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reserved_now = int(
+            conn.execute(
+                "SELECT COALESCE(SUM(quantity), 0) FROM batch_preorders"
+                " WHERE batch_id = ? AND status = 'reserved'",
+                (int(batch_id),),
+            ).fetchone()[0]
+        )
+        if cap is not None and int(cap) > 0 and (reserved_now + qty) > int(cap):
+            status = "waitlist"
+        else:
+            status = "reserved"
+        cur = conn.execute(
+            """
+            INSERT INTO batch_preorders (
+                batch_id, user_id, customer_id, quantity, status,
+                deposit_per_bird, deposit_paid, deposit_status, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 0.0, 'unpaid', ?, ?)
+            """,
+            (
+                int(batch_id), int(user_id), int(customer_id), qty, status,
+                dpb, str(notes or "").strip(), now_iso,
+            ),
+        )
+        pid = int(cur.lastrowid)
+        conn.commit()
+        row = conn.execute("SELECT * FROM batch_preorders WHERE id = ?", (pid,)).fetchone()
+        return dict(row)
+
+
+def update_batch_preorder(
+    user_id: int,
+    batch_id: int,
+    preorder_id: int,
+    status: str | None = None,
+    quantity: int | None = None,
+    deposit_paid: float | None = None,
+    deposit_status: str | None = None,
+    notes: str | None = None,
+) -> dict | None:
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM batch_preorders WHERE id = ? AND batch_id = ? AND user_id = ?",
+            (int(preorder_id), int(batch_id), int(user_id)),
+        ).fetchone()
+        if not existing:
+            return None
+        new_status = status if status in ("reserved", "waitlist", "cancelled") else existing["status"]
+        new_qty = max(1, int(quantity)) if quantity is not None else int(existing["quantity"])
+        new_dp = round(max(0.0, float(deposit_paid)), 2) if deposit_paid is not None else float(existing["deposit_paid"] or 0.0)
+        new_dst = (
+            deposit_status
+            if deposit_status in ("unpaid", "paid")
+            else existing["deposit_status"]
+        )
+        new_notes = str(notes).strip() if notes is not None else (existing["notes"] or "")
+        conn.execute(
+            """
+            UPDATE batch_preorders
+            SET status = ?, quantity = ?, deposit_paid = ?, deposit_status = ?, notes = ?
+            WHERE id = ? AND batch_id = ? AND user_id = ?
+            """,
+            (
+                new_status, new_qty, new_dp, new_dst, new_notes,
+                int(preorder_id), int(batch_id), int(user_id),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM batch_preorders WHERE id = ?", (int(preorder_id),)
+        ).fetchone()
+        return dict(updated) if updated else None
+
+
+def delete_batch_preorder(user_id: int, batch_id: int, preorder_id: int) -> bool:
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM batch_preorders WHERE id = ? AND batch_id = ? AND user_id = ?",
+            (int(preorder_id), int(batch_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def batch_preorder_counts(user_id: int) -> dict[int, dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT batch_id,
+                   SUM(CASE WHEN status = 'reserved' THEN quantity ELSE 0 END) AS reserved_qty,
+                   SUM(CASE WHEN status = 'waitlist' THEN quantity ELSE 0 END) AS waitlist_qty,
+                   SUM(CASE WHEN status = 'reserved' THEN deposit_paid ELSE 0 END) AS deposits_paid
+            FROM batch_preorders
+            WHERE user_id = ?
+            GROUP BY batch_id
+            """,
+            (int(user_id),),
+        ).fetchall()
+    return {
+        int(r["batch_id"]): {
+            "reserved_qty": int(r["reserved_qty"] or 0),
+            "waitlist_qty": int(r["waitlist_qty"] or 0),
+            "deposits_paid": round(float(r["deposits_paid"] or 0.0), 2),
+        }
+        for r in rows
+    }
+
+
+def settle_customer_batch_pickup(
+    user_id: int,
+    batch_id: int,
+    customer_id: int,
+    collected_today: float | None = None,
+    mark_paid: bool = True,
+    mark_picked_up: bool = True,
+) -> int:
+    """Settle all for-sale birds assigned to customer_id in batch_id on Pickup Day.
+
+    If ``collected_today`` is provided, computes ``new_total = total_deposits + collected_today``.
+    When ``new_total`` differs from the birds' current effective total (e.g. a tip/round-up or
+    adjustment), distributes ``new_total`` across the birds proportionally by dressed weight
+    into ``actual_sale_price``.
+    """
+    with get_db_connection() as conn:
+        batch = conn.execute(
+            "SELECT sale_price_per_lb FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not batch:
+            return 0
+        price_per_lb = float(batch["sale_price_per_lb"] or 0.0)
+        birds = conn.execute(
+            """
+            SELECT id, dressed_lbs, deposit_paid, actual_sale_price, payment_status, pickup_status
+            FROM batch_harvests
+            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+            ORDER BY id ASC
+            """,
+            (int(batch_id), int(customer_id)),
+        ).fetchall()
+        if not birds:
+            return 0
+
+        bird_list = [dict(b) for b in birds]
+        total_dep = round(sum(float(b.get("deposit_paid") or 0.0) for b in bird_list), 2)
+        cur_eff = [
+            round(float(b["actual_sale_price"]), 2)
+            if b.get("actual_sale_price") is not None
+            else round(float(b.get("dressed_lbs") or 0.0) * price_per_lb, 2)
+            for b in bird_list
+        ]
+        cur_total = round(sum(cur_eff), 2)
+
+        new_actuals: list[float | None] = [
+            round(float(b["actual_sale_price"]), 2) if b.get("actual_sale_price") is not None else None
+            for b in bird_list
+        ]
+        if collected_today is not None:
+            target_total = round(max(0.0, total_dep + max(0.0, float(collected_today))), 2)
+            if abs(target_total - cur_total) >= 0.01:
+                weights = [max(0.01, float(b.get("dressed_lbs") or 0.0)) for b in bird_list]
+                w_sum = sum(weights) or 1.0
+                allocated = 0.0
+                for idx, w in enumerate(weights):
+                    if idx == len(weights) - 1:
+                        share = round(max(0.0, target_total - allocated), 2)
+                    else:
+                        share = round(target_total * (w / w_sum), 2)
+                        allocated = round(allocated + share, 2)
+                    new_actuals[idx] = share
+
+        for b, act_p in zip(bird_list, new_actuals):
+            pay_stat = "paid" if mark_paid else (b.get("payment_status") or "unpaid")
+            pick_stat = "picked_up" if mark_picked_up else (b.get("pickup_status") or "assigned")
+            conn.execute(
+                """
+                UPDATE batch_harvests
+                SET payment_status = ?, pickup_status = ?, actual_sale_price = ?
+                WHERE id = ? AND batch_id = ?
+                """,
+                (pay_stat, pick_stat, act_p, int(b["id"]), int(batch_id)),
+            )
+        conn.commit()
+        return len(bird_list)

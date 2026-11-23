@@ -30,8 +30,11 @@ from homestead.database import (
     add_batch_sale,
     add_farm_expense,
     authenticate_user,
+    batch_preorder_counts,
     claim_bird_atomically,
     count_users,
+    create_batch_preorder,
+    create_public_preorder_atomic,
     create_user,
     create_user_session,
     customer_insights_summary,
@@ -39,6 +42,7 @@ from homestead.database import (
     delete_batch_feed_log,
     delete_batch_harvest,
     delete_batch_loss,
+    delete_batch_preorder,
     delete_batch_sale,
     delete_customer,
     delete_farm_expense,
@@ -52,6 +56,8 @@ from homestead.database import (
     get_barrel_capacity,
     get_batch_by_picking_slug,
     get_customer,
+    get_customer_batch_preorder_summary,
+    get_farm_pickup_settings,
     get_google_drive_connection,
     get_species_catalog,
     get_user_by_session_token,
@@ -62,6 +68,7 @@ from homestead.database import (
     list_batch_feed_logs,
     list_batch_harvests,
     list_batch_losses,
+    list_batch_preorders,
     list_batch_sales,
     list_batches,
     list_customer_birds,
@@ -71,6 +78,7 @@ from homestead.database import (
     merge_customers,
     save_batch,
     save_customer,
+    save_farm_pickup_settings,
     save_google_drive_connection,
     save_species_preset,
     set_bag_weight,
@@ -78,7 +86,10 @@ from homestead.database import (
     set_batch_active,
     set_batch_actual_feed,
     set_public_registration_enabled,
+    settle_customer_batch_pickup,
     update_batch_picking_settings,
+    update_batch_preorder,
+    update_batch_preorder_settings,
     update_google_drive_folder,
     update_harvest_assignment,
     update_user_password,
@@ -373,9 +384,11 @@ def milestone_ack_submit(
 @app.get("/batches")
 def batches_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     schedules = _schedules_for_user(user["id"], include_archived=True)
+    po_counts = batch_preorder_counts(user["id"])
     return _render(
         request, "batches.html", user, "batches",
         schedules=schedules,
+        po_counts=po_counts,
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -424,6 +437,15 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
             elif e["customer_id"]:
                 tally_allocations.append({**e, "alloc_kind": "assigned"})
 
+    po_summary = batch_preorder_counts(user["id"]).get(
+        int(batch_id), {"reserved_qty": 0, "waitlist_qty": 0, "deposits_paid": 0.0}
+    )
+    pending_pickup_customers = len({
+        int(e["customer_id"])
+        for e in tally["entries"]
+        if e["for_sale"] and e["customer_id"] and (e["pickup_status"] != "picked_up" or e["payment_status"] != "paid")
+    })
+
     return _render(
         request, "batch_detail.html", user, "batches",
         b=b, s=s, gcal_url=gcal_url, gcal_arrival_url=gcal_arrival_url,
@@ -432,6 +454,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         sales=list_batch_sales(batch_id),
         tally=tally,
         tally_allocations=tally_allocations,
+        po_summary=po_summary,
+        pending_pickup_customers=pending_pickup_customers,
         feed_logs=list_batch_feed_logs(batch_id),
         bag_weight=bag_weight,
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
@@ -572,6 +596,7 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         "picked_up_count": picked_up_count,
         "not_for_sale_count": not_for_sale_count,
         "picking_enabled": bool(batch.get("picking_enabled")),
+        "picking_preorder_only": bool(batch.get("picking_preorder_only")),
         "picking_slug": batch.get("picking_slug") or "",
         "max_birds_per_customer": batch.get("max_birds_per_customer"),
         "entries": entries,
@@ -638,6 +663,22 @@ async def api_batch_harvest_assign(
     payment_status = str(payload.get("payment_status") or "unpaid")
     pickup_status = str(payload.get("pickup_status") or ("assigned" if cid else "unassigned"))
     notes = payload.get("notes")
+    # Auto-apply unapplied paid pre-order deposit if newly assigning with no manual deposit entered
+    if cid is not None and for_sale and deposit_paid == 0.0 and payment_status == "unpaid":
+        existing_hv = next((h for h in list_batch_harvests(batch_id) if int(h["id"]) == int(harvest_id)), None)
+        prev_cid = int(existing_hv["customer_id"]) if existing_hv and existing_hv.get("customer_id") else None
+        if prev_cid != cid:
+            po_sum = get_customer_batch_preorder_summary(batch_id, cid)
+            rem = float(po_sum.get("remaining_unapplied_deposit") or 0.0)
+            if rem > 0.0:
+                per_b = float(po_sum.get("deposit_per_bird") or 0.0)
+                if po_sum["reserved_qty"] > 0 and (po_sum["claimed_count"] + 1) >= po_sum["reserved_qty"]:
+                    deposit_paid = rem
+                elif per_b > 0.0:
+                    deposit_paid = round(min(rem, per_b), 2)
+                else:
+                    deposit_paid = rem
+                payment_status = "deposit"
     update_harvest_assignment(
         batch_id,
         harvest_id,
@@ -677,11 +718,15 @@ async def api_batch_picking_settings(
     enabled = bool(payload.get("picking_enabled"))
     raw_max = payload.get("max_birds_per_customer")
     max_birds = int(raw_max) if raw_max not in (None, "", 0, "0") else None
-    updated = update_batch_picking_settings(user["id"], batch_id, enabled, max_birds)
+    po_only = bool(payload["picking_preorder_only"]) if "picking_preorder_only" in payload else None
+    updated = update_batch_picking_settings(
+        user["id"], batch_id, enabled, max_birds, picking_preorder_only=po_only
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Batch not found.")
     return {
         "picking_enabled": bool(updated.get("picking_enabled")),
+        "picking_preorder_only": bool(updated.get("picking_preorder_only")),
         "picking_slug": updated.get("picking_slug") or "",
         "max_birds_per_customer": updated.get("max_birds_per_customer"),
     }
@@ -839,6 +884,9 @@ def public_picking_page(request: Request, slug: str):
             "sale_price_per_lb": float(batch.get("sale_price_per_lb") or 0.0),
             "max_birds_per_customer": batch.get("max_birds_per_customer"),
             "picking_enabled": enabled,
+            "picking_preorder_only": bool(batch.get("picking_preorder_only")),
+            "pickup_date": batch.get("pickup_date") or "",
+            "pickup_window": batch.get("pickup_window") or "",
             "slug": slug,
             "birds": birds,
         },
@@ -859,6 +907,23 @@ async def api_public_pick_identify(slug: str, request: Request):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    po_summary = get_customer_batch_preorder_summary(int(batch["id"]), int(cust["id"]))
+    po_only = bool(batch.get("picking_preorder_only"))
+    if po_only and not po_summary["has_reservation"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Early bird picking is currently open to pre-order customers only. Please use the phone number or email from your reservation.",
+        )
+
+    base_max = batch.get("max_birds_per_customer")
+    if po_only:
+        effective_max = po_summary["reserved_qty"]
+    elif po_summary["has_reservation"] and base_max and po_summary["reserved_qty"] > int(base_max):
+        effective_max = po_summary["reserved_qty"]
+    else:
+        effective_max = base_max
+
     harvests = sorted(list_batch_harvests(batch["id"]), key=lambda h: int(h.get("id") or 0))
     price = float(batch.get("sale_price_per_lb") or 0.0)
     mine = []
@@ -871,8 +936,16 @@ async def api_public_pick_identify(slug: str, request: Request):
                 "dressed_lbs": dl,
                 "lb_oz": _fmt_lb_oz(dl),
                 "est_price": round(dl * price, 2),
+                "deposit_paid": round(float(h.get("deposit_paid") or 0.0), 2),
             })
-    return {"customer_id": int(cust["id"]), "name": cust["name"], "my_birds": mine}
+    return {
+        "customer_id": int(cust["id"]),
+        "name": cust["name"],
+        "my_birds": mine,
+        "effective_max_birds": effective_max,
+        "reserved_qty": po_summary["reserved_qty"],
+        "unapplied_deposit": po_summary["remaining_unapplied_deposit"],
+    }
 
 
 @app.post("/api/pick/{slug}/claim/{bird_id}")
@@ -884,17 +957,34 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
     cid = payload.get("customer_id")
     if not cid or not get_customer(int(batch["user_id"]), int(cid)):
         raise HTTPException(status_code=400, detail="Please enter your name and contact info first.")
+
+    po_summary = get_customer_batch_preorder_summary(int(batch["id"]), int(cid))
+    po_only = bool(batch.get("picking_preorder_only"))
+    if po_only and not po_summary["has_reservation"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Early bird picking is currently open to pre-order customers only.",
+        )
+    base_max = batch.get("max_birds_per_customer")
+    if po_only:
+        effective_max = po_summary["reserved_qty"]
+    elif po_summary["has_reservation"] and base_max and po_summary["reserved_qty"] > int(base_max):
+        effective_max = po_summary["reserved_qty"]
+    else:
+        effective_max = base_max
+
     ok, reason = claim_bird_atomically(
         int(batch["id"]),
         int(bird_id),
         int(cid),
-        max_birds_per_customer=batch.get("max_birds_per_customer"),
+        max_birds_per_customer=effective_max,
+        apply_preorder_deposit=True,
     )
     if not ok:
         if reason == "limit_reached":
             raise HTTPException(
                 status_code=409,
-                detail=f"Limit of {batch.get('max_birds_per_customer')} bird(s) per customer reached.",
+                detail=f"Limit of {effective_max} bird(s) per customer reached.",
             )
         raise HTTPException(
             status_code=409,
@@ -913,18 +1003,20 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
                 "dressed_lbs": dl,
                 "lb_oz": _fmt_lb_oz(dl),
                 "est_price": round(dl * price, 2),
+                "deposit_paid": round(float(h.get("deposit_paid") or 0.0), 2),
             }
             break
     if claimed_info:
         cust = get_customer(int(batch["user_id"]), int(cid))
         buyer_name = cust["name"] if cust else "A customer"
         click_url = f"{str(request.base_url).rstrip('/')}/batches/{batch['id']}/harvest"
+        dep_note = f" (Deposit ${claimed_info['deposit_paid']:.2f} applied)" if claimed_info["deposit_paid"] > 0 else ""
         send_ntfy_async(
             int(batch["user_id"]),
             f"Bird claimed - {batch['name']}",
             f"{buyer_name} claimed Bird #{claimed_info['num']} "
             f"({claimed_info['dressed_lbs']:.2f} lb / {claimed_info['lb_oz']} - "
-            f"Est. ${claimed_info['est_price']:.2f})",
+            f"${claimed_info['est_price']:.2f}){dep_note}",
             click_url=click_url,
         )
     return {"ok": True, "bird": claimed_info}
@@ -960,6 +1052,451 @@ async def api_public_pick_events(slug: str, request: Request):
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch Pre-Orders, Waitlist & Public Reservation (/reserve/<slug>)
+# ---------------------------------------------------------------------------
+def _effective_preorder_cap(batch: dict, schedule: dict | None = None) -> int:
+    raw = batch.get("preorder_cap")
+    if raw is not None and int(raw) > 0:
+        return int(raw)
+    if schedule is not None:
+        return max(1, int(schedule.get("surviving_quantity") or batch.get("initial_quantity") or 1))
+    return max(1, int(batch.get("initial_quantity") or 1))
+
+
+@app.get("/batches/{batch_id}/preorders")
+def batch_preorders_page(
+    request: Request, batch_id: int, msg: str = "", user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    bag_weight = get_bag_weight(user_id=user["id"])
+    s = compute_batch_schedule(b, bag_weight=bag_weight)
+    preorders = list_batch_preorders(batch_id)
+    reserved = [p for p in preorders if p["status"] == "reserved"]
+    waitlist = [p for p in preorders if p["status"] == "waitlist"]
+    cancelled = [p for p in preorders if p["status"] == "cancelled"]
+
+    cap = _effective_preorder_cap(b, s)
+    reserved_qty = sum(int(p["quantity"] or 0) for p in reserved)
+    waitlist_qty = sum(int(p["quantity"] or 0) for p in waitlist)
+    spots_left = max(0, cap - reserved_qty)
+    dep_collected = round(sum(float(p["deposit_paid"] or 0.0) for p in reserved), 2)
+    dep_expected = round(
+        sum(int(p["quantity"] or 0) * float(p["deposit_per_bird"] or 0.0) for p in reserved), 2
+    )
+    dep_pending = round(max(0.0, dep_expected - dep_collected), 2)
+
+    slug = b.get("picking_slug") or ""
+    base = str(request.base_url).rstrip("/")
+    reserve_url = f"{base}/reserve/{slug}" if slug else ""
+    pick_url = f"{base}/pick/{slug}" if slug else ""
+    pickup_cfg = get_farm_pickup_settings(user["id"])
+
+    reserved_phones = ", ".join(dict.fromkeys(p["customer_phone"] for p in reserved if p.get("customer_phone")))
+    reserved_emails = ", ".join(dict.fromkeys(p["customer_email"] for p in reserved if p.get("customer_email")))
+
+    return _render(
+        request, "preorders.html", user, "batches",
+        b=b, s=s,
+        reserved=reserved,
+        waitlist=waitlist,
+        cancelled=cancelled,
+        cap=cap,
+        reserved_qty=reserved_qty,
+        waitlist_qty=waitlist_qty,
+        spots_left=spots_left,
+        dep_collected=dep_collected,
+        dep_expected=dep_expected,
+        dep_pending=dep_pending,
+        reserve_url=reserve_url,
+        pick_url=pick_url,
+        pickup_cfg=pickup_cfg,
+        customers=list_customers(user["id"]),
+        reserved_phones=reserved_phones,
+        reserved_emails=reserved_emails,
+        msg=msg,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/settings")
+def batch_preorders_settings_submit(
+    batch_id: int,
+    preorder_enabled: str = Form(""),
+    preorder_cap: str = Form(""),
+    deposit_per_bird: str = Form("0"),
+    preorder_notes: str = Form(""),
+    pickup_date: str = Form(""),
+    pickup_window: str = Form(""),
+    pickup_location: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    cap_val = int(preorder_cap) if preorder_cap.strip().isdigit() and int(preorder_cap) > 0 else None
+    try:
+        dep_val = max(0.0, float(deposit_per_bird or 0.0))
+    except ValueError:
+        dep_val = 0.0
+    update_batch_preorder_settings(
+        user["id"],
+        batch_id,
+        preorder_enabled=bool(preorder_enabled),
+        preorder_cap=cap_val,
+        deposit_per_bird=dep_val,
+        preorder_notes=preorder_notes,
+        pickup_date=pickup_date,
+        pickup_window=pickup_window,
+        pickup_location=pickup_location,
+    )
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus("Saved pre-order & pickup settings."),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/add")
+def batch_preorders_add_submit(
+    batch_id: int,
+    customer_id: str = Form(""),
+    new_name: str = Form(""),
+    new_contact: str = Form(""),
+    quantity: int = Form(1),
+    status: str = Form("reserved"),
+    deposit_paid: str = Form("0"),
+    notes: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    b = _get_owned_batch(batch_id, user)
+    cid = int(customer_id) if customer_id.strip().isdigit() else None
+    if not cid:
+        if not new_name.strip():
+            return RedirectResponse(
+                f"/batches/{batch_id}/preorders?msg=" + quote_plus("Select a customer or enter a new customer name."),
+                status_code=303,
+            )
+        if new_contact.strip():
+            cust = find_or_create_customer(user["id"], new_name.strip(), new_contact.strip())
+            cid = int(cust["id"])
+        else:
+            cid = save_customer(user["id"], name=new_name.strip())
+    elif not get_customer(user["id"], cid):
+        raise HTTPException(status_code=404, detail="Customer not found.")
+
+    dpb = float(b.get("deposit_per_bird") or 0.0)
+    try:
+        dp = max(0.0, float(deposit_paid or 0.0))
+    except ValueError:
+        dp = 0.0
+    dst = "paid" if dp > 0 and (dpb <= 0 or dp >= round(dpb * max(1, int(quantity)), 2)) else "unpaid"
+    create_batch_preorder(
+        user["id"], batch_id, cid,
+        quantity=max(1, int(quantity)),
+        status=status,
+        deposit_per_bird=dpb,
+        deposit_paid=dp,
+        deposit_status=dst,
+        notes=notes,
+    )
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus("Pre-order added."),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/{preorder_id}/mark-paid")
+def batch_preorder_mark_paid(
+    batch_id: int,
+    preorder_id: int,
+    amount: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    b = _get_owned_batch(batch_id, user)
+    po = next((p for p in list_batch_preorders(batch_id) if int(p["id"]) == int(preorder_id)), None)
+    if not po:
+        raise HTTPException(status_code=404, detail="Pre-order not found.")
+    dpb = float(po.get("deposit_per_bird") or b.get("deposit_per_bird") or 0.0)
+    default_amt = round(dpb * int(po["quantity"] or 1), 2)
+    try:
+        paid_val = max(0.0, float(amount)) if amount.strip() else default_amt
+    except ValueError:
+        paid_val = default_amt
+    update_batch_preorder(
+        user["id"], batch_id, preorder_id,
+        deposit_paid=paid_val, deposit_status="paid",
+    )
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus(f"Marked deposit paid (${paid_val:.2f})."),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/{preorder_id}/promote")
+def batch_preorder_promote(batch_id: int, preorder_id: int, user: dict = Depends(current_user)):
+    _get_owned_batch(batch_id, user)
+    update_batch_preorder(user["id"], batch_id, preorder_id, status="reserved")
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus("Promoted from waitlist to reserved!"),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/{preorder_id}/cancel")
+def batch_preorder_cancel(batch_id: int, preorder_id: int, user: dict = Depends(current_user)):
+    _get_owned_batch(batch_id, user)
+    update_batch_preorder(user["id"], batch_id, preorder_id, status="cancelled")
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus("Reservation cancelled."),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/preorders/{preorder_id}/delete")
+def batch_preorder_delete_submit(batch_id: int, preorder_id: int, user: dict = Depends(current_user)):
+    _get_owned_batch(batch_id, user)
+    delete_batch_preorder(user["id"], batch_id, preorder_id)
+    return RedirectResponse(
+        f"/batches/{batch_id}/preorders?msg=" + quote_plus("Pre-order removed."),
+        status_code=303,
+    )
+
+
+@app.get("/reserve/{slug}")
+def public_reserve_page(request: Request, slug: str):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Reservation page not found.")
+    enabled = bool(batch.get("preorder_enabled"))
+    bag_weight = get_bag_weight(user_id=int(batch["user_id"]))
+    s = compute_batch_schedule(batch, bag_weight=bag_weight)
+    cap = _effective_preorder_cap(batch, s)
+    preorders = list_batch_preorders(int(batch["id"]))
+    reserved_qty = sum(int(p["quantity"] or 0) for p in preorders if p["status"] == "reserved")
+    spots_left = max(0, cap - reserved_qty)
+    pickup_cfg = get_farm_pickup_settings(int(batch["user_id"]))
+    return templates.TemplateResponse(
+        request, "reserve.html",
+        {
+            "request": request,
+            "slug": slug,
+            "batch_name": batch["name"],
+            "species": batch["species"],
+            "sale_price_per_lb": float(batch.get("sale_price_per_lb") or 0.0),
+            "avg_dressed_weight": float(batch.get("avg_dressed_weight") or 0.0),
+            "deposit_per_bird": float(batch.get("deposit_per_bird") or 0.0),
+            "preorder_notes": batch.get("preorder_notes") or "",
+            "pickup_date": batch.get("pickup_date") or str(s.get("proc_date") or ""),
+            "pickup_window": batch.get("pickup_window") or "",
+            "pickup_location": batch.get("pickup_location") or pickup_cfg.get("pickup_address") or "",
+            "farm_name": pickup_cfg.get("farm_name") or "Homestead Planner",
+            "venmo_handle": pickup_cfg.get("venmo_handle") or "",
+            "paypal_handle": pickup_cfg.get("paypal_handle") or "",
+            "preorder_enabled": enabled,
+            "cap": cap,
+            "reserved_qty": reserved_qty,
+            "spots_left": spots_left,
+            "is_waitlist_mode": spots_left <= 0,
+        },
+    )
+
+
+@app.post("/api/reserve/{slug}")
+async def api_public_reserve(slug: str, request: Request):
+    batch = get_batch_by_picking_slug(slug)
+    if not batch or not batch.get("preorder_enabled"):
+        raise HTTPException(status_code=404, detail="Pre-orders are not currently open for this batch.")
+    payload = await request.json()
+    name = str(payload.get("name") or "").strip()
+    contact = str(payload.get("contact") or "").strip()
+    notes = str(payload.get("notes") or "").strip()
+    try:
+        qty = max(1, min(25, int(payload.get("quantity") or 1)))
+    except (TypeError, ValueError):
+        qty = 1
+    try:
+        cust = find_or_create_customer(int(batch["user_id"]), name, contact)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    bag_weight = get_bag_weight(user_id=int(batch["user_id"]))
+    s = compute_batch_schedule(batch, bag_weight=bag_weight)
+    cap = _effective_preorder_cap(batch, s)
+    dpb = round(float(batch.get("deposit_per_bird") or 0.0), 2)
+    po = create_public_preorder_atomic(
+        int(batch["id"]), int(batch["user_id"]), int(cust["id"]),
+        quantity=qty, cap=cap, deposit_per_bird=dpb, notes=notes,
+    )
+    deposit_total = round(dpb * int(po["quantity"]), 2)
+    is_waitlist = po["status"] == "waitlist"
+    click_url = f"{str(request.base_url).rstrip('/')}/batches/{batch['id']}/preorders"
+    if is_waitlist:
+        send_ntfy_async(
+            int(batch["user_id"]),
+            f"Waitlist signup - {batch['name']}",
+            f"{cust['name']} joined the waitlist for {po['quantity']}x {batch['species']}",
+            click_url=click_url,
+            tags="hourglass",
+        )
+    else:
+        dep_txt = f" (Deposit due: ${deposit_total:.2f})" if deposit_total > 0 else ""
+        send_ntfy_async(
+            int(batch["user_id"]),
+            f"New pre-order - {batch['name']}",
+            f"{cust['name']} reserved {po['quantity']}x {batch['species']}{dep_txt}",
+            click_url=click_url,
+            tags="tada,turkey",
+        )
+    pickup_cfg = get_farm_pickup_settings(int(batch["user_id"]))
+    return {
+        "ok": True,
+        "preorder_id": int(po["id"]),
+        "status": po["status"],
+        "customer_name": cust["name"],
+        "quantity": int(po["quantity"]),
+        "deposit_per_bird": dpb,
+        "deposit_total": deposit_total,
+        "venmo_handle": pickup_cfg.get("venmo_handle") or "",
+        "paypal_handle": pickup_cfg.get("paypal_handle") or "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pickup Day Checkout Board (/batches/{id}/pickup)
+# ---------------------------------------------------------------------------
+@app.get("/batches/{batch_id}/pickup")
+def batch_pickup_page(
+    request: Request, batch_id: int, msg: str = "", user: dict = Depends(current_user)
+):
+    b = _get_owned_batch(batch_id, user)
+    tally = _harvest_tally_payload(b, user["id"])
+    pickup_cfg = get_farm_pickup_settings(user["id"])
+
+    by_cust: dict[int, dict] = {}
+    for e in tally["entries"]:
+        if not e["for_sale"] or not e["customer_id"]:
+            continue
+        cid = int(e["customer_id"])
+        grp = by_cust.setdefault(
+            cid,
+            {
+                "customer_id": cid,
+                "name": e["customer_name"],
+                "phone": e["customer_phone"],
+                "email": e["customer_email"],
+                "pref": e["customer_pref"],
+                "birds": [],
+                "total_lbs": 0.0,
+                "calc_total": 0.0,
+                "effective_total": 0.0,
+                "deposits_paid": 0.0,
+                "balance_due": 0.0,
+                "all_paid": True,
+                "all_picked_up": True,
+            },
+        )
+        grp["birds"].append(e)
+        grp["total_lbs"] = round(grp["total_lbs"] + float(e["dressed_lbs"]), 2)
+        grp["calc_total"] = round(grp["calc_total"] + float(e["est_price"]), 2)
+        grp["effective_total"] = round(grp["effective_total"] + float(e["effective_price"]), 2)
+        grp["deposits_paid"] = round(grp["deposits_paid"] + float(e["deposit_paid"]), 2)
+        if e["payment_status"] != "paid":
+            grp["all_paid"] = False
+            grp["balance_due"] = round(
+                grp["balance_due"] + max(0.0, float(e["effective_price"]) - float(e["deposit_paid"])), 2
+            )
+        if e["pickup_status"] != "picked_up":
+            grp["all_picked_up"] = False
+
+    pending_groups = []
+    completed_groups = []
+    for g in by_cust.values():
+        g["birds"].sort(key=lambda x: x["num"])
+        g["bird_nums_label"] = ", ".join(f"#{x['num']}" for x in g["birds"])
+        if g["all_paid"] and g["all_picked_up"]:
+            completed_groups.append(g)
+        else:
+            pending_groups.append(g)
+
+    pending_groups.sort(key=lambda x: x["name"].lower())
+    completed_groups.sort(key=lambda x: x["name"].lower())
+
+    total_balance_due = round(sum(g["balance_due"] for g in pending_groups), 2)
+    total_deposits = round(sum(g["deposits_paid"] for g in by_cust.values()), 2)
+    total_collected = round(
+        sum(g["effective_total"] for g in completed_groups)
+        + sum(g["deposits_paid"] for g in pending_groups),
+        2,
+    )
+
+    pickup_location = (b.get("pickup_location") or "").strip() or pickup_cfg.get("pickup_address") or ""
+    pickup_instructions = pickup_cfg.get("pickup_instructions") or ""
+
+    return _render(
+        request, "pickup_day.html", user, "batches",
+        b=b,
+        tally=tally,
+        pending_groups=pending_groups,
+        completed_groups=completed_groups,
+        total_balance_due=total_balance_due,
+        total_deposits=total_deposits,
+        total_collected=total_collected,
+        pickup_cfg=pickup_cfg,
+        pickup_location=pickup_location,
+        pickup_instructions=pickup_instructions,
+        msg=msg,
+    )
+
+
+@app.post("/batches/{batch_id}/pickup/{customer_id}/settle")
+def batch_pickup_settle_submit(
+    batch_id: int,
+    customer_id: int,
+    collected_today: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    collected_val: float | None = None
+    if collected_today.strip() != "":
+        try:
+            collected_val = max(0.0, float(collected_today))
+        except ValueError:
+            collected_val = None
+    cnt = settle_customer_batch_pickup(
+        user["id"], batch_id, customer_id,
+        collected_today=collected_val, mark_paid=True, mark_picked_up=True,
+    )
+    cust = get_customer(user["id"], customer_id)
+    cname = cust["name"] if cust else "Customer"
+    return RedirectResponse(
+        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} bird{'s' if cnt != 1 else ''}) paid & picked up!"),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/pickup/{customer_id}/reopen")
+def batch_pickup_reopen_submit(
+    batch_id: int,
+    customer_id: int,
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    for h in list_batch_harvests(batch_id):
+        if h.get("customer_id") and int(h["customer_id"]) == int(customer_id) and bool(1 if h.get("for_sale") is None else h.get("for_sale")):
+            dep = float(h.get("deposit_paid") or 0.0)
+            update_harvest_assignment(
+                batch_id,
+                int(h["id"]),
+                customer_id=customer_id,
+                for_sale=True,
+                deposit_paid=dep,
+                actual_sale_price=float(h["actual_sale_price"]) if h.get("actual_sale_price") is not None else None,
+                payment_status="deposit" if dep > 0 else "unpaid",
+                pickup_status="assigned",
+            )
+    return RedirectResponse(
+        f"/batches/{batch_id}/pickup?msg=" + quote_plus("Moved back to pending pickups."),
+        status_code=303,
     )
 
 
@@ -1422,7 +1959,31 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
         gdrive_configured=is_gdrive_configured(),
         gdrive_conn=get_google_drive_connection(user["id"]),
         ntfy_cfg=get_ntfy_config(user["id"]),
+        pickup_cfg=get_farm_pickup_settings(user["id"]),
         msg=msg,
+    )
+
+
+@app.post("/settings/pickup-payments")
+def settings_pickup_payments_save(
+    farm_name: str = Form(""),
+    pickup_address: str = Form(""),
+    pickup_instructions: str = Form(""),
+    venmo_handle: str = Form(""),
+    paypal_handle: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    save_farm_pickup_settings(
+        user["id"],
+        farm_name=farm_name,
+        pickup_address=pickup_address,
+        pickup_instructions=pickup_instructions,
+        venmo_handle=venmo_handle,
+        paypal_handle=paypal_handle,
+    )
+    return RedirectResponse(
+        "/settings?msg=" + quote_plus("Saved farm pickup & digital payment settings."),
+        status_code=303,
     )
 
 

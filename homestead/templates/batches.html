@@ -26,6 +26,7 @@
         <td class="num">{{ s.initial_quantity if s.is_planned else (s.on_farm_head ~ ' / ' ~ s.initial_quantity) }}</td>
         <td class="num">
           <b>{{ s.harvested_head }}</b>
+          {% set po = po_counts.get(b.id) if po_counts else None %}
           {% if s.harvested_head > 0 %}
             <small class="muted" style="display:block;white-space:nowrap">
               {% if s.harvest_available_head %}{{ s.harvest_available_head }} avail{% endif %}
@@ -33,12 +34,17 @@
               {% if s.harvest_picked_up_head %}{% if s.harvest_available_head or s.harvest_assigned_head %} · {% endif %}{{ s.harvest_picked_up_head }} picked{% endif %}
               {% if s.harvest_freezer_head %}{% if s.harvest_available_head or s.harvest_assigned_head or s.harvest_picked_up_head %} · {% endif %}{{ s.harvest_freezer_head }} frz{% endif %}
             </small>
+          {% elif po and (po.reserved_qty or po.waitlist_qty) %}
+            <small class="muted" style="display:block;white-space:nowrap">
+              {{ po.reserved_qty }} reserved{% if po.waitlist_qty %} · {{ po.waitlist_qty }} wait{% endif %}
+            </small>
           {% endif %}
         </td>
         <td><span class="pill {{ ('amber' if s.is_planned else 'green') if b.active else 'gray' }}">{{ s.status_badge if b.active else 'Archived' }}</span></td>
         <td class="num">
           <div class="row" style="justify-content:flex-end">
             <a href="/batches/{{ b.id }}" class="btn sm">Logs</a>
+            <a href="/batches/{{ b.id }}/preorders" class="btn sm">Pre-Orders</a>
             {% if not s.is_planned %}
             <a href="/batches/{{ b.id }}/harvest" class="btn sm">Tally</a>
             {% endif %}
