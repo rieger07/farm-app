@@ -10,6 +10,20 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
+PAYMENT_METHODS = ("cash", "venmo", "paypal", "card")
+
+
+def _normalize_payment_method(source: str, payment_type: str | None) -> str:
+    pt = (payment_type or "").strip().lower()
+    if "venmo" in pt:
+        return "venmo"
+    if "paypal" in pt:
+        return "paypal"
+    if "cash" in pt or (source == "cash" and not pt):
+        return "cash"
+    return "card"
+
+
 def record_cash_sale(
     merchant_id: int,
     client_uuid: str,
@@ -17,6 +31,7 @@ def record_cash_sale(
     cash_received_cents: int | None = None,
     created_by: int | None = None,
     occurred_at: str | None = None,
+    payment_type: str = "cash",
 ) -> dict:
     """Record a cash sale idempotently.
 
@@ -62,16 +77,21 @@ def record_cash_sale(
 
         total = sum(round(skus[i["sku_id"]]["price_cents"] * i["quantity"]) for i in clean)
         now = _now()
+        clean_pt = _normalize_payment_method("cash", payment_type)
+        if clean_pt not in ("cash", "venmo", "paypal"):
+            clean_pt = "cash"
+        cash_rec = cash_received_cents if clean_pt == "cash" else None
         cur = conn.execute(
             "INSERT INTO sales (merchant_id, source, external_id, occurred_at,"
-            " total_cents, cash_received_cents, created_by, created_at)"
-            " VALUES (?, 'cash', ?, ?, ?, ?, ?, ?)",
+            " total_cents, cash_received_cents, payment_type, created_by, created_at)"
+            " VALUES (?, 'cash', ?, ?, ?, ?, ?, ?, ?)",
             (
                 int(merchant_id),
                 client_uuid,
                 occurred_at or now,
                 total,
-                cash_received_cents,
+                cash_rec,
+                clean_pt,
                 created_by,
                 now,
             ),
@@ -121,13 +141,29 @@ def _window_filter(
     return f" AND ({clause})", params
 
 
+def update_sale_payment_type(merchant_id: int, sale_id: int, payment_type: str) -> bool:
+    clean = (payment_type or "").strip().lower()
+    if clean not in PAYMENT_METHODS:
+        raise ValueError(f"Unsupported payment type: {payment_type}")
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE sales SET payment_type = ? WHERE id = ? AND merchant_id = ?",
+            (clean, int(sale_id), int(merchant_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def sales_summary(
     merchant_id: int,
     since_iso: str,
     until_iso: str,
     utc_windows: list[tuple[str, str]] | None = None,
 ) -> dict:
-    """Totals, payment method (card vs cash), and source split for sales in [since, until)."""
+    """Totals, 3-way payment categories (card / digital cash / physical cash), and source split."""
     win_sql, win_args = _window_filter(utc_windows, alias="s")
     conn = get_connection()
     try:
@@ -135,7 +171,10 @@ def sales_summary(
             f"""
             SELECT s.source,
                    CASE
-                     WHEN s.source = 'cash' OR LOWER(COALESCE(s.payment_type, '')) = 'cash' THEN 'cash'
+                     WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%venmo%' THEN 'venmo'
+                     WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%paypal%' THEN 'paypal'
+                     WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%cash%'
+                          OR (s.source = 'cash' AND COALESCE(s.payment_type, '') = '') THEN 'cash'
                      ELSE 'card'
                    END AS pay_method,
                    COUNT(*) AS n,
@@ -165,16 +204,24 @@ def sales_summary(
     count = bucket(col="n")
     total = bucket(col="cents")
     units = fmt_qty(sum(float(r["units"] or 0) for r in rows))
-    zettle_card_cents = bucket("zettle", "card", "cents")
-    zettle_card_count = bucket("zettle", "card", "n")
+
+    card_cents = bucket(pay="card", col="cents")
+    card_count = bucket(pay="card", col="n")
+
+    venmo_cents = bucket(pay="venmo", col="cents")
+    venmo_count = bucket(pay="venmo", col="n")
+    paypal_cents = bucket(pay="paypal", col="cents")
+    paypal_count = bucket(pay="paypal", col="n")
+    digital_cents = venmo_cents + paypal_cents
+    digital_count = venmo_count + paypal_count
+
     zettle_cash_cents = bucket("zettle", "cash", "cents")
     zettle_cash_count = bucket("zettle", "cash", "n")
     quick_cash_cents = bucket("cash", "cash", "cents")
     quick_cash_count = bucket("cash", "cash", "n")
-    card_cents = zettle_card_cents
-    card_count = zettle_card_count
     cash_cents = zettle_cash_cents + quick_cash_cents
     cash_count = zettle_cash_count + quick_cash_count
+
     return {
         "total_cents": total,
         "count": count,
@@ -182,10 +229,16 @@ def sales_summary(
         "units": units,
         "card_count": card_count,
         "card_cents": card_cents,
+        "digital_count": digital_count,
+        "digital_cents": digital_cents,
+        "venmo_count": venmo_count,
+        "venmo_cents": venmo_cents,
+        "paypal_count": paypal_count,
+        "paypal_cents": paypal_cents,
         "cash_count": cash_count,
         "cash_cents": cash_cents,
-        "zettle_card_count": zettle_card_count,
-        "zettle_card_cents": zettle_card_cents,
+        "zettle_card_count": bucket("zettle", "card", "n"),
+        "zettle_card_cents": bucket("zettle", "card", "cents"),
         "zettle_cash_count": zettle_cash_count,
         "zettle_cash_cents": zettle_cash_cents,
         "quick_cash_count": quick_cash_count,
@@ -210,6 +263,7 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
                 "label": day.strftime("%a"),
                 "date": day.date().isoformat(),
                 "card_cents": s["card_cents"],
+                "digital_cents": s["digital_cents"],
                 "cash_cents": s["cash_cents"],
                 "zettle_card_cents": s["zettle_card_cents"],
                 "zettle_cash_cents": s["zettle_cash_cents"],
@@ -223,9 +277,26 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
 def _source_filter_clause(source: str | None, alias: str = "") -> str:
     p = f"{alias}." if alias else ""
     if source == "cash":
-        return f" AND ({p}source = 'cash' OR LOWER(COALESCE({p}payment_type, '')) = 'cash')"
+        return (
+            f" AND (LOWER(COALESCE({p}payment_type, '')) LIKE '%cash%'"
+            f" OR ({p}source = 'cash' AND COALESCE({p}payment_type, '') = ''))"
+        )
+    if source == "digital":
+        return (
+            f" AND (LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
+            f" OR LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%')"
+        )
+    if source == "venmo":
+        return f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
+    if source == "paypal":
+        return f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%'"
     if source == "card":
-        return f" AND ({p}source = 'zettle' AND LOWER(COALESCE({p}payment_type, '')) != 'cash')"
+        return (
+            f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%cash%'"
+            f" OR ({p}source = 'cash' AND COALESCE({p}payment_type, '') = ''))"
+            f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
+            f" OR LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%')"
+        )
     if source == "zettle":
         return f" AND {p}source = 'zettle'"
     if source == "quick_sale":
@@ -305,11 +376,9 @@ def recent_sales(
     for s in sales:
         s["units"] = fmt_qty(s["units"])
         s["items"] = by_sale.get(s["id"], [])
-        s["pay_method"] = (
-            "cash"
-            if s["source"] == "cash" or (s.get("payment_type") or "").lower() == "cash"
-            else "card"
-        )
+        pm = _normalize_payment_method(s["source"], s.get("payment_type"))
+        s["pay_method"] = pm
+        s["pay_category"] = "digital" if pm in ("venmo", "paypal") else pm
         rec = s["cash_received_cents"]
         s["change_cents"] = (rec - s["total_cents"]) if rec is not None else None
     return sales

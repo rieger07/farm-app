@@ -186,7 +186,11 @@ def sync_catalog(merchant_id: int, api: zettle.ZettleClient) -> int:
 # ---- purchases -----------------------------------------------------------
 
 def _payment_type(purchase: dict) -> str:
-    types = [str(p.get("type", "")) for p in purchase.get("payments") or []]
+    types = [str(p.get("type", "")).upper() for p in purchase.get("payments") or []]
+    if any("VENMO" in t for t in types):
+        return "venmo"
+    if any("PAYPAL" in t for t in types):
+        return "paypal"
     if any("CASH" in t for t in types):
         return "cash"
     if any("CARD" in t for t in types):

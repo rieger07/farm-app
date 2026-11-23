@@ -2,7 +2,7 @@
   const SKUS = JSON.parse(document.getElementById('skus').textContent);
   const QKEY = 'hh_cash_queue'; // legacy key name kept so queued sales survive the rename
   const lines = []; // [{ sku_id, qty }]
-  let cat = '', query = '', hideOos = false;
+  let cat = '', query = '', hideOos = false, payType = 'cash';
   let wmState = null; // { sku, editIdx }
   const $ = id => document.getElementById(id);
   const money = c => '$' + (Math.round(c) / 100).toFixed(2);
@@ -174,7 +174,10 @@
     $('change').parentElement.classList.toggle('short', c !== null && diff < 0);
     const btn = $('record');
     btn.disabled = !lines.length;
-    btn.textContent = lines.length ? `Record cash sale · ${money(t)}` : 'Record cash sale';
+    const payLabel = payType === 'venmo' ? 'Venmo' : (payType === 'paypal' ? 'PayPal' : 'cash');
+    btn.textContent = lines.length ? `Record ${payLabel} sale · ${money(t)}` : `Record ${payLabel} sale`;
+    const cf = $('cash-fields');
+    if (cf) cf.hidden = payType !== 'cash';
     const sticky = $('sticky-cart');
     if (sticky) {
       sticky.hidden = !lines.length;
@@ -213,7 +216,8 @@
       client_uuid: crypto.randomUUID ? crypto.randomUUID()
         : 'x' + Date.now() + Math.random().toString(16).slice(2),
       occurred_at: new Date().toISOString().slice(0, 19),
-      cash_received_cents: cashCents(),
+      payment_type: payType,
+      cash_received_cents: payType === 'cash' ? cashCents() : null,
       items: lines.map(l => ({ sku_id: l.sku_id, quantity: l.qty })),
     };
     const q = queue(); q.push(sale); saveQueue(q);
@@ -222,6 +226,14 @@
   };
 
   $('cash').addEventListener('input', renderCart);
+  if ($('pay-chips')) {
+    $('pay-chips').addEventListener('click', e => {
+      const b = e.target.closest('[data-pay]'); if (!b) return;
+      payType = b.dataset.pay;
+      document.querySelectorAll('#pay-chips [data-pay]').forEach(c => c.classList.toggle('on', c === b));
+      renderCart();
+    });
+  }
   document.querySelectorAll('.fast-cash [data-cash]').forEach(btn => {
     btn.onclick = () => {
       const val = btn.dataset.cash;

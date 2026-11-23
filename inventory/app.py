@@ -58,6 +58,7 @@ from inventory.sales import (
     recent_sales,
     record_cash_sale,
     sales_summary,
+    update_sale_payment_type,
 )
 from inventory.markets import (
     WEATHER_OPTIONS,
@@ -762,13 +763,14 @@ def sales_page(
             "label": b["label"],
             "title": b["title"],
             "card_cents": d["card_cents"],
+            "digital_cents": d["digital_cents"],
             "cash_cents": d["cash_cents"],
             "zettle_card_cents": d["zettle_card_cents"],
             "zettle_cash_cents": d["zettle_cash_cents"],
             "quick_cash_cents": d["quick_cash_cents"],
         })
-    peak = max((d["card_cents"] + d["cash_cents"] for d in days), default=0) or 1
-    best = max(days, key=lambda d: d["card_cents"] + d["cash_cents"])
+    peak = max((d["card_cents"] + d["digital_cents"] + d["cash_cents"] for d in days), default=0) or 1
+    best = max(days, key=lambda d: d["card_cents"] + d["digital_cents"] + d["cash_cents"])
 
     txns = recent_sales(
         ctx.merchant_id, rng["since"], rng["until"], src, limit=limit, utc_windows=utc_windows
@@ -924,6 +926,23 @@ def _csv_safe(value) -> str:
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
+@app.post("/sales/{sale_id}/payment-type")
+def sales_retag_payment_type(
+    sale_id: int,
+    payment_type: str = Form(...),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        update_sale_payment_type(ctx.merchant_id, sale_id, payment_type)
+        msg = f"Updated sale #{sale_id} to {payment_type.capitalize()}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    target = next_url if next_url.startswith("/") else "/sales"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+
+
 @app.get("/sales/export.csv")
 def sales_export(
     period: str = "today",
@@ -993,6 +1012,7 @@ async def api_cash_sale(request: Request, ctx: Ctx = Depends(require("quick_sale
             cash_received_cents=body.get("cash_received_cents"),
             created_by=ctx.user["id"],
             occurred_at=body.get("occurred_at"),
+            payment_type=str(body.get("payment_type") or "cash"),
         )
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
