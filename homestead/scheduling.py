@@ -154,6 +154,14 @@ def compute_batch_schedule(
                     0.0, float(h.get("processing_cost_total", 0.0))
                 ),
                 "notes": str(h.get("notes", "")),
+                "for_sale": bool(1 if h.get("for_sale") is None else h.get("for_sale")),
+                "payment_status": str(h.get("payment_status") or "unpaid"),
+                "pickup_status": str(h.get("pickup_status") or "unassigned"),
+                "actual_sale_price": (
+                    float(h["actual_sale_price"])
+                    if h.get("actual_sale_price") is not None
+                    else None
+                ),
             }
         )
     parsed_harvests.sort(key=lambda x: (x["harvest_date"], x["id"]))
@@ -453,12 +461,34 @@ def compute_batch_schedule(
         else 0.0
     )
 
+    harvest_freezer_lbs = sum(
+        h["dressed_lbs"] for h in parsed_harvests if not h["for_sale"]
+    )
+    harvest_sold_lbs = 0.0
+    harvest_sales_revenue = 0.0
+    for h in parsed_harvests:
+        if not h["for_sale"]:
+            continue
+        is_sold = (
+            h["payment_status"] == "paid"
+            or h["pickup_status"] == "picked_up"
+            or h["actual_sale_price"] is not None
+        )
+        if is_sold:
+            harvest_sold_lbs += h["dressed_lbs"]
+            harvest_sales_revenue += (
+                h["actual_sale_price"]
+                if h["actual_sale_price"] is not None
+                else round(h["dressed_lbs"] * sale_price_per_lb, 2)
+            )
+
     sold_lbs = round(
         sum(
             item["weight_lbs"]
             for item in parsed_sales
             if item["allocation_type"] == "Customer Sale"
-        ),
+        )
+        + harvest_sold_lbs,
         2,
     )
     actual_sales_revenue = round(
@@ -466,7 +496,8 @@ def compute_batch_schedule(
             item["revenue"]
             for item in parsed_sales
             if item["allocation_type"] == "Customer Sale"
-        ),
+        )
+        + harvest_sales_revenue,
         2,
     )
     freezer_lbs = round(
@@ -474,7 +505,8 @@ def compute_batch_schedule(
             item["weight_lbs"]
             for item in parsed_sales
             if item["allocation_type"] == "Home Freezer"
-        ),
+        )
+        + harvest_freezer_lbs,
         2,
     )
     allocated_lbs = round(sold_lbs + freezer_lbs, 2)

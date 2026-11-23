@@ -59,6 +59,30 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+    <h2 style="margin:0">Push Notifications (ntfy)</h2>
+    {% if ntfy_cfg.configured %}<span class="pill green">Configured · {{ ntfy_cfg.topic }}</span>{% else %}<span class="pill gray">Not set</span>{% endif %}
+  </div>
+  <p class="sub" style="margin-bottom:12px">Get an instant phone alert via <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> whenever a customer claims a bird on a public picking link.</p>
+  <form method="post" action="/settings/ntfy" class="fgrid" style="margin-bottom:10px">
+    <label>ntfy Server URL<input name="ntfy_url" value="{{ ntfy_cfg.url }}" placeholder="https://ntfy.sh" required></label>
+    <label>Topic<input name="ntfy_topic" value="{{ ntfy_cfg.topic }}" placeholder="e.g. my-farm-turkeys"></label>
+    <label class="full">Access token (optional, for private topics)<input name="ntfy_token" type="password" placeholder="{{ 'Saved (leave blank to keep)' if ntfy_cfg.has_token else 'Optional Bearer token' }}"></label>
+    {% if ntfy_cfg.has_token %}
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="clear_token" value="1"> Clear saved token</label>
+    {% endif %}
+    <div class="full row">
+      <button class="btn sm primary">Save ntfy settings</button>
+    </div>
+  </form>
+  {% if ntfy_cfg.configured %}
+  <form method="post" action="/settings/ntfy/test">
+    <button class="btn sm">Send test notification</button>
+  </form>
+  {% endif %}
+</div>
+
 <div class="cards two">
   <div class="card">
     <h2>Backup &amp; restore</h2>

@@ -34,6 +34,7 @@ from homestead.database import (
     count_users,
     create_user,
     create_user_session,
+    customer_insights_summary,
     delete_batch,
     delete_batch_feed_log,
     delete_batch_harvest,
@@ -90,6 +91,12 @@ from homestead.gdrive import (
     is_gdrive_configured,
     upload_receipt_to_drive,
 )
+from homestead.ntfy import (
+    get_ntfy_config,
+    save_ntfy_config,
+    send_ntfy_async,
+    send_ntfy_notification,
+)
 from inventory.crypto import encrypt_token
 from homestead.financials import (
     compute_purchasing_schedule,
@@ -108,6 +115,7 @@ COOKIE = "homestead_session"
 NAV = [
     ("radar", "Radar", "/"),
     ("batches", "Batches", "/batches"),
+    ("customers", "Customers", "/customers"),
     ("feed", "Feed", "/feed"),
     ("financials", "Financials", "/financials"),
     ("settings", "Settings", "/settings"),
@@ -452,6 +460,7 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     progress_pct = min(100, round(harvested_head / surviving * 100)) if surviving > 0 else 0
 
     for_sale_lbs = 0.0
+    for_sale_value = 0.0
     available_count = 0
     assigned_count = 0
     picked_up_count = 0
@@ -467,10 +476,18 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         pay_stat = h.get("payment_status") or "unpaid"
         pick_stat = h.get("pickup_status") or ("assigned" if cid else "unassigned")
         est_price = round(dl * sale_price, 2) if for_sale else 0.0
-        bal_due = round(max(0.0, est_price - dep), 2) if for_sale else 0.0
+        actual_p = (
+            round(float(h["actual_sale_price"]), 2)
+            if h.get("actual_sale_price") is not None and for_sale
+            else None
+        )
+        effective_price = actual_p if actual_p is not None else est_price
+        tip_diff = round(effective_price - est_price, 2) if for_sale else 0.0
+        bal_due = round(max(0.0, effective_price - dep), 2) if for_sale else 0.0
 
         if for_sale:
             for_sale_lbs += dl
+            for_sale_value += effective_price
             if not cid:
                 available_count += 1
             elif pick_stat == "picked_up":
@@ -499,11 +516,14 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
             "payment_status": pay_stat,
             "pickup_status": pick_stat,
             "est_price": est_price,
+            "actual_sale_price": actual_p,
+            "effective_price": effective_price,
+            "tip_diff": tip_diff,
             "balance_due": bal_due,
             "claimed_at": h.get("claimed_at") or "",
         })
 
-    est_value = round(for_sale_lbs * sale_price, 2)
+    est_value = round(for_sale_value, 2)
     return {
         "batch_id": int(batch["id"]),
         "batch_name": batch["name"],
@@ -581,6 +601,12 @@ async def api_batch_harvest_assign(
         raise HTTPException(status_code=404, detail="Customer not found.")
     for_sale = bool(payload.get("for_sale", True))
     deposit_paid = float(payload.get("deposit_paid") or 0.0)
+    raw_actual = payload.get("actual_sale_price")
+    actual_sale_price = (
+        float(raw_actual)
+        if raw_actual not in (None, "")
+        else None
+    )
     payment_status = str(payload.get("payment_status") or "unpaid")
     pickup_status = str(payload.get("pickup_status") or ("assigned" if cid else "unassigned"))
     notes = payload.get("notes")
@@ -590,6 +616,7 @@ async def api_batch_harvest_assign(
         customer_id=cid,
         for_sale=for_sale,
         deposit_paid=deposit_paid,
+        actual_sale_price=actual_sale_price,
         payment_status=payment_status,
         pickup_status=pickup_status,
         notes=str(notes) if notes is not None else None,
@@ -643,16 +670,28 @@ def customers_page(
     msg: str = "",
     user: dict = Depends(current_user),
 ):
-    customers = list_customers(user["id"], search=q)
+    insights = customer_insights_summary(user["id"], search=q)
+    customers = insights["customers"]
     sel_id = int(selected) if selected.strip().isdigit() else None
-    sel_customer = get_customer(user["id"], sel_id) if sel_id else None
+    sel_customer = next((c for c in customers if int(c["id"]) == sel_id), None) if sel_id else None
+    if sel_id and not sel_customer:
+        sel_customer = get_customer(user["id"], sel_id)
     sel_birds = list_customer_birds(user["id"], sel_id) if sel_customer else []
     for bird in sel_birds:
         bird["lb_oz"] = _fmt_lb_oz(bird["dressed_lbs"])
-        bird["est_price"] = round(float(bird["dressed_lbs"] or 0) * float(bird["sale_price_per_lb"] or 0), 2)
+        calc_p = round(float(bird["dressed_lbs"] or 0) * float(bird["sale_price_per_lb"] or 0), 2)
+        act_p = (
+            round(float(bird["actual_sale_price"]), 2)
+            if bird.get("actual_sale_price") is not None
+            else calc_p
+        )
+        bird["calculated_price"] = calc_p
+        bird["actual_price"] = act_p
+        bird["tip_diff"] = round(act_p - calc_p, 2)
     return _render(
-        request, "customers.html", user, "batches",
+        request, "customers.html", user, "customers",
         customers=customers,
+        insights=insights,
         q=q,
         sel_customer=sel_customer,
         sel_birds=sel_birds,
@@ -829,6 +868,18 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
                 "est_price": round(dl * price, 2),
             }
             break
+    if claimed_info:
+        cust = get_customer(int(batch["user_id"]), int(cid))
+        buyer_name = cust["name"] if cust else "A customer"
+        click_url = f"{str(request.base_url).rstrip('/')}/batches/{batch['id']}/harvest"
+        send_ntfy_async(
+            int(batch["user_id"]),
+            f"Bird claimed · {batch['name']}",
+            f"{buyer_name} claimed Bird #{claimed_info['num']} "
+            f"({claimed_info['dressed_lbs']:.2f} lb / {claimed_info['lb_oz']} · "
+            f"Est. ${claimed_info['est_price']:.2f})",
+            click_url=click_url,
+        )
     return {"ok": True, "bird": claimed_info}
 
 
@@ -1323,8 +1374,43 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
         users=list_users() if user.get("is_admin") else [],
         gdrive_configured=is_gdrive_configured(),
         gdrive_conn=get_google_drive_connection(user["id"]),
+        ntfy_cfg=get_ntfy_config(user["id"]),
         msg=msg,
     )
+
+
+@app.post("/settings/ntfy")
+def settings_ntfy_save(
+    ntfy_url: str = Form("https://ntfy.sh"),
+    ntfy_topic: str = Form(""),
+    ntfy_token: str = Form(""),
+    clear_token: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    save_ntfy_config(
+        user["id"],
+        url=ntfy_url,
+        topic=ntfy_topic,
+        token=ntfy_token,
+        clear_token=bool(clear_token),
+    )
+    return RedirectResponse(
+        "/settings?msg=" + quote_plus("Saved ntfy push notification settings."),
+        status_code=303,
+    )
+
+
+@app.post("/settings/ntfy/test")
+def settings_ntfy_test(request: Request, user: dict = Depends(current_user)):
+    ok, detail = send_ntfy_notification(
+        user["id"],
+        "Homestead Planner · Test Notification",
+        "ntfy push notifications are connected! You'll get alerts when customers claim birds.",
+        click_url=f"{str(request.base_url).rstrip('/')}/batches",
+        tags="white_check_mark,turkey",
+    )
+    msg = "Test notification sent to ntfy!" if ok else f"ntfy test failed: {detail}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
 
 
 @app.get("/settings/google-drive/connect")

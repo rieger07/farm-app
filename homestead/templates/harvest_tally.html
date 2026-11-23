@@ -67,7 +67,7 @@
     <label>Notes (optional)<input id="w-notes" placeholder="Tom, hen, freezer..."></label>
     <label>Date<input id="w-date" type="date" value="{{ today_iso }}" required></label>
     <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
-      <input type="checkbox" id="w-nfs"> Not for sale (home freezer / keep — excluded from Est. value &amp; public picking)
+      <input type="checkbox" id="w-nfs"> Not for sale (automatically added to Home Freezer meat; excluded from Est. value &amp; public picking)
     </label>
     <div class="full row" style="justify-content:space-between;align-items:center;margin-top:4px">
       <button type="button" class="btn sm" id="undo-btn" onclick="undoLast()" {{ 'disabled' if not tally.entries }} style="color:var(--redink)">↩ Undo last bird</button>
@@ -145,6 +145,7 @@
           </div>
         </div>
       </div>
+      <label>Actual sale price ($)<input id="am-actual" type="number" step="0.01" min="0" placeholder="Leave blank for calc" oninput="syncAssignUI()"></label>
       <label>Deposit paid ($)<input id="am-dep" type="number" step="0.01" min="0" value="0" oninput="syncAssignUI()"></label>
       <label>Payment status
         <select id="am-pay">
@@ -153,7 +154,7 @@
           <option value="paid">Paid</option>
         </select>
       </label>
-      <label class="full">Pickup status
+      <label>Pickup status
         <select id="am-pickup">
           <option value="unassigned">Unassigned</option>
           <option value="assigned">Assigned</option>
@@ -161,7 +162,10 @@
         </select>
       </label>
       <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:13px">Balance due</span>
+        <div>
+          <span style="font-size:13px">Balance due</span>
+          <small id="am-tip-hint" class="muted"></small>
+        </div>
         <b id="am-bal" style="font:600 18px Georgia,serif;color:var(--green)">$0.00</b>
       </div>
       <div id="am-contact-row" class="full row" style="gap:6px;flex-wrap:wrap" hidden>
@@ -244,13 +248,14 @@ function renderTally(t) {
     tr.onclick = () => openAssignModal(e);
     let badgeHtml = '';
     if (!e.for_sale) {
-      badgeHtml = '<span class="pill" style="background:#eeece1;color:var(--muted)">Not for sale</span>';
+      badgeHtml = '<span class="pill" style="background:#eeece1;color:var(--muted)">Not for sale · Freezer</span>';
     } else if (!e.customer_id) {
       badgeHtml = '<span class="pill green">Available</span>';
     } else {
       const pCls = e.pickup_status === 'picked_up' ? 'green' : 'amber';
       const pLbl = e.pickup_status === 'picked_up' ? 'Picked up' : (e.payment_status === 'paid' ? 'Paid' : 'Assigned');
-      badgeHtml = `<b></b> <span class="pill ${pCls}" style="margin-left:4px">${pLbl}</span>`;
+      const tipTag = e.tip_diff > 0.005 ? ` <small class="inline" style="color:var(--green)">(+$${Number(e.tip_diff).toFixed(2)})</small>` : '';
+      badgeHtml = `<b></b> <span class="pill ${pCls}" style="margin-left:4px">${pLbl}</span>${tipTag}`;
     }
     tr.innerHTML = `<td><b>#${e.num}</b></td><td class="num"><b>${Number(e.dressed_lbs).toFixed(2)} lb</b><small>${e.lb_oz}</small></td><td>${badgeHtml}</td><td></td><td class="num"><span class="link">Assign</span></td>`;
     if (e.for_sale && e.customer_id) tr.children[2].querySelector('b').textContent = e.customer_name;
@@ -287,9 +292,18 @@ function syncAssignUI() {
   if (nfs) return;
   const cid = document.getElementById('am-cust').value;
   const dep = parseFloat(document.getElementById('am-dep').value || '0') || 0;
-  const total = ACTIVE_BIRD.dressed_lbs * TALLY.sale_price_per_lb;
-  const bal = Math.max(0, total - dep);
+  const calcTotal = ACTIVE_BIRD.dressed_lbs * TALLY.sale_price_per_lb;
+  const rawAct = document.getElementById('am-actual').value.trim();
+  const effTotal = rawAct !== '' ? (parseFloat(rawAct) || 0) : calcTotal;
+  const diff = effTotal - calcTotal;
+  const bal = Math.max(0, effTotal - dep);
   document.getElementById('am-bal').textContent = '$' + bal.toFixed(2);
+  const tipEl = document.getElementById('am-tip-hint');
+  if (rawAct !== '' && Math.abs(diff) >= 0.01) {
+    tipEl.textContent = diff > 0 ? `Calc $${calcTotal.toFixed(2)} · +$${diff.toFixed(2)} tip/overpay` : `Calc $${calcTotal.toFixed(2)} · -$${Math.abs(diff).toFixed(2)} discount`;
+  } else {
+    tipEl.textContent = `Calculated $${calcTotal.toFixed(2)}`;
+  }
 
   const cust = CUSTOMERS.find(c => String(c.id) === String(cid));
   const row = document.getElementById('am-contact-row');
@@ -312,9 +326,12 @@ function openAssignModal(bird) {
   ACTIVE_BIRD = bird;
   document.getElementById('am-id').value = bird.id;
   document.getElementById('am-title').textContent = `Bird #${bird.num} · ${Number(bird.dressed_lbs).toFixed(2)} lb`;
-  document.getElementById('am-sub').textContent = `${bird.lb_oz} · Est. $${(bird.dressed_lbs * TALLY.sale_price_per_lb).toFixed(2)} @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb`;
+  const calc = (bird.dressed_lbs * TALLY.sale_price_per_lb).toFixed(2);
+  document.getElementById('am-sub').textContent = `${bird.lb_oz} · Calculated $${calc} @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb`;
   document.getElementById('am-nfs').checked = !bird.for_sale;
   populateCustSelect(bird.customer_id);
+  document.getElementById('am-actual').value = bird.actual_sale_price !== null && bird.actual_sale_price !== undefined ? Number(bird.actual_sale_price).toFixed(2) : '';
+  document.getElementById('am-actual').placeholder = `Calc: $${calc}`;
   document.getElementById('am-dep').value = Number(bird.deposit_paid || 0).toFixed(2);
   document.getElementById('am-pay').value = bird.payment_status || 'unpaid';
   document.getElementById('am-pickup').value = bird.pickup_status || 'unassigned';
@@ -358,12 +375,14 @@ async function saveAssignment(ev) {
   ev.preventDefault();
   const id = document.getElementById('am-id').value;
   const for_sale = !document.getElementById('am-nfs').checked;
+  const rawActual = document.getElementById('am-actual').value.trim();
   const resp = await fetch(`/api/batches/${BATCH_ID}/harvest/${id}/assign`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       for_sale,
       customer_id: for_sale ? (document.getElementById('am-cust').value || null) : null,
+      actual_sale_price: for_sale && rawActual !== '' ? (parseFloat(rawActual) || 0) : null,
       deposit_paid: parseFloat(document.getElementById('am-dep').value || '0') || 0,
       payment_status: document.getElementById('am-pay').value,
       pickup_status: document.getElementById('am-pickup').value,

@@ -1,12 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Customers · Homestead Planner{% endblock %}
 {% block content %}
-<div class="eyebrow"><a href="/batches" style="text-decoration:none">← BATCHES</a></div>
+<div class="eyebrow">BUYERS &amp; LOYALTY</div>
 <div class="pagehead">
-  <div><h1>Customers</h1><p class="sub">Directory of farm customers, contact preferences, and bird assignment history.</p></div>
+  <div><h1>Customers</h1><p class="sub">Manage farm customers, species history, and actual vs. calculated payments.</p></div>
   <button type="button" class="btn primary" onclick="openCustomerModal()">+ Add customer</button>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards four">
+  <div class="card"><small>Customers</small><div class="big">{{ insights.total_customers }}</div><small>{{ insights.repeat_customers }} repeat buyer{{ '' if insights.repeat_customers == 1 else 's' }}</small></div>
+  <div class="card"><small>Birds assigned</small><div class="big">{{ insights.total_birds }}</div><small>{{ '%.1f'|format(insights.total_lbs) }} lb dressed</small></div>
+  <div class="card"><small>Actual vs. calc</small><div class="big">${{ '{:,.2f}'.format(insights.total_actual) }}</div><small>Calc ${{ '{:,.2f}'.format(insights.total_calculated) }}</small></div>
+  <div class="card"><small>Tips / overpay</small><div class="big" style="color:{{ 'var(--green)' if insights.total_tips >= 0 else 'var(--redink)' }}">{{ '+' if insights.total_tips > 0 else '' }}${{ '{:,.2f}'.format(insights.total_tips) }}</div><small>Actual minus calculated</small></div>
+</div>
 
 <div class="card" style="margin-bottom:16px">
   <form method="get" action="/customers" class="row" style="gap:8px;align-items:center">
@@ -19,24 +26,40 @@
 <div class="cards two" style="align-items:start">
   <div class="card table-card">
     <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
-      <b>Directory</b>
+      <b>Customer directory</b>
       <small>{{ customers|length }} customer{{ '' if customers|length == 1 else 's' }}</small>
     </div>
     <table>
-      <thead><tr><th>Customer</th><th>Contact</th><th class="num">Birds</th><th class="num">Total lb</th></tr></thead>
+      <thead><tr><th>Customer</th><th>Livestock</th><th class="num">Paid / Calc</th><th class="num">Tip</th></tr></thead>
       <tbody>
       {% for c in customers %}
         <tr style="cursor:pointer{% if sel_customer and sel_customer.id == c.id %};background:#f3f1e7{% endif %}" onclick="location.href='/customers?selected={{ c.id }}{% if q %}&q={{ q|urlencode }}{% endif %}'">
           <td>
             <b>{{ c.name }}</b>
-            <small>{{ c.preferred_contact|upper }}</small>
+            <small>{{ c.phone or c.email or c.preferred_contact|upper }}</small>
           </td>
           <td>
-            {% if c.phone %}<div>{{ c.phone }}</div>{% endif %}
-            {% if c.email %}<small>{{ c.email }}</small>{% endif %}
+            {% if c.species_counts %}
+              {% for sp, cnt in c.species_counts.items() %}
+                <span class="pill" style="background:#f3f1e7;margin:1px 2px">{{ cnt }} × {{ sp }}</span>
+              {% endfor %}
+            {% else %}
+              <small class="muted">—</small>
+            {% endif %}
           </td>
-          <td class="num">{{ c.bird_count }}</td>
-          <td class="num">{{ '%.1f'|format(c.total_lbs or 0) }}</td>
+          <td class="num">
+            <b>${{ '{:,.2f}'.format(c.actual_total) }}</b>
+            <small>calc ${{ '{:,.2f}'.format(c.calculated_total) }}</small>
+          </td>
+          <td class="num">
+            {% if c.tip_diff > 0.005 %}
+              <span class="pill green">+${{ '%.2f'|format(c.tip_diff) }}</span>
+            {% elif c.tip_diff < -0.005 %}
+              <span class="pill amber">-${{ '%.2f'|format(-c.tip_diff) }}</span>
+            {% else %}
+              <small class="muted">$0</small>
+            {% endif %}
+          </td>
         </tr>
       {% else %}
         <tr><td colspan="4" class="empty">No customers yet. Tap <b>+ Add customer</b> to add your first buyer.</td></tr>
@@ -49,7 +72,7 @@
     {% if sel_customer %}
       <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px">
         <div>
-          <h2 style="margin:0">{{ sel_customer.name }}</h2>
+          <h2 style="margin:0">{{ sel_customer.name }}{% if sel_customer.batch_count >= 2 %} <span class="pill green" style="font-size:11px;vertical-align:middle">Repeat · {{ sel_customer.batch_count }} batches</span>{% endif %}</h2>
           <small>Prefers {{ sel_customer.preferred_contact|upper }}{% if sel_customer.phone %} · {{ sel_customer.phone }}{% endif %}{% if sel_customer.email %} · {{ sel_customer.email }}{% endif %}</small>
         </div>
         <div class="row">
@@ -59,19 +82,45 @@
           </form>
         </div>
       </div>
+
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">
+        {% if sel_customer.phone %}<a href="sms:{{ sel_customer.phone }}" class="btn sm">Text</a><a href="tel:{{ sel_customer.phone }}" class="btn sm">Call</a>{% endif %}
+        {% if sel_customer.email %}<a href="mailto:{{ sel_customer.email }}" class="btn sm">Email</a>{% endif %}
+      </div>
+
+      <!-- Per-customer insights summary -->
+      <div class="batch-stats" style="margin-bottom:12px">
+        <div><small>Total weight</small><b>{{ '%.1f'|format(sel_customer.total_lbs or 0) }} lb</b><small>Avg {{ '%.1f'|format(sel_customer.avg_lbs or 0) }} lb</small></div>
+        <div><small>Paid vs. calc</small><b>${{ '{:,.2f}'.format(sel_customer.actual_total or 0) }}</b><small>Calc ${{ '{:,.2f}'.format(sel_customer.calculated_total or 0) }}</small></div>
+        <div><small>Tips / balance</small><b>{{ '+' if (sel_customer.tip_diff or 0) > 0 else '' }}${{ '%.2f'|format(sel_customer.tip_diff or 0) }}</b><small>Due ${{ '%.2f'|format(sel_customer.balance_due or 0) }}</small></div>
+      </div>
+
+      {% if sel_customer.species_counts %}
+      <div style="margin-bottom:12px">
+        <small style="margin-bottom:4px">Livestock breakdown</small>
+        {% for sp, cnt in sel_customer.species_counts.items() %}
+          <span class="pill green" style="margin-right:4px">{{ cnt }} × {{ sp }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
       {% if sel_customer.notes %}
       <p class="sub" style="background:#faf9f3;padding:10px 12px;border-radius:8px;border:1px solid var(--line);margin-bottom:14px">{{ sel_customer.notes }}</p>
       {% endif %}
-      <h3>Assigned birds ({{ sel_birds|length }})</h3>
+
+      <h3>Assigned livestock ({{ sel_birds|length }})</h3>
       <table>
-        <thead><tr><th>Date</th><th>Batch</th><th class="num">Weight</th><th class="num">Est. $</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Batch</th><th class="num">Weight</th><th class="num">Paid / Calc</th><th>Status</th></tr></thead>
         <tbody>
         {% for b in sel_birds %}
           <tr>
             <td>{{ b.harvest_date }}</td>
-            <td><a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a></td>
+            <td><a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a><small>{{ b.species|title }}</small></td>
             <td class="num">{{ '%.2f'|format(b.dressed_lbs) }} lb <small>{{ b.lb_oz }}</small></td>
-            <td class="num">${{ '%.2f'|format(b.est_price) }}</td>
+            <td class="num">
+              <b>${{ '%.2f'|format(b.actual_price) }}</b>
+              <small>calc ${{ '%.2f'|format(b.calculated_price) }}{% if b.tip_diff > 0.005 %} (+${{ '%.2f'|format(b.tip_diff) }}){% endif %}</small>
+            </td>
             <td>
               <span class="pill {{ 'green' if b.pickup_status == 'picked_up' else 'amber' }}">{{ b.pickup_status|replace('_', ' ')|title }}</span>
               <small>{{ b.payment_status|title }}</small>
@@ -83,8 +132,8 @@
         </tbody>
       </table>
     {% else %}
-      <h2>Customer details</h2>
-      <p class="sub">Select a customer from the directory to view contact info, notes, and their bird history across past and current batches.</p>
+      <h2>Customer insights</h2>
+      <p class="sub">Select any customer from the directory to view their livestock breakdown (turkeys, chickens, pigs, etc.), actual paid vs. calculated totals, tips/overpayments, and full pickup history.</p>
     {% endif %}
   </div>
 </div>
