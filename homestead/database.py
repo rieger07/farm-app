@@ -519,6 +519,40 @@ def init_db() -> None:
         }
         if "feed_type" not in lf_cols:
             conn.execute("ALTER TABLE layer_feed_logs ADD COLUMN feed_type TEXT NOT NULL DEFAULT 'layer'")
+        for etbl in ("egg_logs", "egg_pack_logs"):
+            ecols = {
+                row["name"]
+                for row in conn.execute(f"PRAGMA table_info({etbl})").fetchall()
+            }
+            if "created_by" not in ecols:
+                conn.execute(f"ALTER TABLE {etbl} ADD COLUMN created_by INTEGER")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS merchants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                venmo_handle TEXT NOT NULL DEFAULT '',
+                paypal_handle TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS merchant_members (
+                merchant_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'staff')),
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (merchant_id, user_id),
+                FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_members_user ON merchant_members(user_id)"
+        )
         for tbl in ("batch_feed_logs", "batch_harvests"):
             cols = {
                 row["name"]
@@ -3537,6 +3571,7 @@ def add_egg_log(
     cracked_unusable: int = 0,
     home_used: int = 0,
     notes: str = "",
+    created_by: int | None = None,
 ) -> int:
     clean_date = (log_date or date.today().isoformat()).strip()[:10]
     tot = max(0, int(total_collected or 0))
@@ -3544,15 +3579,16 @@ def add_egg_log(
     home = max(0, min(tot - cracked, int(home_used or 0)))
     if tot == 0 and cracked == 0 and home == 0:
         raise ValueError("Total eggs collected must be greater than 0.")
+    actor = int(created_by if created_by is not None else user_id)
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO egg_logs (
-                user_id, log_date, total_collected, cracked_unusable, home_used, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                user_id, log_date, total_collected, cracked_unusable, home_used, notes, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (int(user_id), clean_date, tot, cracked, home, str(notes or "").strip(), now_iso),
+            (int(user_id), clean_date, tot, cracked, home, str(notes or "").strip(), actor, now_iso),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -3572,9 +3608,12 @@ def list_egg_logs(user_id: int, limit: int = 90) -> list[dict]:
     with get_db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM egg_logs
-            WHERE user_id = ?
-            ORDER BY log_date DESC, id DESC
+            SELECT el.*,
+                   COALESCE(NULLIF(u.display_name, ''), u.username, '') AS logged_by
+            FROM egg_logs el
+            LEFT JOIN users u ON u.id = COALESCE(el.created_by, el.user_id)
+            WHERE el.user_id = ?
+            ORDER BY el.log_date DESC, el.id DESC
             LIMIT ?
             """,
             (int(user_id), int(limit)),
@@ -3598,10 +3637,12 @@ def pack_egg_cartons(
     dozens_packed: int,
     notes: str = "",
     sync_to_ledger: bool = True,
+    created_by: int | None = None,
 ) -> dict:
     dz = max(1, int(dozens_packed or 1))
     eggs_used = dz * 12
     clean_date = (pack_date or date.today().isoformat()).strip()[:10]
+    actor = int(created_by if created_by is not None else user_id)
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     cfg = get_layer_settings(user_id)
     sku_id = cfg["ledger_sku_id"] if sync_to_ledger else None
@@ -3628,7 +3669,7 @@ def pack_egg_cartons(
                             int(sku_id),
                             dz,
                             f"Packed {dz} dz from Homestead Egg Log ({clean_date})",
-                            int(user_id),
+                            actor,
                             now_iso,
                         ),
                     )
@@ -3642,8 +3683,8 @@ def pack_egg_cartons(
             """
             INSERT INTO egg_pack_logs (
                 user_id, pack_date, dozens_packed, eggs_used,
-                ledger_sku_id, ledger_entry_id, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ledger_sku_id, ledger_entry_id, notes, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user_id),
@@ -3653,6 +3694,7 @@ def pack_egg_cartons(
                 sku_id,
                 ledger_entry_id,
                 str(notes or "").strip(),
+                actor,
                 now_iso,
             ),
         )
@@ -3692,9 +3734,12 @@ def list_egg_pack_logs(user_id: int, limit: int = 30) -> list[dict]:
     with get_db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM egg_pack_logs
-            WHERE user_id = ?
-            ORDER BY pack_date DESC, id DESC
+            SELECT ep.*,
+                   COALESCE(NULLIF(u.display_name, ''), u.username, '') AS logged_by
+            FROM egg_pack_logs ep
+            LEFT JOIN users u ON u.id = COALESCE(ep.created_by, ep.user_id)
+            WHERE ep.user_id = ?
+            ORDER BY ep.pack_date DESC, ep.id DESC
             LIMIT ?
             """,
             (int(user_id), int(limit)),
@@ -3838,6 +3883,10 @@ def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
     today_slot = by_day.get(today_iso, {"collected": 0, "cracked": 0, "home": 0, "good": 0})
     today_eggs = today_slot["collected"]
     today_lay_rate = round((today_eggs / active_hens) * 100, 1) if active_hens > 0 else 0.0
+    today_last_logged_by = next(
+        (lg["logged_by"] for lg in egg_logs if str(lg["log_date"])[:10] == today_iso and lg.get("logged_by")),
+        "",
+    )
 
     # Last 7 days and 30 days series
     chart_days = []
@@ -4006,6 +4055,7 @@ def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
         "today_iso": today_iso,
         "today_eggs": today_eggs,
         "today_lay_rate": today_lay_rate,
+        "today_last_logged_by": today_last_logged_by,
         "eggs_7d": eggs_7d,
         "eggs_30d": eggs_30d,
         "avg_7d_eggs": avg_7d_eggs,
@@ -4049,3 +4099,234 @@ def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
         "pack_logs": pack_logs,
         "feed_logs": feed_logs,
     }
+
+
+# ---------------------------------------------------------------------------
+# Shared Farm / Merchant Workspaces & Member Access (shared with Iron Ledger)
+# ---------------------------------------------------------------------------
+HOMESTEAD_ROLES = ("owner", "manager", "staff")
+HOMESTEAD_ROLE_PAGES = {
+    "owner": {"radar", "batches", "eggs", "customers", "feed", "financials", "settings"},
+    "manager": {"radar", "batches", "eggs", "customers", "feed", "financials"},
+    "staff": {"radar", "batches", "eggs"},
+}
+
+
+def can_access_homestead_page(role: str, page: str) -> bool:
+    return page in HOMESTEAD_ROLE_PAGES.get(role or "staff", set())
+
+
+def _merchant_primary_owner_user_id(conn, merchant_id: int, fallback_user_id: int) -> int:
+    row = conn.execute(
+        """
+        SELECT user_id FROM merchant_members
+        WHERE merchant_id = ?
+        ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
+                 created_at ASC, user_id ASC
+        LIMIT 1
+        """,
+        (int(merchant_id),),
+    ).fetchone()
+    return int(row["user_id"]) if row else int(fallback_user_id)
+
+
+def ensure_user_merchant_workspace(user: dict) -> None:
+    """Ensure a user has at least one merchant membership (auto-linking or creating a default farm workspace)."""
+    uid = int(user["id"])
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            "SELECT merchant_id FROM merchant_members WHERE user_id = ? LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if existing:
+            return
+        # If this is user #1 or an admin and a merchant already exists (e.g. from Iron Ledger), link as owner
+        if uid == 1 or user.get("is_admin"):
+            first_m = conn.execute("SELECT id FROM merchants ORDER BY id ASC LIMIT 1").fetchone()
+            if first_m:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO merchant_members (merchant_id, user_id, role, created_at)
+                    VALUES (?, ?, 'owner', ?)
+                    """,
+                    (int(first_m["id"]), uid, now_iso),
+                )
+                conn.commit()
+                return
+        farm_row = conn.execute(
+            "SELECT value FROM user_settings WHERE user_id = ? AND key = 'farm_name'",
+            (uid,),
+        ).fetchone()
+        farm_name = (farm_row["value"] if farm_row and farm_row["value"] else "").strip()
+        if not farm_name:
+            disp = (user.get("display_name") or user.get("username") or "Homestead").strip()
+            farm_name = f"{disp}'s Farm"
+        cur = conn.execute(
+            "INSERT INTO merchants (name, created_at) VALUES (?, ?)",
+            (farm_name, now_iso),
+        )
+        mid = int(cur.lastrowid)
+        conn.execute(
+            "INSERT INTO merchant_members (merchant_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
+            (mid, uid, now_iso),
+        )
+        conn.commit()
+
+
+def list_homestead_user_merchants(user_id: int, is_admin: bool = False) -> list[dict]:
+    uid = int(user_id)
+    with get_db_connection() as conn:
+        if is_admin:
+            rows = conn.execute(
+                """
+                SELECT mr.id AS merchant_id, mr.name AS merchant_name,
+                       COALESCE(m.role, 'owner') AS role
+                FROM merchants mr
+                LEFT JOIN merchant_members m ON m.merchant_id = mr.id AND m.user_id = ?
+                ORDER BY mr.id ASC
+                """,
+                (uid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT m.merchant_id, mr.name AS merchant_name, m.role
+                FROM merchant_members m
+                JOIN merchants mr ON mr.id = m.merchant_id
+                WHERE m.user_id = ?
+                ORDER BY m.merchant_id ASC
+                """,
+                (uid,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["owner_user_id"] = _merchant_primary_owner_user_id(conn, int(d["merchant_id"]), uid)
+            out.append(d)
+        return out
+
+
+def resolve_homestead_workspace(user: dict, preferred_merchant_id: int | None = None) -> dict:
+    """Resolve the active Farm/Merchant workspace for an authenticated user.
+
+    Sets ``user['id']`` to the workspace primary owner's ``user_id`` (so all
+    existing farm tables query the shared workspace data without migration),
+    while preserving ``user['actor_id']`` as the logged-in user's own ID.
+    """
+    ensure_user_merchant_workspace(user)
+    actor_id = int(user["id"])
+    is_admin = bool(user.get("is_admin"))
+    merchants = list_homestead_user_merchants(actor_id, is_admin=is_admin)
+    active = None
+    if preferred_merchant_id is not None:
+        active = next((m for m in merchants if int(m["merchant_id"]) == int(preferred_merchant_id)), None)
+    if not active and merchants:
+        active = merchants[0]
+    if not active:
+        return {
+            **user,
+            "id": actor_id,
+            "actor_id": actor_id,
+            "merchant_id": 1,
+            "merchant_name": "Homestead",
+            "role": "owner",
+            "merchants": [],
+        }
+    return {
+        **user,
+        "id": int(active["owner_user_id"]),
+        "actor_id": actor_id,
+        "merchant_id": int(active["merchant_id"]),
+        "merchant_name": active["merchant_name"],
+        "role": active["role"],
+        "merchants": merchants,
+    }
+
+
+def list_homestead_merchant_members(merchant_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.merchant_id, m.user_id, m.role, m.created_at,
+                   u.username, COALESCE(NULLIF(u.display_name, ''), u.username) AS display_name
+            FROM merchant_members m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.merchant_id = ?
+            ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
+                     u.username ASC
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_homestead_merchant_member(merchant_id: int, user_id: int, role: str = "manager") -> None:
+    if role not in HOMESTEAD_ROLES:
+        raise ValueError(f"Invalid role: {role}")
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO merchant_members (merchant_id, user_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(merchant_id, user_id) DO UPDATE SET role = excluded.role
+            """,
+            (int(merchant_id), int(user_id), role, now_iso),
+        )
+        conn.commit()
+
+
+def remove_homestead_merchant_member(merchant_id: int, user_id: int) -> None:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT role FROM merchant_members WHERE merchant_id = ? AND user_id = ?",
+            (int(merchant_id), int(user_id)),
+        ).fetchone()
+        if not row:
+            return
+        if row["role"] == "owner":
+            owners = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM merchant_members WHERE merchant_id = ? AND role = 'owner'",
+                    (int(merchant_id),),
+                ).fetchone()[0]
+            )
+            if owners <= 1:
+                raise ValueError("Cannot remove the last owner of the farm workspace.")
+        conn.execute(
+            "DELETE FROM merchant_members WHERE merchant_id = ? AND user_id = ?",
+            (int(merchant_id), int(user_id)),
+        )
+        conn.commit()
+
+
+def rename_homestead_merchant(merchant_id: int, new_name: str) -> None:
+    clean = str(new_name or "").strip()
+    if not clean:
+        raise ValueError("Farm workspace name cannot be empty.")
+    with get_db_connection() as conn:
+        conn.execute(
+            "UPDATE merchants SET name = ? WHERE id = ?",
+            (clean[:120], int(merchant_id)),
+        )
+        conn.commit()
+
+
+def create_homestead_merchant(name: str, owner_user_id: int) -> int:
+    clean = str(name or "").strip()
+    if not clean:
+        raise ValueError("Farm workspace name cannot be empty.")
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO merchants (name, created_at) VALUES (?, ?)",
+            (clean[:120], now_iso),
+        )
+        mid = int(cur.lastrowid)
+        conn.execute(
+            "INSERT INTO merchant_members (merchant_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
+            (mid, int(owner_user_id), now_iso),
+        )
+        conn.commit()
+        return mid

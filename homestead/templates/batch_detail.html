@@ -29,11 +29,15 @@
     {% elif is_graduated %}
     <a href="/eggs" class="pill green" style="text-decoration:none">Graduated to Layers ↗</a>
     {% endif %}
+    {% if (user.role or 'owner') in ('owner', 'manager') %}
     <button type="button" class="btn" onclick='openEditBatchModal({{ b|tojson }})'>Edit batch</button>
     <button type="button" class="btn" onclick='openDuplicateBatchModal({{ b|tojson }})'>Duplicate</button>
+    {% endif %}
+    {% if (user.role or 'owner') == 'owner' %}
     <form method="post" action="/batches/{{ b.id }}/delete" onsubmit="return confirm('Delete this batch and all its logs?')">
       <button class="btn danger">Delete</button>
     </form>
+    {% endif %}
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}

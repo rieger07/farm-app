@@ -152,7 +152,7 @@
   <div class="card">
     <h2>Recent Egg Collection &amp; Carton Packs</h2>
     <table>
-      <thead><tr><th>Date</th><th class="num">Collected</th><th class="num">Cracked</th><th class="num">Home</th><th class="num">Packable</th><th>Notes</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th class="num">Collected</th><th class="num">Cracked</th><th class="num">Home</th><th class="num">Packable</th><th>Logged by</th><th>Notes</th><th></th></tr></thead>
       <tbody>
       {% for lg in dash.egg_logs[:20] %}
         <tr>
@@ -161,6 +161,7 @@
           <td class="num">{{ lg.cracked_unusable or '—' }}</td>
           <td class="num">{{ lg.home_used or '—' }}</td>
           <td class="num">{{ lg.good_packable }}</td>
+          <td><small class="muted">{{ lg.logged_by or '—' }}</small></td>
           <td><small>{{ lg.notes or '—' }}</small></td>
           <td class="num">
             <form method="post" action="/eggs/log/{{ lg.id }}/delete" style="display:inline">
@@ -169,7 +170,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="empty">No egg collection logs yet.</td></tr>
+        <tr><td colspan="8" class="empty">No egg collection logs yet.</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -177,7 +178,7 @@
     {% if dash.pack_logs %}
     <h2 style="margin-top:18px">Recent Carton Packs</h2>
     <table>
-      <thead><tr><th>Date</th><th class="num">Dozens</th><th>Iron Ledger</th><th>Notes</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th class="num">Dozens</th><th>Iron Ledger</th><th>Packed by</th><th>Notes</th><th></th></tr></thead>
       <tbody>
       {% for pk in dash.pack_logs[:15] %}
         <tr>
@@ -190,6 +191,7 @@
               <span class="pill gray">Local only</span>
             {% endif %}
           </td>
+          <td><small class="muted">{{ pk.logged_by or '—' }}</small></td>
           <td><small>{{ pk.notes or '—' }}</small></td>
           <td class="num">
             <form method="post" action="/eggs/pack/{{ pk.id }}/delete" style="display:inline">
