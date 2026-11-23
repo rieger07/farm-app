@@ -24,11 +24,24 @@
         <td>{{ b.start_date }}</td>
         <td>{{ s.proc_date }}</td>
         <td class="num">{{ s.initial_quantity if s.is_planned else (s.on_farm_head ~ ' / ' ~ s.initial_quantity) }}</td>
-        <td class="num">{{ s.harvested_head }}</td>
+        <td class="num">
+          <b>{{ s.harvested_head }}</b>
+          {% if s.harvested_head > 0 %}
+            <small class="muted" style="display:block;white-space:nowrap">
+              {% if s.harvest_available_head %}{{ s.harvest_available_head }} avail{% endif %}
+              {% if s.harvest_assigned_head %}{% if s.harvest_available_head %} · {% endif %}{{ s.harvest_assigned_head }} asgn{% endif %}
+              {% if s.harvest_picked_up_head %}{% if s.harvest_available_head or s.harvest_assigned_head %} · {% endif %}{{ s.harvest_picked_up_head }} picked{% endif %}
+              {% if s.harvest_freezer_head %}{% if s.harvest_available_head or s.harvest_assigned_head or s.harvest_picked_up_head %} · {% endif %}{{ s.harvest_freezer_head }} frz{% endif %}
+            </small>
+          {% endif %}
+        </td>
         <td><span class="pill {{ ('amber' if s.is_planned else 'green') if b.active else 'gray' }}">{{ s.status_badge if b.active else 'Archived' }}</span></td>
         <td class="num">
           <div class="row" style="justify-content:flex-end">
             <a href="/batches/{{ b.id }}" class="btn sm">Logs</a>
+            {% if not s.is_planned %}
+            <a href="/batches/{{ b.id }}/harvest" class="btn sm">Tally</a>
+            {% endif %}
             <button type="button" class="btn sm" onclick='openEditBatchModal({{ b|tojson }})'>Edit</button>
             <button type="button" class="btn sm" onclick='openDuplicateBatchModal({{ b|tojson }})'>Duplicate</button>
             <form method="post" action="/batches/{{ b.id }}/toggle-active" style="display:inline">

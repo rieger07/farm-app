@@ -351,6 +351,23 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("late@example.com", merged_html)
         self.assertNotIn("Late Buyer", merged_html)
 
+        # Verify Batch Detail & Batches List bring forward Harvest Tally fulfillment, sales, assigned, and home freezer
+        bd_html = self.c.get(f"/batches/{bid}").text
+        self.assertIn("Harvest Tally &amp; Fulfillment", bd_html)
+        self.assertIn("Public picking live", bd_html)
+        self.assertIn("Bob Jones", bd_html)
+        self.assertIn("Sarah Miller", bd_html)
+        self.assertIn("Home Freezer", bd_html)
+        self.assertIn("18.00 lb", bd_html)
+        self.assertIn("Total Sold / Freezer", bd_html)
+        self.assertNotIn("No sales or freezer entries yet.", bd_html)
+
+        blist_html = self.c.get("/batches").text
+        self.assertIn("1 avail", blist_html)
+        self.assertIn("1 asgn", blist_html)
+        self.assertIn("1 picked", blist_html)
+        self.assertIn("1 frz", blist_html)
+
 
 if __name__ == "__main__":
     unittest.main()
