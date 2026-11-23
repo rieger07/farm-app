@@ -18,6 +18,16 @@
       <div>homestead<small>FARM &amp; FLOCK PLANNER</small></div>
     </div>
     <div class="side-label">WORKSPACE</div>
+    {% if user.merchants and user.merchants|length > 1 %}
+    <form method="post" action="/switch-merchant" style="margin:0 4px 12px">
+      <input type="hidden" name="next_url" value="{{ request.url.path }}">
+      <select name="merchant_id" onchange="this.form.submit()" style="width:100%;font-size:13px;padding:8px 10px">
+        {% for m in user.merchants %}
+        <option value="{{ m.merchant_id }}" {{ 'selected' if m.merchant_id == user.merchant_id }}>{{ m.merchant_name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
     <nav>
       {% for key, label, path in nav %}
       <a href="{{ path }}" class="{{ 'on' if key == active }}"><span>{{ '%02d' % loop.index }}</span>{{ label }}</a>
@@ -25,14 +35,14 @@
     </nav>
     <div class="tagline"><b>From hatch to freezer.</b><p>Batches, feed runs, losses, and real batch economics.</p></div>
     <div class="who">
-      <b>{{ user.display_name or user.username }}</b>
-      <small>@{{ user.username }}{% if user.is_admin %} · admin{% endif %}</small>
+      <b>{{ user.merchant_name or user.display_name or user.username }}</b>
+      <small>{{ user.display_name or user.username }} · {{ user.role or 'owner' }}{% if user.is_admin %} · super admin{% endif %}</small>
       <form method="post" action="/logout"><button class="link">Sign out</button></form>
     </div>
   </aside>
   <main class="main">
     <header class="topbar">
-      <span>Homestead Planner</span>
+      <span>{{ user.merchant_name or 'Homestead Planner' }}</span>
       <span class="pill green">{{ active_count }} active batch{{ '' if active_count == 1 else 'es' }}</span>
     </header>
     <div class="content">{% block content %}{% endblock %}</div>

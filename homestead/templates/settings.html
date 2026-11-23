@@ -3,9 +3,60 @@
 {% block content %}
 <div class="eyebrow">PREFERENCES &amp; DATA</div>
 <div class="pagehead">
-  <div><h1>Settings</h1><p class="sub">Species presets, JSON backups, password, and user accounts.</p></div>
+  <div><h1>Settings</h1><p class="sub">Shared farm workspace, family access, species presets, notifications, and backups.</p></div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="card" id="farm-members">
+  <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+    <div>
+      <h2 style="margin:0">Farm Workspace &amp; Family / Team Access ({{ user.merchant_name }})</h2>
+      <small class="muted">Shared with Iron Ledger — anyone you add here can log in to collect eggs, view unassigned turkeys, and check out pickups on this farm.</small>
+    </div>
+    <form method="post" action="/settings/merchant/rename" class="row" style="gap:6px;align-items:center">
+      <input name="name" value="{{ user.merchant_name }}" placeholder="Farm workspace name" required style="width:200px;margin:0">
+      <button class="btn sm">Rename farm</button>
+    </form>
+  </div>
+
+  <table style="margin-bottom:14px">
+    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+    {% for m in members %}
+      <tr>
+        <td><b>{{ m.display_name }}</b></td>
+        <td>@{{ m.username }}</td>
+        <td><span class="pill {{ 'green' if m.role == 'owner' else 'amber' }}">{{ m.role }}</span></td>
+        <td class="num">
+          <form method="post" action="/settings/members/remove" style="display:inline" onsubmit="return confirm('Remove {{ m.display_name }} from {{ user.merchant_name }}?')">
+            <input type="hidden" name="user_id" value="{{ m.user_id }}">
+            <button class="link" style="color:var(--redink)">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 style="font-size:15px;margin:10px 0 4px">Add or update family / team member</h3>
+  <p class="sub" style="margin-bottom:10px">
+    <b>Manager</b> (wife / parents): full access to Radar, Batches, Harvest Tally, Pickup Day, Eggs, Customers, Feed &amp; Financials.
+    <b>Staff</b> (helper): Radar, Eggs &amp; Harvest Tally / Pickup Day only. If the username already exists, their role on this farm is updated.
+  </p>
+  <form method="post" action="/settings/members" class="fgrid">
+    <label>Username<input name="username" placeholder="e.g. sarah or mom" required></label>
+    <label>Display Name<input name="display_name" placeholder="e.g. Sarah"></label>
+    <label>Password (if new user)<input name="password" type="password" placeholder="Min 4 chars"></label>
+    <label>Role
+      <select name="role">
+        {% for r in roles %}
+        <option value="{{ r }}" {{ 'selected' if r == 'manager' }}>{{ r|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="full"><button class="btn sm primary">Save member</button></div>
+  </form>
+</div>
 
 <div class="card">
   <div class="row" style="justify-content:space-between;margin-bottom:10px">

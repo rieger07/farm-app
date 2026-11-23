@@ -676,6 +676,85 @@ class FarmWebTest(unittest.TestCase):
         feed_html = self.c.get("/feed").text
         self.assertIn("Laying Flock Feed Demand (20 active hens)", feed_html)
 
+    def test_shared_farm_merchant_workspace_roles_and_logged_by(self):
+        from datetime import date
+        from homestead.database import list_batches
+
+        # 1. Owner registers, creates a turkey batch + 1 unassigned bird, renames farm, adds Sarah (manager) & Mom (staff)
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
+        self.c.post("/batches/save", data={
+            "name": "Family Turkeys",
+            "species": "turkey chicks",
+            "start_date": "2026-07-01",
+            "initial_quantity": "12",
+            "unit_cost": "12.00",
+            "avg_dressed_weight": "16.0",
+            "sale_price_per_lb": "7.50",
+            "processing_cost": "10.00",
+            "lifecycle_type": "live_arrival",
+            "next_url": "/batches",
+        }, follow_redirects=False)
+        bid = list_batches()[0]["id"]
+        self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 17.25, "for_sale": True})
+
+        self.assertEqual(
+            self.c.post("/settings/merchant/rename", data={"name": "Cassberry Lane Farm"}, follow_redirects=False).status_code,
+            303,
+        )
+        self.assertEqual(
+            self.c.post("/settings/members", data={
+                "username": "sarah", "display_name": "Sarah", "password": "secret", "role": "manager",
+            }, follow_redirects=False).status_code,
+            303,
+        )
+        self.assertEqual(
+            self.c.post("/settings/members", data={
+                "username": "mom", "display_name": "Mom", "password": "secret", "role": "staff",
+            }, follow_redirects=False).status_code,
+            303,
+        )
+
+        # 2. Sarah (manager) logs in -> sees shared Family Turkeys & unassigned bird, logs eggs attributed to "Sarah"
+        c_sarah = TestClient(app)
+        c_sarah.post("/login", data={"username": "sarah", "password": "secret"}, follow_redirects=False)
+        sarah_tally = c_sarah.get(f"/batches/{bid}/harvest").text
+        self.assertIn("Family Turkeys", sarah_tally)
+        self.assertIn("17.25", sarah_tally)
+        self.assertIn("Cassberry Lane Farm", sarah_tally)
+
+        c_sarah.post("/eggs/log", data={
+            "log_date": date.today().isoformat(),
+            "total_collected": "18",
+            "notes": "Morning coop run",
+        }, follow_redirects=False)
+
+        radar_html = self.c.get("/").text
+        self.assertIn("Last logged today by <b>Sarah</b>", radar_html)
+        eggs_html = self.c.get("/eggs").text
+        self.assertIn("Sarah", eggs_html)
+
+        # Manager can view Financials & Customers, but cannot access Settings or delete a batch
+        self.assertEqual(c_sarah.get("/financials").status_code, 200)
+        self.assertEqual(c_sarah.get("/customers").status_code, 200)
+        self.assertEqual(c_sarah.get("/settings").status_code, 403)
+        self.assertEqual(c_sarah.post(f"/batches/{bid}/delete").status_code, 403)
+
+        # 3. Mom (staff) logs in -> can view Radar, Harvest Tally & Eggs (logs afternoon eggs), blocked from Financials/Customers/Settings
+        c_mom = TestClient(app)
+        c_mom.post("/login", data={"username": "mom", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(c_mom.get("/").status_code, 200)
+        self.assertEqual(c_mom.get(f"/batches/{bid}/harvest").status_code, 200)
+        self.assertEqual(c_mom.get("/eggs").status_code, 200)
+        c_mom.post("/eggs/log", data={
+            "log_date": date.today().isoformat(),
+            "total_collected": "6",
+            "notes": "Afternoon check",
+        }, follow_redirects=False)
+        self.assertIn("Last logged today by <b>Mom</b>", self.c.get("/").text)
+        self.assertEqual(c_mom.get("/financials").status_code, 403)
+        self.assertEqual(c_mom.get("/customers").status_code, 403)
+        self.assertEqual(c_mom.get("/settings").status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

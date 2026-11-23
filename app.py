@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
     EXPENSE_CATEGORIES,
+    HOMESTEAD_ROLES,
     PAYMENT_STATUSES,
     PICKUP_STATUSES,
     PREFERRED_CONTACTS,
@@ -30,14 +31,17 @@ from homestead.database import (
     add_batch_sale,
     add_egg_log,
     add_farm_expense,
+    add_homestead_merchant_member,
     add_layer_feed_log,
     add_layer_flock_event,
     authenticate_user,
     batch_preorder_counts,
+    can_access_homestead_page,
     claim_bird_atomically,
     compute_egg_dashboard,
     count_users,
     create_batch_preorder,
+    create_homestead_merchant,
     create_public_preorder_atomic,
     create_user,
     create_user_session,
@@ -70,6 +74,7 @@ from homestead.database import (
     get_layer_settings,
     get_species_catalog,
     get_user_by_session_token,
+    get_user_by_username,
     graduate_batch_to_layers,
     import_backup_json,
     init_db,
@@ -88,11 +93,15 @@ from homestead.database import (
     list_egg_logs,
     list_egg_pack_logs,
     list_farm_expenses,
+    list_homestead_merchant_members,
     list_layer_feed_logs,
     list_layer_flock_events,
     list_users,
     merge_customers,
     pack_egg_cartons,
+    remove_homestead_merchant_member,
+    rename_homestead_merchant,
+    resolve_homestead_workspace,
     save_batch,
     save_customer,
     save_farm_pickup_settings,
@@ -142,6 +151,7 @@ from homestead.scheduling import (
 
 BASE = Path(__file__).parent / "homestead"
 COOKIE = "homestead_session"
+MERCHANT_COOKIE = "homestead_merchant"
 NAV = [
     ("radar", "Radar", "/"),
     ("batches", "Batches", "/batches"),
@@ -195,7 +205,31 @@ def current_user(request: Request) -> dict:
     user = get_user_by_session_token(tok) if tok else None
     if not user:
         raise _LoginRedirect()
-    return user
+    raw_mid = (request.cookies.get(MERCHANT_COOKIE) or "").strip()
+    pref_mid = int(raw_mid) if raw_mid.isdigit() else None
+    return resolve_homestead_workspace(user, preferred_merchant_id=pref_mid)
+
+
+@app.post("/switch-merchant")
+def switch_merchant_submit(
+    request: Request,
+    merchant_id: int = Form(...),
+    next_url: str = Form("/"),
+    user: dict = Depends(current_user),
+):
+    allowed = {int(m["merchant_id"]) for m in user.get("merchants", [])}
+    target = next_url if next_url.startswith("/") else "/"
+    resp = RedirectResponse(target, status_code=303)
+    if int(merchant_id) in allowed:
+        resp.set_cookie(
+            MERCHANT_COOKIE,
+            str(int(merchant_id)),
+            httponly=True,
+            samesite="lax",
+            secure=_cookie_secure(request),
+            max_age=30 * 86400,
+        )
+    return resp
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -233,13 +267,17 @@ def _get_owned_batch(batch_id: int, user: dict) -> dict:
 
 
 def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLResponse:
+    role = user.get("role") or "owner"
+    if not can_access_homestead_page(role, active):
+        raise HTTPException(status_code=403, detail="Your role does not have access to this page.")
+    visible_nav = [item for item in NAV if can_access_homestead_page(role, item[0])]
     active_count = sum(1 for b in list_batches(user_id=user["id"]) if b.get("active", 1))
     return templates.TemplateResponse(
         request, tpl,
         {
             "request": request,
             "user": user,
-            "nav": NAV,
+            "nav": visible_nav,
             "active": active,
             "active_count": active_count,
             "today_iso": date.today().isoformat(),
@@ -1557,6 +1595,7 @@ def eggs_log_submit(
             cracked_unusable=cracked_unusable,
             home_used=home_used,
             notes=notes,
+            created_by=user.get("actor_id", user["id"]),
         )
         msg = f"Logged {total_collected} egg{'s' if int(total_collected) != 1 else ''}."
     except ValueError as exc:
@@ -1584,6 +1623,7 @@ def eggs_pack_submit(
         dozens_packed=max(1, int(dozens_packed)),
         notes=notes,
         sync_to_ledger=bool(sync_to_ledger),
+        created_by=user.get("actor_id", user["id"]),
     )
     dz = res["dozens_packed"]
     sync_txt = " & restocked Iron Ledger!" if res["synced_to_ledger"] else "."
@@ -1768,6 +1808,8 @@ def batch_save_submit(
     next_url: str = Form("/batches"),
     user: dict = Depends(current_user),
 ):
+    if (user.get("role") or "owner") == "staff":
+        raise HTTPException(status_code=403, detail="Staff role cannot create or edit batches.")
     bid = int(batch_id) if batch_id.strip() else None
     if bid is not None:
         _get_owned_batch(bid, user)
@@ -1828,6 +1870,8 @@ def batch_start_now(
 
 @app.post("/batches/{batch_id}/delete")
 def batch_delete_submit(batch_id: int, user: dict = Depends(current_user)):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403, detail="Only farm owners can delete batches.")
     _get_owned_batch(batch_id, user)
     delete_batch(batch_id)
     return RedirectResponse("/batches?msg=" + quote_plus("Batch deleted."), status_code=303)
@@ -2177,12 +2221,101 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
         species_catalog=get_species_catalog(user_id=user["id"]),
         reg_open=is_public_registration_enabled(),
         users=list_users() if user.get("is_admin") else [],
+        members=list_homestead_merchant_members(user["merchant_id"]),
+        roles=HOMESTEAD_ROLES,
         gdrive_configured=is_gdrive_configured(),
         gdrive_conn=get_google_drive_connection(user["id"]),
         ntfy_cfg=get_ntfy_config(user["id"]),
         pickup_cfg=get_farm_pickup_settings(user["id"]),
         msg=msg,
     )
+
+
+@app.post("/settings/members")
+def settings_members_save(
+    username: str = Form(...),
+    display_name: str = Form(""),
+    password: str = Form(""),
+    role: str = Form("manager"),
+    user: dict = Depends(current_user),
+):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403, detail="Only farm owners can manage members.")
+    try:
+        clean_user = username.strip()
+        existing = get_user_by_username(clean_user)
+        if existing:
+            uid = int(existing["id"])
+        else:
+            if not password:
+                raise ValueError("Password is required when creating a new family/member account.")
+            created = create_user(
+                clean_user,
+                password,
+                display_name=display_name.strip() or clean_user,
+                is_admin=False,
+                claim_unowned_data=False,
+            )
+            uid = int(created["id"])
+        add_homestead_merchant_member(user["merchant_id"], uid, role=role)
+        msg = f"Saved {display_name.strip() or clean_user} ({role}) on {user['merchant_name']}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/settings/members/remove")
+def settings_members_remove(
+    user_id: int = Form(...),
+    user: dict = Depends(current_user),
+):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403, detail="Only farm owners can manage members.")
+    try:
+        remove_homestead_merchant_member(user["merchant_id"], user_id)
+        msg = "Removed member from farm workspace."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/settings/merchant/rename")
+def settings_merchant_rename(
+    name: str = Form(...),
+    user: dict = Depends(current_user),
+):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403, detail="Only farm owners can rename the farm workspace.")
+    try:
+        rename_homestead_merchant(user["merchant_id"], name)
+        msg = f"Renamed farm workspace to {name.strip()}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/settings/merchant/create")
+def settings_merchant_create(
+    request: Request,
+    name: str = Form(...),
+    user: dict = Depends(current_user),
+):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403)
+    try:
+        mid = create_homestead_merchant(name, owner_user_id=user.get("actor_id", user["id"]))
+        resp = RedirectResponse("/settings?msg=" + quote_plus(f"Created farm workspace {name.strip()}."), status_code=303)
+        resp.set_cookie(
+            MERCHANT_COOKIE,
+            str(mid),
+            httponly=True,
+            samesite="lax",
+            secure=_cookie_secure(request),
+            max_age=30 * 86400,
+        )
+        return resp
+    except ValueError as exc:
+        return RedirectResponse("/settings?msg=" + quote_plus(f"Error: {exc}"), status_code=303)
 
 
 @app.post("/settings/pickup-payments")
@@ -2371,7 +2504,7 @@ def settings_password(
     if not verify_password(current_password, user["password_hash"], user["password_salt"]):
         return RedirectResponse("/settings?msg=" + quote_plus("Current password is incorrect."), status_code=303)
     try:
-        update_user_password(user["id"], new_password)
+        update_user_password(user.get("actor_id", user["id"]), new_password)
         msg = "Password updated."
     except ValueError as exc:
         msg = str(exc)
