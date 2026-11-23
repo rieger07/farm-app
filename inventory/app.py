@@ -39,6 +39,7 @@ from inventory.merchants import (
     delete_merchant,
     get_invite,
     get_membership,
+    get_payment_handles,
     home_page,
     list_all_merchants,
     list_all_users_with_memberships,
@@ -49,6 +50,7 @@ from inventory.merchants import (
     remove_member,
     rename_merchant,
     set_user_admin,
+    update_payment_handles,
 )
 from inventory.sales import (
     count_sales,
@@ -998,6 +1000,7 @@ def quick_sale_page(request: Request, ctx: Ctx = Depends(require("quick_sale")))
     return render(
         request, "quick_sale.html", ctx, "quick_sale",
         skus=skus, categories=sorted({s["category"] for s in skus if s["category"]}),
+        payment_handles=get_payment_handles(ctx.merchant_id),
     )
 
 
@@ -1083,8 +1086,22 @@ def settings_page(request: Request, msg: str = "", ctx: Ctx = Depends(require("s
         roles=ROLES,
         all_skus=list_stock(ctx.merchant_id, include_fees=True),
         marketplaces=list_marketplaces(ctx.merchant_id),
+        payment_handles=get_payment_handles(ctx.merchant_id),
         redirect_uri=_redirect_uri(request),
         msg=msg,
+    )
+
+
+@app.post("/settings/payment-handles")
+def settings_payment_handles(
+    venmo_handle: str = Form(""),
+    paypal_handle: str = Form(""),
+    ctx: Ctx = Depends(require("settings")),
+):
+    update_payment_handles(ctx.merchant_id, venmo_handle=venmo_handle, paypal_handle=paypal_handle)
+    return RedirectResponse(
+        f"/settings?msg={quote_plus('Saved Venmo & PayPal.Me handles.')}",
+        status_code=303,
     )
 
 

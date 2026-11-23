@@ -1,5 +1,6 @@
 (() => {
   const SKUS = JSON.parse(document.getElementById('skus').textContent);
+  const HANDLES = JSON.parse((document.getElementById('pay-handles') || { textContent: '{}' }).textContent);
   const QKEY = 'hh_cash_queue'; // legacy key name kept so queued sales survive the rename
   const lines = []; // [{ sku_id, qty }]
   let cat = '', query = '', hideOos = false, payType = 'cash';
@@ -178,11 +179,136 @@
     btn.textContent = lines.length ? `Record ${payLabel} sale · ${money(t)}` : `Record ${payLabel} sale`;
     const cf = $('cash-fields');
     if (cf) cf.hidden = payType !== 'cash';
+    renderDigitalPay(t);
     const sticky = $('sticky-cart');
     if (sticky) {
       sticky.hidden = !lines.length;
       $('sticky-summary').textContent = `${cnt} ${cnt === 1 ? 'item' : 'items'} · ${money(t)}`;
     }
+  }
+
+  function cartNote() {
+    const parts = lines.map(l => {
+      const s = byId[l.sku_id];
+      const q = isLb(s) ? `${l.qty}lb` : `${l.qty}x`;
+      return `${q} ${s.name}`;
+    });
+    const full = parts.join(', ');
+    return full.length > 90 ? full.slice(0, 87) + '...' : full;
+  }
+
+  function digitalPayInfo(cents) {
+    const amountStr = (Math.round(cents) / 100).toFixed(2);
+    const note = cartNote();
+    if (payType === 'venmo') {
+      const handle = (HANDLES.venmo_handle || '').trim();
+      const qs = `amount=${encodeURIComponent(amountStr)}${note ? '&note=' + encodeURIComponent(note) : ''}`;
+      return {
+        provider: 'venmo',
+        label: 'Venmo',
+        handle,
+        displayHandle: handle ? '@' + handle : '',
+        payUrl: handle ? `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&${qs}` : '',
+        chargeUrl: `https://venmo.com/?txn=charge&${qs}`,
+        amountStr,
+        note,
+      };
+    }
+    if (payType === 'paypal') {
+      const handle = (HANDLES.paypal_handle || '').trim();
+      return {
+        provider: 'paypal',
+        label: 'PayPal',
+        handle,
+        displayHandle: handle ? `paypal.me/${handle}` : '',
+        payUrl: handle ? `https://paypal.me/${encodeURIComponent(handle)}/${amountStr}USD` : '',
+        chargeUrl: '',
+        amountStr,
+        note,
+      };
+    }
+    return null;
+  }
+
+  function renderDigitalPay(cents) {
+    const box = $('digital-pay-box');
+    if (!box) return;
+    const info = digitalPayInfo(cents);
+    if (!info) { box.hidden = true; return; }
+    box.hidden = false;
+    const hasItems = lines.length > 0 && cents > 0;
+    const showQr = $('show-qr');
+    const reqLink = $('open-venmo-req');
+    const copyBtn = $('copy-pay-link');
+    const hint = $('no-handle-hint');
+
+    if (info.handle) {
+      showQr.hidden = false;
+      showQr.disabled = !hasItems;
+      showQr.textContent = hasItems
+        ? `Show ${info.label} QR · $${info.amountStr}`
+        : `Show ${info.label} QR`;
+      copyBtn.hidden = !hasItems;
+      hint.hidden = true;
+    } else {
+      showQr.hidden = true;
+      copyBtn.hidden = true;
+      hint.hidden = false;
+      $('no-handle-name').textContent = info.label === 'PayPal' ? 'PayPal.Me' : info.label;
+    }
+
+    if (info.chargeUrl && hasItems) {
+      reqLink.hidden = false;
+      reqLink.href = info.chargeUrl;
+    } else {
+      reqLink.hidden = true;
+    }
+  }
+
+  function openQrModal() {
+    const t = total();
+    const info = digitalPayInfo(t);
+    if (!info || !info.payUrl || t <= 0) return;
+    $('qr-title').textContent = `Pay with ${info.label}`;
+    $('qr-handle').textContent = info.displayHandle;
+    $('qr-amount').textContent = `$${info.amountStr}`;
+    $('qr-note').textContent = info.note || '';
+    const stage = $('qr-svg');
+    if (typeof window.qrcode === 'function') {
+      const qr = window.qrcode(0, 'M');
+      qr.addData(info.payUrl);
+      qr.make();
+      stage.innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
+    } else {
+      stage.innerHTML = '<small class="muted">QR library unavailable</small>';
+    }
+    const smsBody = info.note
+      ? `Here is your ${info.label} payment link for $${info.amountStr} (${info.note}): ${info.payUrl}`
+      : `Here is your ${info.label} payment link for $${info.amountStr}: ${info.payUrl}`;
+    $('qr-sms').href = `sms:?&body=${encodeURIComponent(smsBody)}`;
+    const chargeBtn = $('qr-charge');
+    if (info.chargeUrl) {
+      chargeBtn.hidden = false;
+      chargeBtn.href = info.chargeUrl;
+    } else {
+      chargeBtn.hidden = true;
+    }
+    $('qr-record').textContent = `Payment received · Record ${info.label} sale`;
+    $('qrm').showModal();
+  }
+
+  async function copyPayLink(btn) {
+    const info = digitalPayInfo(total());
+    if (!info || !info.payUrl) return;
+    const orig = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(info.payUrl);
+      btn.textContent = 'Copied!';
+    } catch (e) {
+      window.prompt('Copy payment link:', info.payUrl);
+      return;
+    }
+    setTimeout(() => { btn.textContent = orig; }, 1600);
   }
   const render = () => { renderTiles(); renderCart(); };
 
@@ -233,6 +359,15 @@
       document.querySelectorAll('#pay-chips [data-pay]').forEach(c => c.classList.toggle('on', c === b));
       renderCart();
     });
+  }
+  if ($('show-qr')) $('show-qr').onclick = openQrModal;
+  if ($('copy-pay-link')) $('copy-pay-link').onclick = () => copyPayLink($('copy-pay-link'));
+  if ($('qr-copy')) $('qr-copy').onclick = () => copyPayLink($('qr-copy'));
+  if ($('qr-record')) {
+    $('qr-record').onclick = () => {
+      $('qrm').close();
+      $('record').click();
+    };
   }
   document.querySelectorAll('.fast-cash [data-cash]').forEach(btn => {
     btn.onclick = () => {

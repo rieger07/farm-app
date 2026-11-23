@@ -78,6 +78,78 @@ def rename_merchant(merchant_id: int, new_name: str) -> None:
         conn.close()
 
 
+def _clean_payment_handle(raw: str, kind: str) -> str:
+    """Normalize a Venmo username or PayPal.Me handle (strips @ and URL prefixes)."""
+    val = str(raw or "").strip()
+    if not val:
+        return ""
+    low = val.lower()
+    if kind == "venmo":
+        for prefix in (
+            "https://venmo.com/u/",
+            "http://venmo.com/u/",
+            "https://www.venmo.com/u/",
+            "https://venmo.com/",
+            "http://venmo.com/",
+            "https://www.venmo.com/",
+            "venmo.com/u/",
+            "venmo.com/",
+        ):
+            if low.startswith(prefix):
+                val = val[len(prefix):]
+                break
+    elif kind == "paypal":
+        for prefix in (
+            "https://www.paypal.me/",
+            "http://www.paypal.me/",
+            "https://paypal.me/",
+            "http://paypal.me/",
+            "www.paypal.me/",
+            "paypal.me/",
+        ):
+            if low.startswith(prefix):
+                val = val[len(prefix):]
+                break
+    val = val.split("?", 1)[0].split("#", 1)[0].strip().strip("/").lstrip("@")
+    if "/" in val:
+        val = val.split("/", 1)[0]
+    return val[:64]
+
+
+def get_payment_handles(merchant_id: int) -> dict[str, str]:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT venmo_handle, paypal_handle FROM merchants WHERE id = ?",
+            (int(merchant_id),),
+        ).fetchone()
+        if not row:
+            return {"venmo_handle": "", "paypal_handle": ""}
+        return {
+            "venmo_handle": (row["venmo_handle"] or "").strip(),
+            "paypal_handle": (row["paypal_handle"] or "").strip(),
+        }
+    finally:
+        conn.close()
+
+
+def update_payment_handles(
+    merchant_id: int, venmo_handle: str = "", paypal_handle: str = ""
+) -> dict[str, str]:
+    venmo = _clean_payment_handle(venmo_handle, "venmo")
+    paypal = _clean_payment_handle(paypal_handle, "paypal")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE merchants SET venmo_handle = ?, paypal_handle = ? WHERE id = ?",
+            (venmo, paypal, int(merchant_id)),
+        )
+        conn.commit()
+        return {"venmo_handle": venmo, "paypal_handle": paypal}
+    finally:
+        conn.close()
+
+
 def delete_merchant(merchant_id: int) -> None:
     conn = get_connection()
     try:

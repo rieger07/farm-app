@@ -38,6 +38,16 @@
       </div>
       <div class="change"><span>Change to give</span><b id="change">$0.00</b></div>
     </div>
+    <div id="digital-pay-box" class="digital-pay-box" hidden>
+      <button type="button" id="show-qr" class="btn wide qr-trigger-btn" disabled>Show QR code</button>
+      <div class="digital-pay-actions">
+        <a id="open-venmo-req" class="btn" href="#" target="_blank" rel="noopener" hidden>Request in Venmo</a>
+        <button type="button" id="copy-pay-link" class="btn" hidden>Copy pay link</button>
+      </div>
+      <small id="no-handle-hint" class="muted" hidden>
+        Add your <span id="no-handle-name">Venmo</span> handle in <a href="/settings#payment-handles">Settings</a> to show a customer QR code.
+      </small>
+    </div>
     <button id="record" class="btn primary wide" disabled>Record cash sale</button>
     <small class="muted center">Saves the sale and updates your stock.</small>
   </div>
@@ -72,6 +82,29 @@
   </div>
 </dialog>
 
+<dialog id="qrm" class="card qr-dialog">
+  <div class="qr-head">
+    <div>
+      <h2 id="qr-title" style="margin:0">Pay with Venmo</h2>
+      <small id="qr-handle" class="muted" style="margin:2px 0 0"></small>
+    </div>
+    <b id="qr-amount" class="qr-amount">$0.00</b>
+  </div>
+  <div class="qr-stage" id="qr-svg" aria-label="Payment QR code"></div>
+  <small id="qr-note" class="muted center" style="display:block;margin:8px 0 12px"></small>
+  <div class="qr-actions">
+    <button type="button" id="qr-copy" class="btn">Copy link</button>
+    <a id="qr-sms" class="btn" href="#">Text link</a>
+    <a id="qr-charge" class="btn" href="#" target="_blank" rel="noopener" hidden>Open Venmo Request</a>
+  </div>
+  <div class="row" style="justify-content:space-between;margin-top:14px;gap:8px">
+    <button type="button" class="btn" onclick="document.getElementById('qrm').close()">Close</button>
+    <button type="button" id="qr-record" class="btn primary" style="flex:1">Payment received · Record sale</button>
+  </div>
+</dialog>
+
 <script id="skus" type="application/json">{{ skus|tojson }}</script>
+<script id="pay-handles" type="application/json">{{ payment_handles|tojson }}</script>
+<script src="{{ asset('qrcode.min.js') }}"></script>
 <script src="{{ asset('quicksale.js') }}"></script>
 {% endblock %}

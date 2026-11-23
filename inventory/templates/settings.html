@@ -21,6 +21,31 @@
   <small style="margin-top:12px">Redirect URL to register in the Zettle developer portal: <code>{{ redirect_uri }}</code></small>
 </div>
 
+<div class="card" id="payment-handles" style="margin-bottom:20px">
+  <h2>Venmo &amp; PayPal.Me (Quick Sale QR)</h2>
+  <p class="sub">Add your handles to generate instant scan-to-pay QR codes and pre-filled payment links right inside Quick sale — no API keys or extra fees.</p>
+  <form method="post" action="/settings/payment-handles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+      <span>Venmo username</span>
+      <input name="venmo_handle" value="{{ payment_handles.venmo_handle }}" placeholder="e.g. CassberryFarm (no @ needed)">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+      <span>PayPal.Me handle</span>
+      <input name="paypal_handle" value="{{ payment_handles.paypal_handle }}" placeholder="e.g. CassberryFarm">
+    </label>
+    <div>
+      <button class="btn primary">Save handles</button>
+    </div>
+  </form>
+  {% if payment_handles.venmo_handle or payment_handles.paypal_handle %}
+  <small class="muted" style="margin-top:10px;display:block">
+    {% if payment_handles.venmo_handle %}Venmo: <code>venmo.com/{{ payment_handles.venmo_handle }}</code>{% endif %}
+    {% if payment_handles.venmo_handle and payment_handles.paypal_handle %} · {% endif %}
+    {% if payment_handles.paypal_handle %}PayPal.Me: <code>paypal.me/{{ payment_handles.paypal_handle }}</code>{% endif %}
+  </small>
+  {% endif %}
+</div>
+
 <div class="card" style="margin-bottom:20px">
   <h2>Plan &amp; Billing</h2>
   {% if sub.status == 'comp' %}

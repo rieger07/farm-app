@@ -244,6 +244,18 @@ details.collapse-card[open] > summary .chev { transform: rotate(180deg); }
 .cal-day.sel::after { background: #fff; }
 .cal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
 .cal-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 4px; vertical-align: middle; }
+.digital-pay-box { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.qr-trigger-btn { border-color: #2f6f9f; color: #1d4f7a; background: #eef6fc; font-weight: 600; }
+.qr-trigger-btn:hover:not(:disabled) { background: #dfeffa; }
+.digital-pay-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.digital-pay-actions .btn { flex: 1; text-align: center; text-decoration: none; font-size: 13px; padding: 8px 10px; }
+.qr-dialog { width: 100%; max-width: 360px; padding: 18px; }
+.qr-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.qr-amount { font-size: 26px; font-weight: 700; color: var(--green); line-height: 1.1; }
+.qr-stage { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; align-items: center; justify-content: center; }
+.qr-stage svg { width: 100%; max-width: 240px; height: auto; display: block; }
+.qr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.qr-actions .btn { flex: 1; text-align: center; text-decoration: none; font-size: 13px; padding: 8px 10px; white-space: nowrap; }
 @media(max-width:800px){
   .cards.four { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .cards.four .card { padding: 12px; }
