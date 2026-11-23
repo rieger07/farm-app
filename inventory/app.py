@@ -61,6 +61,7 @@ from inventory.sales import (
     record_cash_sale,
     sales_summary,
     update_sale_payment_type,
+    void_quick_sale,
 )
 from inventory.markets import (
     WEATHER_OPTIONS,
@@ -938,6 +939,33 @@ def sales_retag_payment_type(
     try:
         update_sale_payment_type(ctx.merchant_id, sale_id, payment_type)
         msg = f"Updated sale #{sale_id} to {payment_type.capitalize()}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    target = next_url if next_url.startswith("/") else "/sales"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/sales/{sale_id}/void")
+def sales_void_quick_sale(
+    sale_id: int,
+    restore_stock: str = Form(""),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        res = void_quick_sale(
+            ctx.merchant_id,
+            sale_id,
+            created_by=ctx.user["id"],
+            restore_stock=bool(restore_stock),
+        )
+        stock_note = (
+            f" and restored stock for {res['restored_items']} item(s)"
+            if restore_stock and res["restored_items"]
+            else " (stock unchanged)"
+        )
+        msg = f"Voided Quick sale #{sale_id}{stock_note}."
     except ValueError as exc:
         msg = f"Error: {exc}"
     target = next_url if next_url.startswith("/") else "/sales"

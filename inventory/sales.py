@@ -157,6 +157,75 @@ def update_sale_payment_type(merchant_id: int, sale_id: int, payment_type: str) 
         conn.close()
 
 
+def void_quick_sale(
+    merchant_id: int,
+    sale_id: int,
+    created_by: int | None = None,
+    restore_stock: bool = True,
+) -> dict:
+    """Void a Quick sale transaction, optionally restoring its deducted stock.
+
+    Zettle sales cannot be voided here because they are mirrored from Zettle's
+    API; only ``source = 'cash'`` (Quick sale) transactions are eligible.
+    """
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        sale = conn.execute(
+            "SELECT id, source, status FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        ).fetchone()
+        if not sale:
+            conn.rollback()
+            raise ValueError("Sale not found.")
+        if sale["source"] != "cash":
+            conn.rollback()
+            raise ValueError("Only Quick sale transactions can be voided (Zettle sales are synced read-only).")
+        if sale["status"] == "voided":
+            conn.rollback()
+            raise ValueError(f"Sale #{sale_id} is already voided.")
+
+        conn.execute(
+            "UPDATE sales SET status = 'voided' WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        )
+
+        restored_items = 0
+        if restore_stock:
+            ledger_rows = conn.execute(
+                """
+                SELECT l.sku_id, l.delta
+                FROM stock_ledger l
+                JOIN sale_items si ON si.id = l.sale_item_id
+                WHERE si.sale_id = ? AND l.merchant_id = ?
+                """,
+                (int(sale_id), int(merchant_id)),
+            ).fetchall()
+            now = _now()
+            for lr in ledger_rows:
+                comp_delta = -float(lr["delta"] or 0)
+                if abs(comp_delta) < 1e-9:
+                    continue
+                conn.execute(
+                    "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason,"
+                    " note, created_by, created_at)"
+                    " VALUES (?, ?, ?, 'adjustment', ?, ?, ?)",
+                    (
+                        int(merchant_id),
+                        int(lr["sku_id"]),
+                        comp_delta,
+                        f"Voided Quick sale #{sale_id}",
+                        created_by,
+                        now,
+                    ),
+                )
+                restored_items += 1
+        conn.commit()
+        return {"sale_id": int(sale_id), "restored_items": restored_items}
+    finally:
+        conn.close()
+
+
 def sales_summary(
     merchant_id: int,
     since_iso: str,
@@ -276,32 +345,35 @@ def daily_totals(merchant_id: int, start_day: datetime, days: int = 7) -> list[d
 
 def _source_filter_clause(source: str | None, alias: str = "") -> str:
     p = f"{alias}." if alias else ""
+    if source == "voided":
+        return f" AND {p}status = 'voided'"
+    not_void = f" AND {p}status != 'voided'"
     if source == "cash":
-        return (
+        return not_void + (
             f" AND (LOWER(COALESCE({p}payment_type, '')) LIKE '%cash%'"
             f" OR ({p}source = 'cash' AND COALESCE({p}payment_type, '') = ''))"
         )
     if source == "digital":
-        return (
+        return not_void + (
             f" AND (LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
             f" OR LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%')"
         )
     if source == "venmo":
-        return f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
+        return not_void + f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
     if source == "paypal":
-        return f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%'"
+        return not_void + f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%'"
     if source == "card":
-        return (
+        return not_void + (
             f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%cash%'"
             f" OR ({p}source = 'cash' AND COALESCE({p}payment_type, '') = ''))"
             f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
             f" OR LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%')"
         )
     if source == "zettle":
-        return f" AND {p}source = 'zettle'"
+        return not_void + f" AND {p}source = 'zettle'"
     if source == "quick_sale":
-        return f" AND {p}source = 'cash'"
-    return ""
+        return not_void + f" AND {p}source = 'cash'"
+    return not_void
 
 
 def count_sales(
