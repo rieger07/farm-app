@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Eggs &amp; Layers · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">DAILY COOP &amp; CARTONS</div>
+<div class="pagehead">
+  <div>
+    <h1>Eggs &amp; Laying Flock</h1>
+    <p class="sub">Daily egg collection, lay rate %, 1-tap carton packing into Iron Ledger stock, and real feed cost per dozen.</p>
+  </div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards four">
+  <div class="card">
+    <small>Active Laying Hens</small>
+    <div class="big">{{ dash.active_hens }}</div>
+    <small>Today: <b>{{ dash.today_eggs }} eggs ({{ '%.0f'|format(dash.today_lay_rate) }}%)</b> · 7d avg {{ dash.avg_7d_eggs }}/d ({{ '%.0f'|format(dash.avg_7d_lay_rate) }}%)</small>
+  </div>
+  <div class="card">
+    <small>Loose Eggs Ready</small>
+    <div class="big">{{ dash.loose_eggs }}</div>
+    <small><b>{{ dash.ready_dozens }} full dz</b> + {{ dash.remainder_loose }} loose · {{ dash.lifetime_packed_dz }} dz packed</small>
+  </div>
+  <div class="card">
+    <small>Iron Ledger Cartons</small>
+    {% if dash.linked_sku %}
+      <div class="big">{{ '%.0f'|format(dash.linked_sku.on_hand) }} dz</div>
+      <small>{{ dash.ledger_dozens_sold }} dz sold · <b>${{ '%.2f'|format(dash.ledger_revenue) }}</b> sales</small>
+    {% else %}
+      <div class="big">—</div>
+      <small>Link your Iron Ledger Egg SKU below</small>
+    {% endif %}
+  </div>
+  <div class="card">
+    <small>Feed Cost / Dozen</small>
+    <div class="big">${{ '%.2f'|format(dash.cost_per_dozen) }}</div>
+    <small>${{ '%.2f'|format(dash.reconciled_feed_cost) }} feed ({{ dash.feed_cost_source }}){% if dash.linked_sku %} · Net <b>${{ '%.2f'|format(dash.net_egg_profit) }}</b>{% endif %}</small>
+  </div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h2 style="margin:0">Log Egg Collection</h2>
+      <div class="row" style="gap:4px">
+        <button type="button" class="btn sm" onclick="bumpEggs(6)">+6</button>
+        <button type="button" class="btn sm" onclick="bumpEggs(12)">+12</button>
+        <button type="button" class="btn sm" onclick="bumpEggs(18)">+18</button>
+        <button type="button" class="btn sm" onclick="bumpEggs(24)">+24</button>
+        <button type="button" class="btn sm" onclick="document.getElementById('eg-tot').value=''">Clear</button>
+      </div>
+    </div>
+    <form method="post" action="/eggs/log" class="fgrid">
+      <input type="hidden" name="next_url" value="/eggs">
+      <label>Date<input type="date" name="log_date" value="{{ dash.today_iso }}" required></label>
+      <label>Total Collected
+        <input id="eg-tot" type="number" name="total_collected" min="1" placeholder="e.g. 18" required style="font:600 18px/1.2 Georgia,serif">
+      </label>
+      <label>Cracked / Unusable
+        <input type="number" name="cracked_unusable" min="0" value="0">
+      </label>
+      <label>Kept for Home / Kitchen
+        <input type="number" name="home_used" min="0" value="0">
+      </label>
+      <label class="full">Notes (optional)
+        <input name="notes" placeholder="Morning check, found hidden nest, etc.">
+      </label>
+      <div class="full"><button class="btn primary wide">+ Log eggs</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin:0">Pack Cartons → Iron Ledger</h2>
+      {% if dash.ready_dozens > 0 %}
+        <span class="pill green">{{ dash.ready_dozens }} dz ready</span>
+      {% else %}
+        <span class="pill gray">{{ dash.loose_eggs }}/12 loose</span>
+      {% endif %}
+    </div>
+    <p class="sub" style="margin-bottom:10px">Deducts 12 loose eggs per dozen and optionally restocks your linked Iron Ledger SKU.</p>
+    <form method="post" action="/eggs/pack" class="fgrid" style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+      <label>Date<input type="date" name="pack_date" value="{{ dash.today_iso }}" required></label>
+      <label>Dozens to Pack
+        <input type="number" name="dozens_packed" min="1" value="{{ [1, dash.ready_dozens]|max }}" required style="font:600 18px/1.2 Georgia,serif">
+      </label>
+      {% if dash.linked_sku %}
+      <label class="full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" name="sync_to_ledger" value="1" checked style="width:auto">
+        <span><b>Restock Iron Ledger:</b> {{ dash.linked_sku.label }} ({{ '%.0f'|format(dash.linked_sku.on_hand) }} on hand · ${{ '%.2f'|format(dash.linked_sku.price_cents / 100) }}/dz)</span>
+      </label>
+      {% endif %}
+      <label class="full">Notes (optional)<input name="notes" placeholder="Washed &amp; cartoned for Saturday market"></label>
+      <div class="full">
+        <button class="btn primary wide">Pack cartons{% if dash.linked_sku %} &amp; Restock Iron Ledger{% endif %}</button>
+      </div>
+    </form>
+
+    <details {% if not dash.linked_sku %}open{% endif %}>
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">Iron Ledger SKU Link &amp; Layer Feed Rate</summary>
+      <form method="post" action="/eggs/settings" class="fgrid" style="margin-top:10px">
+        <label class="full">Linked Iron Ledger Egg SKU
+          <select name="ledger_sku_id">
+            <option value="">— Not linked —</option>
+            {% for sk in dash.ledger_skus %}
+            <option value="{{ sk.id }}" {{ 'selected' if dash.settings.ledger_sku_id == sk.id }}>
+              {{ sk.label }} (${{ '%.2f'|format(sk.price_cents / 100) }} · {{ '%.0f'|format(sk.on_hand) }} on hand · {{ sk.merchant_name }})
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Daily Feed / Hen (lb)
+          <input type="number" step="0.01" min="0.05" name="feed_lbs_per_hen_day" value="{{ dash.settings.feed_lbs_per_hen_day }}">
+        </label>
+        <label>Layer Bag Price ($ / {{ bag_weight }} lb)
+          <input type="number" step="0.01" min="0" name="bag_price" value="{{ '%.2f'|format(dash.settings.bag_price) }}">
+        </label>
+        <div class="full"><button class="btn sm primary">Save layer settings</button></div>
+      </form>
+    </details>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:18px">
+  <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:10px">
+    <h2 style="margin:0">Last 30 Days ({{ dash.eggs_30d }} eggs · {{ '%.1f'|format(dash.eggs_30d / 12) }} dz)</h2>
+    <small class="muted">Hover or tap any bar for date, egg count &amp; lay rate %</small>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(30,1fr);gap:4px;align-items:end;height:110px;padding-top:12px;border-bottom:1px solid var(--line)">
+    {% for d in dash.chart_days %}
+      {% set h_pct = (d.collected / dash.chart_peak * 100)|round(1) if d.collected > 0 else 3 %}
+      <div title="{{ d.label }}: {{ d.collected }} eggs ({{ d.lay_rate_pct }}% lay rate · {{ d.hens }} hens)"
+           style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+        <div style="width:100%;height:{{ h_pct }}%;background:{{ 'var(--green)' if d.collected > 0 else '#e9e6d8' }};border-radius:4px 4px 0 0;min-height:3px"></div>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="row" style="justify-content:space-between;margin-top:6px">
+    <small class="muted">{{ dash.chart_days[0].label }}</small>
+    <small class="muted">{{ dash.chart_days[14].label }}</small>
+    <small class="muted">Today ({{ dash.chart_days[-1].label }})</small>
+  </div>
+</div>
+
+<div class="cards two">
+  <div class="card">
+    <h2>Recent Egg Collection &amp; Carton Packs</h2>
+    <table>
+      <thead><tr><th>Date</th><th class="num">Collected</th><th class="num">Cracked</th><th class="num">Home</th><th class="num">Packable</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+      {% for lg in dash.egg_logs[:20] %}
+        <tr>
+          <td>{{ lg.log_date }}</td>
+          <td class="num"><b>{{ lg.total_collected }}</b></td>
+          <td class="num">{{ lg.cracked_unusable or '—' }}</td>
+          <td class="num">{{ lg.home_used or '—' }}</td>
+          <td class="num">{{ lg.good_packable }}</td>
+          <td><small>{{ lg.notes or '—' }}</small></td>
+          <td class="num">
+            <form method="post" action="/eggs/log/{{ lg.id }}/delete" style="display:inline">
+              <button class="link">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">No egg collection logs yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if dash.pack_logs %}
+    <h2 style="margin-top:18px">Recent Carton Packs</h2>
+    <table>
+      <thead><tr><th>Date</th><th class="num">Dozens</th><th>Iron Ledger</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+      {% for pk in dash.pack_logs[:15] %}
+        <tr>
+          <td>{{ pk.pack_date }}</td>
+          <td class="num"><b>{{ pk.dozens_packed }} dz</b> <small class="inline muted">({{ pk.eggs_used }})</small></td>
+          <td>
+            {% if pk.ledger_entry_id %}
+              <span class="pill green">+{{ pk.dozens_packed }} synced</span>
+            {% else %}
+              <span class="pill gray">Local only</span>
+            {% endif %}
+          </td>
+          <td><small>{{ pk.notes or '—' }}</small></td>
+          <td class="num">
+            <form method="post" action="/eggs/pack/{{ pk.id }}/delete" style="display:inline">
+              <button class="link">Undo</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Laying Flock Headcount ({{ dash.active_hens }} active hens)</h2>
+    <p class="sub" style="margin-bottom:10px">Add new pullets/hens or log losses. You can also graduate any chick batch directly from its Batch Detail page.</p>
+    <form method="post" action="/eggs/flock" class="fgrid" style="margin-bottom:14px">
+      <label>Date<input type="date" name="event_date" value="{{ dash.today_iso }}" required></label>
+      <label>Action
+        <select name="reason">
+          <option value="purchase">+ Add hens / pullets</option>
+          <option value="initial">+ Set initial flock count</option>
+          <option value="loss">− Mortality / Predator loss</option>
+          <option value="cull">− Culled / Sold layers</option>
+        </select>
+      </label>
+      <label>Count<input type="number" name="count" min="1" value="1" required></label>
+      <label>Notes<input name="notes" placeholder="ISA Browns, coop 1..."></label>
+      <div class="full"><button class="btn sm primary">Update flock headcount</button></div>
+    </form>
+    <table>
+      <thead><tr><th>Date</th><th>Change</th><th>Reason / Notes</th><th></th></tr></thead>
+      <tbody>
+      {% for ev in dash.flock_events[:15] %}
+        <tr>
+          <td>{{ ev.event_date }}</td>
+          <td>
+            <span class="pill {{ 'green' if ev.delta > 0 else 'amber' }}">{{ '+' if ev.delta > 0 else '' }}{{ ev.delta }}</span>
+          </td>
+          <td>
+            <b>{{ ev.reason|replace('_', ' ')|title }}</b>
+            {% if ev.notes %}<small class="muted" style="display:block">{{ ev.notes }}</small>{% endif %}
+          </td>
+          <td class="num">
+            <form method="post" action="/eggs/flock/{{ ev.id }}/delete" style="display:inline">
+              <button class="link">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No laying hens logged yet — add your current hen count above.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <h2 style="margin-top:20px">Layer Feed Log</h2>
+    <p class="sub" style="margin-bottom:10px">
+      Est. burn: <b>{{ '%.1f'|format(dash.daily_feed_burn_lbs) }} lb/day</b> ({{ '%.1f'|format(dash.monthly_bags) }} bags/mo)
+      · Logged: <b>{{ '%.1f'|format(dash.logged_feed_lbs) }} lb (${{ '%.2f'|format(dash.logged_feed_cost) }})</b>
+    </p>
+    <form method="post" action="/eggs/feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:12px">
+      <label>Date<input type="date" name="feed_date" value="{{ dash.today_iso }}" required></label>
+      <label>Bags ({{ bag_weight }} lb)<input type="number" id="lf-bags" name="bags" step="0.5" min="0.5" value="1" oninput="syncLfFeed()"></label>
+      <label>Feed (lb)<input type="number" id="lf-lbs" name="feed_lbs" step="0.1" min="1" value="{{ bag_weight }}" required></label>
+      <label>Cost ($)<input type="number" id="lf-cost" name="cost_total" step="0.01" min="0" value="{{ '%.2f'|format(dash.settings.bag_price) }}" required></label>
+      <label>Notes<input name="notes" placeholder="16% Layer Pellets, oyster shell..."></label>
+      <label>{% if gdrive_connected %}Receipt (→ Drive){% else %}Receipt photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+      <div class="full"><button class="btn sm primary">+ Log layer feed</button></div>
+    </form>
+    {% if dash.feed_logs %}
+    <table>
+      <thead><tr><th>Date</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
+      <tbody>
+      {% for fl in dash.feed_logs[:12] %}
+        <tr>
+          <td>{{ fl.feed_date }}</td>
+          <td class="num">{{ fl.bags }}</td>
+          <td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
+          <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
+          <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+          <td class="num">
+            <form method="post" action="/eggs/feed/{{ fl.id }}/delete" style="display:inline">
+              <button class="link">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function bumpEggs(n) {
+  const el = document.getElementById('eg-tot');
+  const cur = parseInt(el.value || '0', 10) || 0;
+  el.value = cur + n;
+  el.focus();
+}
+function syncLfFeed() {
+  const bags = parseFloat(document.getElementById('lf-bags').value || '0') || 0;
+  document.getElementById('lf-lbs').value = (bags * {{ bag_weight }}).toFixed(1).replace(/\.0$/, '');
+  document.getElementById('lf-cost').value = (bags * {{ dash.settings.bag_price }}).toFixed(2);
+}
+</script>
+{% endblock %}
