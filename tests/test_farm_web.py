@@ -43,10 +43,11 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(r.status_code, 303)
 
         # Create a batch
+        from datetime import date, timedelta
         r_b = self.c.post("/batches/save", data={
             "name": "Spring Broilers",
             "species": "cornish cross",
-            "start_date": "2026-11-01",
+            "start_date": (date.today() - timedelta(days=20)).isoformat(),
             "initial_quantity": "30",
             "unit_cost": "3.50",
             "avg_dressed_weight": "4.5",
@@ -589,10 +590,12 @@ class FarmWebTest(unittest.TestCase):
         }, follow_redirects=False)
         self.assertEqual(r_fl.status_code, 303)
 
-        # 3. Link Iron Ledger Chicken Eggs (dz) SKU and set layer feed settings
+        # 3. Link Iron Ledger Chicken Eggs (dz) SKU and set layer + scratch feed settings (0.25 lb/hen layer + 2.0 lb/day scratch)
         r_cfg = self.c.post("/eggs/settings", data={
             "feed_lbs_per_hen_day": "0.25",
+            "scratch_lbs_per_day": "2.0",
             "bag_price": "20.00",
+            "scratch_bag_price": "15.00",
             "ledger_sku_id": str(egg_sku_id),
         }, follow_redirects=False)
         self.assertEqual(r_cfg.status_code, 303)
@@ -607,22 +610,39 @@ class FarmWebTest(unittest.TestCase):
         }, follow_redirects=False)
         self.assertEqual(r_log.status_code, 303)
 
-        # Log 1 bag of layer feed ($15.00 for easy math -> $15.00 / 2.5 dz collected = $6.00/dz)
-        r_fd = self.c.post("/eggs/feed", data={
+        # Log 1 bag of layer feed (50 lb @ $15.00 = $0.30/lb) + 1 bag of scratch (50 lb @ $12.50 = $0.25/lb)
+        r_fd1 = self.c.post("/eggs/feed", data={
             "feed_date": date.today().isoformat(),
+            "feed_type": "layer",
             "bags": "1",
             "feed_lbs": "50",
             "cost_total": "15.00",
             "notes": "Layer pellets",
         }, follow_redirects=False)
-        self.assertEqual(r_fd.status_code, 303)
+        self.assertEqual(r_fd1.status_code, 303)
+        r_fd2 = self.c.post("/eggs/feed", data={
+            "feed_date": date.today().isoformat(),
+            "feed_type": "scratch",
+            "bags": "1",
+            "feed_lbs": "50",
+            "cost_total": "12.50",
+            "notes": "Scratch grains",
+        }, follow_redirects=False)
+        self.assertEqual(r_fd2.status_code, 303)
 
         dash1 = compute_egg_dashboard(1)
         self.assertEqual(dash1["active_hens"], 20)
         self.assertEqual(dash1["loose_eggs"], 27)
         self.assertEqual(dash1["ready_dozens"], 2)
         self.assertEqual(dash1["remainder_loose"], 3)
-        self.assertAlmostEqual(dash1["cost_per_dozen"], 6.0)
+        self.assertAlmostEqual(dash1["layer_remaining_lbs"], 45.0)
+        self.assertAlmostEqual(dash1["layer_days_left"], 9.0)
+        self.assertAlmostEqual(dash1["scratch_remaining_lbs"], 48.0)
+        self.assertAlmostEqual(dash1["scratch_days_left"], 24.0)
+        # 5 lb layer ($1.50) + 2 lb scratch ($0.50) = $2.00 eaten today / 2.5 dz = $0.80/dz (while $27.50 total spent on bags)
+        self.assertAlmostEqual(dash1["reconciled_feed_cost"], 2.0)
+        self.assertAlmostEqual(dash1["logged_feed_cost"], 27.5)
+        self.assertAlmostEqual(dash1["cost_per_dozen"], 0.80)
 
         # 5. Pack 2 dozen cartons & sync to Iron Ledger -> loose_eggs drops to 3, Iron Ledger stock becomes +2 dz!
         r_pk = self.c.post("/eggs/pack", data={

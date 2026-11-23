@@ -1636,6 +1636,7 @@ def eggs_flock_delete_submit(event_id: int, user: dict = Depends(current_user)):
 @app.post("/eggs/feed")
 async def eggs_feed_submit(
     feed_date: str = Form(""),
+    feed_type: str = Form("layer"),
     bags: float = Form(1.0),
     feed_lbs: float = Form(50.0),
     cost_total: float = Form(0.0),
@@ -1646,11 +1647,12 @@ async def eggs_feed_submit(
 ):
     fdate = feed_date.strip() or date.today().isoformat()
     r_url, drive_id, warn = await _resolve_receipt_attachment(
-        user["id"], receipt_file, receipt_url, fdate, "Layer Feed"
+        user["id"], receipt_file, receipt_url, fdate, f"Layer Feed ({feed_type})"
     )
     add_layer_feed_log(
         user["id"],
         feed_date=fdate,
+        feed_type=feed_type,
         bags=bags,
         feed_lbs=feed_lbs,
         cost_total=cost_total,
@@ -1673,7 +1675,9 @@ def eggs_feed_delete_submit(feed_id: int, user: dict = Depends(current_user)):
 @app.post("/eggs/settings")
 def eggs_settings_submit(
     feed_lbs_per_hen_day: float = Form(0.25),
+    scratch_lbs_per_day: float = Form(0.0),
     bag_price: float = Form(22.00),
+    scratch_bag_price: float = Form(16.00),
     ledger_sku_id: str = Form(""),
     user: dict = Depends(current_user),
 ):
@@ -1681,7 +1685,9 @@ def eggs_settings_submit(
     save_layer_settings(
         user["id"],
         feed_lbs_per_hen_day=feed_lbs_per_hen_day,
+        scratch_lbs_per_day=scratch_lbs_per_day,
         bag_price=bag_price,
+        scratch_bag_price=scratch_bag_price,
         ledger_sku_id=sku_id,
     )
     return RedirectResponse(
