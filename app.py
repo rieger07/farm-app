@@ -28,10 +28,14 @@ from homestead.database import (
     add_batch_harvest,
     add_batch_loss,
     add_batch_sale,
+    add_egg_log,
     add_farm_expense,
+    add_layer_feed_log,
+    add_layer_flock_event,
     authenticate_user,
     batch_preorder_counts,
     claim_bird_atomically,
+    compute_egg_dashboard,
     count_users,
     create_batch_preorder,
     create_public_preorder_atomic,
@@ -45,7 +49,11 @@ from homestead.database import (
     delete_batch_preorder,
     delete_batch_sale,
     delete_customer,
+    delete_egg_log,
+    delete_egg_pack_log,
     delete_farm_expense,
+    delete_layer_feed_log,
+    delete_layer_flock_event,
     delete_species_preset,
     delete_user,
     delete_user_session,
@@ -59,12 +67,16 @@ from homestead.database import (
     get_customer_batch_preorder_summary,
     get_farm_pickup_settings,
     get_google_drive_connection,
+    get_layer_settings,
     get_species_catalog,
     get_user_by_session_token,
+    graduate_batch_to_layers,
     import_backup_json,
     init_db,
+    is_batch_graduated_to_layers,
     is_public_registration_enabled,
     list_acknowledged_milestones,
+    list_available_ledger_skus,
     list_batch_feed_logs,
     list_batch_harvests,
     list_batch_losses,
@@ -73,13 +85,19 @@ from homestead.database import (
     list_batches,
     list_customer_birds,
     list_customers,
+    list_egg_logs,
+    list_egg_pack_logs,
     list_farm_expenses,
+    list_layer_feed_logs,
+    list_layer_flock_events,
     list_users,
     merge_customers,
+    pack_egg_cartons,
     save_batch,
     save_customer,
     save_farm_pickup_settings,
     save_google_drive_connection,
+    save_layer_settings,
     save_species_preset,
     set_bag_weight,
     set_barrel_capacity,
@@ -127,6 +145,7 @@ COOKIE = "homestead_session"
 NAV = [
     ("radar", "Radar", "/"),
     ("batches", "Batches", "/batches"),
+    ("eggs", "Eggs", "/eggs"),
     ("customers", "Customers", "/customers"),
     ("feed", "Feed", "/feed"),
     ("financials", "Financials", "/financials"),
@@ -365,6 +384,7 @@ def radar_page(request: Request, msg: str = "", user: dict | None = Depends(opti
         total_head=sum(s["on_farm_head"] for s in active_schedules),
         total_losses=sum(s["initial_quantity"] - s["surviving_quantity"] for s in active_schedules),
         bag_weight=get_bag_weight(user_id=user["id"]),
+        egg_dash=compute_egg_dashboard(user["id"], bag_weight=get_bag_weight(user_id=user["id"])),
         species_catalog=get_species_catalog(user_id=user["id"]),
         msg=msg,
     )
@@ -456,6 +476,7 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         tally_allocations=tally_allocations,
         po_summary=po_summary,
         pending_pickup_customers=pending_pickup_customers,
+        is_graduated=is_batch_graduated_to_layers(user["id"], batch_id),
         feed_logs=list_batch_feed_logs(batch_id),
         bag_weight=bag_weight,
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
@@ -1500,6 +1521,199 @@ def batch_pickup_reopen_submit(
     )
 
 
+# ---------------------------------------------------------------------------
+# Eggs & Laying Flock + Iron Ledger Bridge (/eggs)
+# ---------------------------------------------------------------------------
+@app.get("/eggs")
+def eggs_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
+    bag_weight = get_bag_weight(user_id=user["id"])
+    dash = compute_egg_dashboard(user["id"], bag_weight=bag_weight)
+    return _render(
+        request, "eggs.html", user, "eggs",
+        dash=dash,
+        bag_weight=bag_weight,
+        gdrive_connected=bool(get_google_drive_connection(user["id"])),
+        msg=msg,
+    )
+
+
+@app.post("/eggs/log")
+def eggs_log_submit(
+    log_date: str = Form(""),
+    total_collected: int = Form(...),
+    cracked_unusable: int = Form(0),
+    home_used: int = Form(0),
+    notes: str = Form(""),
+    next_url: str = Form("/eggs"),
+    user: dict = Depends(current_user),
+):
+    target = next_url if next_url.startswith("/") else "/eggs"
+    sep = "&" if "?" in target else "?"
+    try:
+        add_egg_log(
+            user["id"],
+            log_date=log_date or date.today().isoformat(),
+            total_collected=total_collected,
+            cracked_unusable=cracked_unusable,
+            home_used=home_used,
+            notes=notes,
+        )
+        msg = f"Logged {total_collected} egg{'s' if int(total_collected) != 1 else ''}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/eggs/log/{log_id}/delete")
+def eggs_log_delete_submit(log_id: int, user: dict = Depends(current_user)):
+    delete_egg_log(user["id"], log_id)
+    return RedirectResponse("/eggs?msg=" + quote_plus("Removed egg log entry."), status_code=303)
+
+
+@app.post("/eggs/pack")
+def eggs_pack_submit(
+    pack_date: str = Form(""),
+    dozens_packed: int = Form(1),
+    sync_to_ledger: str = Form(""),
+    notes: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    res = pack_egg_cartons(
+        user["id"],
+        pack_date=pack_date or date.today().isoformat(),
+        dozens_packed=max(1, int(dozens_packed)),
+        notes=notes,
+        sync_to_ledger=bool(sync_to_ledger),
+    )
+    dz = res["dozens_packed"]
+    sync_txt = " & restocked Iron Ledger!" if res["synced_to_ledger"] else "."
+    return RedirectResponse(
+        "/eggs?msg=" + quote_plus(f"Packed {dz} dozen ({res['eggs_used']} eggs){sync_txt}"),
+        status_code=303,
+    )
+
+
+@app.post("/eggs/pack/{pack_id}/delete")
+def eggs_pack_delete_submit(pack_id: int, user: dict = Depends(current_user)):
+    delete_egg_pack_log(user["id"], pack_id)
+    return RedirectResponse(
+        "/eggs?msg=" + quote_plus("Removed carton pack log (and reversed linked Iron Ledger restock)."),
+        status_code=303,
+    )
+
+
+@app.post("/eggs/flock")
+def eggs_flock_submit(
+    event_date: str = Form(""),
+    direction: str = Form("add"),
+    count: int = Form(1),
+    reason: str = Form("purchase"),
+    notes: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    qty = max(1, int(count))
+    delta = -qty if direction == "remove" or reason in ("loss", "cull") else qty
+    add_layer_flock_event(
+        user["id"],
+        event_date=event_date or date.today().isoformat(),
+        delta=delta,
+        reason=reason,
+        notes=notes,
+    )
+    verb = f"Added +{qty}" if delta > 0 else f"Logged {delta}"
+    return RedirectResponse(
+        "/eggs?msg=" + quote_plus(f"{verb} laying hen{'s' if qty != 1 else ''}."),
+        status_code=303,
+    )
+
+
+@app.post("/eggs/flock/{event_id}/delete")
+def eggs_flock_delete_submit(event_id: int, user: dict = Depends(current_user)):
+    delete_layer_flock_event(user["id"], event_id)
+    return RedirectResponse("/eggs?msg=" + quote_plus("Removed flock headcount entry."), status_code=303)
+
+
+@app.post("/eggs/feed")
+async def eggs_feed_submit(
+    feed_date: str = Form(""),
+    bags: float = Form(1.0),
+    feed_lbs: float = Form(50.0),
+    cost_total: float = Form(0.0),
+    notes: str = Form(""),
+    receipt_url: str = Form(""),
+    receipt_file: UploadFile | None = File(None),
+    user: dict = Depends(current_user),
+):
+    fdate = feed_date.strip() or date.today().isoformat()
+    r_url, drive_id, warn = await _resolve_receipt_attachment(
+        user["id"], receipt_file, receipt_url, fdate, "Layer Feed"
+    )
+    add_layer_feed_log(
+        user["id"],
+        feed_date=fdate,
+        bags=bags,
+        feed_lbs=feed_lbs,
+        cost_total=cost_total,
+        notes=notes,
+        receipt_url=r_url,
+        drive_file_id=drive_id,
+    )
+    msg = "Logged layer feed purchase."
+    if warn:
+        msg += f" (Receipt not uploaded: {warn})"
+    return RedirectResponse("/eggs?msg=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/eggs/feed/{feed_id}/delete")
+def eggs_feed_delete_submit(feed_id: int, user: dict = Depends(current_user)):
+    delete_layer_feed_log(user["id"], feed_id)
+    return RedirectResponse("/eggs?msg=" + quote_plus("Removed layer feed log."), status_code=303)
+
+
+@app.post("/eggs/settings")
+def eggs_settings_submit(
+    feed_lbs_per_hen_day: float = Form(0.25),
+    bag_price: float = Form(22.00),
+    ledger_sku_id: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    sku_id = int(ledger_sku_id) if ledger_sku_id.strip().isdigit() and int(ledger_sku_id) > 0 else None
+    save_layer_settings(
+        user["id"],
+        feed_lbs_per_hen_day=feed_lbs_per_hen_day,
+        bag_price=bag_price,
+        ledger_sku_id=sku_id,
+    )
+    return RedirectResponse(
+        "/eggs?msg=" + quote_plus("Saved laying flock & Iron Ledger SKU settings."),
+        status_code=303,
+    )
+
+
+@app.post("/batches/{batch_id}/graduate-layers")
+def batch_graduate_layers_submit(
+    batch_id: int,
+    head_count: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    b = _get_owned_batch(batch_id, user)
+    bag_weight = get_bag_weight(user_id=user["id"])
+    s = compute_batch_schedule(b, bag_weight=bag_weight)
+    default_head = max(1, int(s.get("on_farm_head") or s.get("surviving_quantity") or b.get("initial_quantity") or 1))
+    hc = int(head_count) if head_count.strip().isdigit() and int(head_count) > 0 else default_head
+    try:
+        graduate_batch_to_layers(user["id"], batch_id, head_count=hc, archive_batch=True)
+        return RedirectResponse(
+            "/eggs?msg=" + quote_plus(f"Graduated {hc} hens from {b['name']} into your active laying flock!"),
+            status_code=303,
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/batches/{batch_id}?msg=" + quote_plus(str(exc)),
+            status_code=303,
+        )
+
+
 @app.get("/batches/{batch_id}/harvest.csv")
 def batch_harvest_csv(batch_id: int, user: dict = Depends(current_user)):
     b = _get_owned_batch(batch_id, user)
@@ -1798,6 +2012,7 @@ def feed_page(request: Request, msg: str = "", user: dict = Depends(current_user
         purchase_events=purchase_events,
         monthly_feed=monthly_feed,
         weekly_feed=weekly_feed,
+        egg_dash=compute_egg_dashboard(user["id"], bag_weight=bag_wt),
         msg=msg,
     )
 

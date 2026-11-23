@@ -436,6 +436,82 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_batch_preorders_cust ON batch_preorders(customer_id)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS layer_flock_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_date TEXT NOT NULL,
+                delta INTEGER NOT NULL,
+                reason TEXT NOT NULL DEFAULT 'purchase',
+                source_batch_id INTEGER,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_batch_id) REFERENCES batches(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_layer_flock_user_date ON layer_flock_events(user_id, event_date)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS egg_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                log_date TEXT NOT NULL,
+                total_collected INTEGER NOT NULL DEFAULT 0,
+                cracked_unusable INTEGER NOT NULL DEFAULT 0,
+                home_used INTEGER NOT NULL DEFAULT 0,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_egg_logs_user_date ON egg_logs(user_id, log_date)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS egg_pack_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                pack_date TEXT NOT NULL,
+                dozens_packed INTEGER NOT NULL DEFAULT 1,
+                eggs_used INTEGER NOT NULL DEFAULT 12,
+                ledger_sku_id INTEGER,
+                ledger_entry_id INTEGER,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_egg_pack_user_date ON egg_pack_logs(user_id, pack_date)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS layer_feed_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                feed_date TEXT NOT NULL,
+                bags REAL NOT NULL DEFAULT 1.0,
+                feed_lbs REAL NOT NULL DEFAULT 50.0,
+                cost_total REAL NOT NULL DEFAULT 0.0,
+                notes TEXT DEFAULT '',
+                receipt_url TEXT DEFAULT '',
+                drive_file_id TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_layer_feed_user_date ON layer_feed_logs(user_id, feed_date)"
+        )
         for tbl in ("batch_feed_logs", "batch_harvests"):
             cols = {
                 row["name"]
@@ -3252,3 +3328,605 @@ def settle_customer_batch_pickup(
             )
         conn.commit()
         return len(bird_list)
+
+
+# ---------------------------------------------------------------------------
+# Eggs & Laying Flock + Iron Ledger Bridge
+# ---------------------------------------------------------------------------
+def get_layer_settings(user_id: int) -> dict:
+    raw_rate = get_text_setting("layer_feed_lbs_per_hen_day", "0.25", user_id=user_id).strip()
+    raw_price = get_text_setting("layer_bag_price", "22.00", user_id=user_id).strip()
+    raw_sku = get_text_setting("layer_ledger_sku_id", "", user_id=user_id).strip()
+    try:
+        rate = max(0.01, float(raw_rate))
+    except ValueError:
+        rate = 0.25
+    try:
+        price = max(0.0, float(raw_price))
+    except ValueError:
+        price = 22.00
+    sku_id = int(raw_sku) if raw_sku.isdigit() and int(raw_sku) > 0 else None
+    return {
+        "feed_lbs_per_hen_day": round(rate, 3),
+        "bag_price": round(price, 2),
+        "ledger_sku_id": sku_id,
+    }
+
+
+def save_layer_settings(
+    user_id: int,
+    feed_lbs_per_hen_day: float = 0.25,
+    bag_price: float = 22.00,
+    ledger_sku_id: int | None = None,
+) -> dict:
+    rate = round(max(0.01, float(feed_lbs_per_hen_day or 0.25)), 3)
+    price = round(max(0.0, float(bag_price or 0.0)), 2)
+    sku_str = str(int(ledger_sku_id)) if ledger_sku_id and int(ledger_sku_id) > 0 else ""
+    set_text_setting("layer_feed_lbs_per_hen_day", str(rate), user_id=user_id)
+    set_text_setting("layer_bag_price", f"{price:.2f}", user_id=user_id)
+    set_text_setting("layer_ledger_sku_id", sku_str, user_id=user_id)
+    return get_layer_settings(user_id)
+
+
+def list_available_ledger_skus() -> list[dict]:
+    """List active Iron Ledger SKUs from the shared SQLite DB (safe if Iron Ledger tables don't exist yet)."""
+    with get_db_connection() as conn:
+        has_skus = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skus'"
+        ).fetchone()
+        if not has_skus:
+            return []
+        rows = conn.execute(
+            """
+            SELECT k.id, k.merchant_id, k.name, k.variant_name, k.price_cents,
+                   COALESCE(m.name, 'Merchant #' || k.merchant_id) AS merchant_name,
+                   COALESCE((SELECT SUM(delta) FROM stock_ledger l WHERE l.sku_id = k.id), 0) AS on_hand
+            FROM skus k
+            LEFT JOIN merchants m ON m.id = k.merchant_id
+            WHERE k.active = 1 AND COALESCE(k.item_type, 'product') != 'fee'
+            ORDER BY CASE WHEN LOWER(k.name) LIKE '%egg%' THEN 0 ELSE 1 END, k.name ASC, k.id ASC
+            """
+        ).fetchall()
+        out = []
+        for r in rows:
+            label = r["name"] + (f" · {r['variant_name']}" if r["variant_name"] else "")
+            out.append({
+                "id": int(r["id"]),
+                "merchant_id": int(r["merchant_id"]),
+                "merchant_name": r["merchant_name"],
+                "name": r["name"],
+                "variant_name": r["variant_name"] or "",
+                "label": label,
+                "price_cents": int(r["price_cents"] or 0),
+                "on_hand": float(r["on_hand"] or 0.0),
+            })
+        return out
+
+
+def add_layer_flock_event(
+    user_id: int,
+    event_date: str,
+    delta: int,
+    reason: str = "purchase",
+    source_batch_id: int | None = None,
+    notes: str = "",
+) -> int:
+    clean_date = (event_date or date.today().isoformat()).strip()[:10]
+    d_val = int(delta)
+    if d_val == 0:
+        raise ValueError("Headcount change cannot be zero.")
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO layer_flock_events (
+                user_id, event_date, delta, reason, source_batch_id, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                clean_date,
+                d_val,
+                str(reason or "purchase").strip(),
+                int(source_batch_id) if source_batch_id else None,
+                str(notes or "").strip(),
+                now_iso,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_layer_flock_event(user_id: int, event_id: int) -> bool:
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM layer_flock_events WHERE id = ? AND user_id = ?",
+            (int(event_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def list_layer_flock_events(user_id: int) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.*, b.name AS batch_name
+            FROM layer_flock_events e
+            LEFT JOIN batches b ON b.id = e.source_batch_id
+            WHERE e.user_id = ?
+            ORDER BY e.event_date DESC, e.id DESC
+            """,
+            (int(user_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def is_batch_graduated_to_layers(user_id: int, batch_id: int) -> bool:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM layer_flock_events WHERE user_id = ? AND source_batch_id = ? LIMIT 1",
+            (int(user_id), int(batch_id)),
+        ).fetchone()
+        return bool(row)
+
+
+def graduate_batch_to_layers(
+    user_id: int,
+    batch_id: int,
+    head_count: int,
+    event_date: str | None = None,
+    archive_batch: bool = True,
+) -> int:
+    hc = max(1, int(head_count or 1))
+    with get_db_connection() as conn:
+        b = conn.execute(
+            "SELECT id, name FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not b:
+            raise ValueError("Batch not found.")
+        already = conn.execute(
+            "SELECT id FROM layer_flock_events WHERE user_id = ? AND source_batch_id = ?",
+            (int(user_id), int(batch_id)),
+        ).fetchone()
+        if already:
+            raise ValueError("This batch has already been graduated to the laying flock.")
+    ev_id = add_layer_flock_event(
+        user_id,
+        event_date or date.today().isoformat(),
+        delta=hc,
+        reason="graduated_batch",
+        source_batch_id=batch_id,
+        notes=f"Graduated from {b['name']}",
+    )
+    if archive_batch:
+        set_batch_active(batch_id, False)
+    return ev_id
+
+
+def add_egg_log(
+    user_id: int,
+    log_date: str,
+    total_collected: int,
+    cracked_unusable: int = 0,
+    home_used: int = 0,
+    notes: str = "",
+) -> int:
+    clean_date = (log_date or date.today().isoformat()).strip()[:10]
+    tot = max(0, int(total_collected or 0))
+    cracked = max(0, min(tot, int(cracked_unusable or 0)))
+    home = max(0, min(tot - cracked, int(home_used or 0)))
+    if tot == 0 and cracked == 0 and home == 0:
+        raise ValueError("Total eggs collected must be greater than 0.")
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO egg_logs (
+                user_id, log_date, total_collected, cracked_unusable, home_used, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(user_id), clean_date, tot, cracked, home, str(notes or "").strip(), now_iso),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_egg_log(user_id: int, log_id: int) -> bool:
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM egg_logs WHERE id = ? AND user_id = ?",
+            (int(log_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def list_egg_logs(user_id: int, limit: int = 90) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM egg_logs
+            WHERE user_id = ?
+            ORDER BY log_date DESC, id DESC
+            LIMIT ?
+            """,
+            (int(user_id), int(limit)),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["good_packable"] = max(
+                0,
+                int(d["total_collected"] or 0)
+                - int(d["cracked_unusable"] or 0)
+                - int(d["home_used"] or 0),
+            )
+            out.append(d)
+        return out
+
+
+def pack_egg_cartons(
+    user_id: int,
+    pack_date: str,
+    dozens_packed: int,
+    notes: str = "",
+    sync_to_ledger: bool = True,
+) -> dict:
+    dz = max(1, int(dozens_packed or 1))
+    eggs_used = dz * 12
+    clean_date = (pack_date or date.today().isoformat()).strip()[:10]
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    cfg = get_layer_settings(user_id)
+    sku_id = cfg["ledger_sku_id"] if sync_to_ledger else None
+    ledger_entry_id = None
+
+    with get_db_connection() as conn:
+        if sku_id:
+            has_skus = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skus'"
+            ).fetchone()
+            if has_skus:
+                sku_row = conn.execute(
+                    "SELECT id, merchant_id FROM skus WHERE id = ?", (int(sku_id),)
+                ).fetchone()
+                if sku_row:
+                    l_cur = conn.execute(
+                        """
+                        INSERT INTO stock_ledger (
+                            merchant_id, sku_id, delta, reason, note, created_by, created_at
+                        ) VALUES (?, ?, ?, 'restock', ?, ?, ?)
+                        """,
+                        (
+                            int(sku_row["merchant_id"]),
+                            int(sku_id),
+                            dz,
+                            f"Packed {dz} dz from Homestead Egg Log ({clean_date})",
+                            int(user_id),
+                            now_iso,
+                        ),
+                    )
+                    ledger_entry_id = int(l_cur.lastrowid)
+                else:
+                    sku_id = None
+            else:
+                sku_id = None
+
+        p_cur = conn.execute(
+            """
+            INSERT INTO egg_pack_logs (
+                user_id, pack_date, dozens_packed, eggs_used,
+                ledger_sku_id, ledger_entry_id, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                clean_date,
+                dz,
+                eggs_used,
+                sku_id,
+                ledger_entry_id,
+                str(notes or "").strip(),
+                now_iso,
+            ),
+        )
+        conn.commit()
+        return {
+            "pack_id": int(p_cur.lastrowid),
+            "dozens_packed": dz,
+            "eggs_used": eggs_used,
+            "synced_to_ledger": bool(ledger_entry_id),
+            "ledger_entry_id": ledger_entry_id,
+        }
+
+
+def delete_egg_pack_log(user_id: int, pack_id: int) -> bool:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM egg_pack_logs WHERE id = ? AND user_id = ?",
+            (int(pack_id), int(user_id)),
+        ).fetchone()
+        if not row:
+            return False
+        if row["ledger_entry_id"]:
+            has_ledger = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'stock_ledger'"
+            ).fetchone()
+            if has_ledger:
+                conn.execute(
+                    "DELETE FROM stock_ledger WHERE id = ?",
+                    (int(row["ledger_entry_id"]),),
+                )
+        conn.execute("DELETE FROM egg_pack_logs WHERE id = ? AND user_id = ?", (int(pack_id), int(user_id)))
+        conn.commit()
+        return True
+
+
+def list_egg_pack_logs(user_id: int, limit: int = 30) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM egg_pack_logs
+            WHERE user_id = ?
+            ORDER BY pack_date DESC, id DESC
+            LIMIT ?
+            """,
+            (int(user_id), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_layer_feed_log(
+    user_id: int,
+    feed_date: str,
+    bags: float,
+    feed_lbs: float,
+    cost_total: float,
+    notes: str = "",
+    receipt_url: str = "",
+    drive_file_id: str = "",
+) -> int:
+    clean_date = (feed_date or date.today().isoformat()).strip()[:10]
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO layer_feed_logs (
+                user_id, feed_date, bags, feed_lbs, cost_total,
+                notes, receipt_url, drive_file_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                clean_date,
+                max(0.0, float(bags or 0.0)),
+                max(0.0, float(feed_lbs or 0.0)),
+                max(0.0, float(cost_total or 0.0)),
+                str(notes or "").strip(),
+                str(receipt_url or "").strip(),
+                str(drive_file_id or "").strip(),
+                now_iso,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def delete_layer_feed_log(user_id: int, feed_id: int) -> bool:
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM layer_feed_logs WHERE id = ? AND user_id = ?",
+            (int(feed_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def list_layer_feed_logs(user_id: int, limit: int = 50) -> list[dict]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM layer_feed_logs
+            WHERE user_id = ?
+            ORDER BY feed_date DESC, id DESC
+            LIMIT ?
+            """,
+            (int(user_id), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def compute_egg_dashboard(user_id: int, bag_weight: int = 50) -> dict:
+    """Compute laying flock headcount, daily egg metrics, loose eggs ready to pack,
+    layer feed economics, and live Iron Ledger carton stock & sales revenue.
+    """
+    cfg = get_layer_settings(user_id)
+    flock_events = list_layer_flock_events(user_id)
+    egg_logs = list_egg_logs(user_id, limit=365)
+    pack_logs = list_egg_pack_logs(user_id, limit=100)
+    feed_logs = list_layer_feed_logs(user_id, limit=100)
+    ledger_skus = list_available_ledger_skus()
+
+    def _hens_on_date(d_iso: str) -> int:
+        tot = sum(int(ev["delta"] or 0) for ev in flock_events if str(ev["event_date"]) <= d_iso)
+        return max(0, tot)
+
+    today = date.today()
+    today_iso = today.isoformat()
+    active_hens = _hens_on_date(today_iso)
+
+    by_day: dict[str, dict] = {}
+    total_collected_all = 0
+    total_cracked_all = 0
+    total_home_all = 0
+    total_good_all = 0
+    for lg in egg_logs:
+        ds = str(lg["log_date"])[:10]
+        c_val = int(lg["total_collected"] or 0)
+        cr_val = int(lg["cracked_unusable"] or 0)
+        hm_val = int(lg["home_used"] or 0)
+        gd_val = int(lg["good_packable"] or 0)
+        total_collected_all += c_val
+        total_cracked_all += cr_val
+        total_home_all += hm_val
+        total_good_all += gd_val
+        slot = by_day.setdefault(ds, {"collected": 0, "cracked": 0, "home": 0, "good": 0})
+        slot["collected"] += c_val
+        slot["cracked"] += cr_val
+        slot["home"] += hm_val
+        slot["good"] += gd_val
+
+    with get_db_connection() as conn:
+        all_egg_sums = conn.execute(
+            """
+            SELECT COALESCE(SUM(total_collected), 0) AS tot,
+                   COALESCE(SUM(cracked_unusable), 0) AS cr,
+                   COALESCE(SUM(home_used), 0) AS hm
+            FROM egg_logs WHERE user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        total_packed_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(dozens_packed), 0) AS dz,
+                   COALESCE(SUM(eggs_used), 0) AS eggs
+            FROM egg_pack_logs WHERE user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+
+    lifetime_collected = int(all_egg_sums["tot"] or 0)
+    lifetime_cracked = int(all_egg_sums["cr"] or 0)
+    lifetime_home = int(all_egg_sums["hm"] or 0)
+    lifetime_good = max(0, lifetime_collected - lifetime_cracked - lifetime_home)
+    lifetime_packed_dz = int(total_packed_row["dz"] or 0)
+    lifetime_packed_eggs = int(total_packed_row["eggs"] or 0)
+
+    loose_eggs = max(0, lifetime_good - lifetime_packed_eggs)
+    ready_dozens = loose_eggs // 12
+    remainder_loose = loose_eggs % 12
+
+    today_slot = by_day.get(today_iso, {"collected": 0, "cracked": 0, "home": 0, "good": 0})
+    today_eggs = today_slot["collected"]
+    today_lay_rate = round((today_eggs / active_hens) * 100, 1) if active_hens > 0 else 0.0
+
+    # Last 7 days and 30 days series
+    chart_days = []
+    eggs_7d = 0
+    eggs_30d = 0
+    rate_sum_7d = 0.0
+    rate_days_7d = 0
+    for i in range(29, -1, -1):
+        d_obj = today - timedelta(days=i)
+        d_iso = d_obj.isoformat()
+        slot = by_day.get(d_iso, {"collected": 0, "cracked": 0, "home": 0, "good": 0})
+        hens_d = _hens_on_date(d_iso) or active_hens
+        rate_d = round((slot["collected"] / hens_d) * 100, 1) if hens_d > 0 else 0.0
+        eggs_30d += slot["collected"]
+        if i < 7:
+            eggs_7d += slot["collected"]
+            if hens_d > 0:
+                rate_sum_7d += rate_d
+                rate_days_7d += 1
+        chart_days.append({
+            "date": d_iso,
+            "label": d_obj.strftime("%b %-d"),
+            "short_label": d_obj.strftime("%-d"),
+            "collected": slot["collected"],
+            "good": slot["good"],
+            "hens": hens_d,
+            "lay_rate_pct": rate_d,
+        })
+    chart_peak = max((c["collected"] for c in chart_days), default=0) or 1
+    avg_7d_eggs = round(eggs_7d / 7.0, 1)
+    avg_7d_lay_rate = round(rate_sum_7d / rate_days_7d, 1) if rate_days_7d > 0 else 0.0
+
+    # Layer feed economics
+    daily_feed_burn_lbs = round(active_hens * cfg["feed_lbs_per_hen_day"], 2)
+    weekly_feed_lbs = round(daily_feed_burn_lbs * 7, 1)
+    monthly_feed_lbs = round(daily_feed_burn_lbs * 30, 1)
+    monthly_bags = round(monthly_feed_lbs / max(1, bag_weight), 1)
+
+    logged_feed_lbs = round(sum(float(f["feed_lbs"] or 0.0) for f in feed_logs), 1)
+    logged_feed_cost = round(sum(float(f["cost_total"] or 0.0) for f in feed_logs), 2)
+    if logged_feed_cost > 0:
+        reconciled_feed_cost = logged_feed_cost
+        feed_cost_source = "logged"
+    else:
+        active_log_days = max(1, len(by_day)) if by_day else 0
+        est_lbs = active_log_days * daily_feed_burn_lbs
+        reconciled_feed_cost = round((est_lbs / max(1, bag_weight)) * cfg["bag_price"], 2)
+        feed_cost_source = "estimated"
+
+    lifetime_dozens_collected = round(lifetime_collected / 12.0, 2)
+    cost_per_dozen = (
+        round(reconciled_feed_cost / lifetime_dozens_collected, 2)
+        if lifetime_dozens_collected > 0
+        else 0.0
+    )
+
+    # Linked Iron Ledger SKU stats & realized sales revenue
+    linked_sku = next((s for s in ledger_skus if s["id"] == cfg["ledger_sku_id"]), None)
+    ledger_dozens_sold = 0.0
+    ledger_revenue = 0.0
+    if linked_sku:
+        with get_db_connection() as conn:
+            has_sales = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sale_items'"
+            ).fetchone()
+            if has_sales:
+                s_row = conn.execute(
+                    """
+                    SELECT COALESCE(SUM(si.quantity), 0) AS qty,
+                           COALESCE(SUM(si.quantity * si.unit_price_cents), 0) AS rev_cents
+                    FROM sale_items si
+                    JOIN sales s ON s.id = si.sale_id
+                    WHERE si.sku_id = ? AND s.status = 'completed'
+                    """,
+                    (int(linked_sku["id"]),),
+                ).fetchone()
+                ledger_dozens_sold = round(float(s_row["qty"] or 0.0), 1)
+                ledger_revenue = round(float(s_row["rev_cents"] or 0.0) / 100.0, 2)
+
+    net_egg_profit = round(ledger_revenue - reconciled_feed_cost, 2)
+
+    return {
+        "settings": cfg,
+        "active_hens": active_hens,
+        "today_iso": today_iso,
+        "today_eggs": today_eggs,
+        "today_lay_rate": today_lay_rate,
+        "eggs_7d": eggs_7d,
+        "eggs_30d": eggs_30d,
+        "avg_7d_eggs": avg_7d_eggs,
+        "avg_7d_lay_rate": avg_7d_lay_rate,
+        "lifetime_collected": lifetime_collected,
+        "lifetime_dozens_collected": lifetime_dozens_collected,
+        "lifetime_cracked": lifetime_cracked,
+        "lifetime_home": lifetime_home,
+        "lifetime_packed_dz": lifetime_packed_dz,
+        "loose_eggs": loose_eggs,
+        "ready_dozens": ready_dozens,
+        "remainder_loose": remainder_loose,
+        "daily_feed_burn_lbs": daily_feed_burn_lbs,
+        "weekly_feed_lbs": weekly_feed_lbs,
+        "monthly_feed_lbs": monthly_feed_lbs,
+        "monthly_bags": monthly_bags,
+        "logged_feed_lbs": logged_feed_lbs,
+        "logged_feed_cost": logged_feed_cost,
+        "reconciled_feed_cost": reconciled_feed_cost,
+        "feed_cost_source": feed_cost_source,
+        "cost_per_dozen": cost_per_dozen,
+        "linked_sku": linked_sku,
+        "ledger_skus": ledger_skus,
+        "ledger_dozens_sold": ledger_dozens_sold,
+        "ledger_revenue": ledger_revenue,
+        "net_egg_profit": net_egg_profit,
+        "chart_days": chart_days,
+        "chart_peak": chart_peak,
+        "flock_events": flock_events,
+        "egg_logs": egg_logs[:60],
+        "pack_logs": pack_logs,
+        "feed_logs": feed_logs,
+    }

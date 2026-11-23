@@ -531,6 +531,131 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Completed Pickups (1)", pu_after)
         self.assertIn("$270.00", pu_after)
 
+    def test_egg_tracker_laying_flock_graduation_and_iron_ledger_bridge(self):
+        from datetime import date
+        from homestead.database import compute_egg_dashboard, list_batches
+        from inventory.db import get_connection, init_inventory_db
+        from inventory.sales import record_cash_sale
+
+        # Initialize Iron Ledger tables in the shared DB and create a merchant + Chicken Eggs (dz) SKU
+        init_inventory_db()
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
+
+        conn = get_connection()
+        try:
+            m_cur = conn.execute(
+                "INSERT INTO merchants (name, created_at) VALUES ('Cassberry Lane Farm', '2026-01-01T00:00:00')"
+            )
+            mid = int(m_cur.lastrowid)
+            s_cur = conn.execute(
+                """
+                INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,
+                                  name, variant_name, sku_code, category, price_cents,
+                                  currency, active, sell_mode, updated_at)
+                VALUES (?, 'p-eggs', '', 'Chicken Eggs (dz)', '', '', 'Eggs', 500,
+                        'USD', 1, 'unit', '2026-01-01T00:00:00')
+                """,
+                (mid,),
+            )
+            egg_sku_id = int(s_cur.lastrowid)
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 1. Create a chicken chicks batch (15 head) and graduate it into the laying flock
+        self.c.post("/batches/save", data={
+            "name": "Spring Pullets",
+            "species": "chicken chicks",
+            "start_date": "2026-05-01",
+            "initial_quantity": "15",
+            "unit_cost": "4.00",
+            "avg_dressed_weight": "4.5",
+            "sale_price_per_lb": "6.50",
+            "processing_cost": "5.00",
+            "lifecycle_type": "live_arrival",
+            "next_url": "/batches",
+        }, follow_redirects=False)
+        bid = list_batches()[0]["id"]
+
+        r_grad = self.c.post(f"/batches/{bid}/graduate-layers", data={"head_count": "15"}, follow_redirects=False)
+        self.assertEqual(r_grad.status_code, 303)
+
+        # 2. Add 5 more hens via /eggs/flock -> 20 active laying hens
+        r_fl = self.c.post("/eggs/flock", data={
+            "event_date": date.today().isoformat(),
+            "reason": "purchase",
+            "count": "5",
+            "notes": "ISA Browns",
+        }, follow_redirects=False)
+        self.assertEqual(r_fl.status_code, 303)
+
+        # 3. Link Iron Ledger Chicken Eggs (dz) SKU and set layer feed settings
+        r_cfg = self.c.post("/eggs/settings", data={
+            "feed_lbs_per_hen_day": "0.25",
+            "bag_price": "20.00",
+            "ledger_sku_id": str(egg_sku_id),
+        }, follow_redirects=False)
+        self.assertEqual(r_cfg.status_code, 303)
+
+        # 4. Log 30 eggs collected today (2 cracked, 1 home used -> 27 packable loose eggs = 2 full dz + 3 loose)
+        r_log = self.c.post("/eggs/log", data={
+            "log_date": date.today().isoformat(),
+            "total_collected": "30",
+            "cracked_unusable": "2",
+            "home_used": "1",
+            "notes": "Coop check",
+        }, follow_redirects=False)
+        self.assertEqual(r_log.status_code, 303)
+
+        # Log 1 bag of layer feed ($15.00 for easy math -> $15.00 / 2.5 dz collected = $6.00/dz)
+        r_fd = self.c.post("/eggs/feed", data={
+            "feed_date": date.today().isoformat(),
+            "bags": "1",
+            "feed_lbs": "50",
+            "cost_total": "15.00",
+            "notes": "Layer pellets",
+        }, follow_redirects=False)
+        self.assertEqual(r_fd.status_code, 303)
+
+        dash1 = compute_egg_dashboard(1)
+        self.assertEqual(dash1["active_hens"], 20)
+        self.assertEqual(dash1["loose_eggs"], 27)
+        self.assertEqual(dash1["ready_dozens"], 2)
+        self.assertEqual(dash1["remainder_loose"], 3)
+        self.assertAlmostEqual(dash1["cost_per_dozen"], 6.0)
+
+        # 5. Pack 2 dozen cartons & sync to Iron Ledger -> loose_eggs drops to 3, Iron Ledger stock becomes +2 dz!
+        r_pk = self.c.post("/eggs/pack", data={
+            "pack_date": date.today().isoformat(),
+            "dozens_packed": "2",
+            "sync_to_ledger": "1",
+            "notes": "Market cooler",
+        }, follow_redirects=False)
+        self.assertEqual(r_pk.status_code, 303)
+
+        dash2 = compute_egg_dashboard(1)
+        self.assertEqual(dash2["loose_eggs"], 3)
+        self.assertEqual(dash2["linked_sku"]["on_hand"], 2.0)
+
+        # 6. Sell 2 dozen in Iron Ledger ($5.00/dz = $10.00) -> /eggs pulls 2.0 dz sold & $10.00 revenue automatically!
+        record_cash_sale(mid, "egg-sale-1", [{"sku_id": egg_sku_id, "quantity": 2}], payment_type="cash")
+        dash3 = compute_egg_dashboard(1)
+        self.assertEqual(dash3["linked_sku"]["on_hand"], 0.0)
+        self.assertEqual(dash3["ledger_dozens_sold"], 2.0)
+        self.assertAlmostEqual(dash3["ledger_revenue"], 10.0)
+
+        eggs_html = self.c.get("/eggs").text
+        self.assertIn("Eggs &amp; Laying Flock", eggs_html)
+        self.assertIn("Chicken Eggs (dz)", eggs_html)
+        self.assertIn("+2 synced", eggs_html)
+
+        radar_html = self.c.get("/").text
+        self.assertIn("Today's Eggs", radar_html)
+        self.assertIn("20 active laying hens", radar_html)
+
+        feed_html = self.c.get("/feed").text
+        self.assertIn("Laying Flock Feed Demand (20 active hens)", feed_html)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,9 +10,33 @@
 
 <div class="cards three">
   <div class="card"><small>Active batches</small><div class="big">{{ active_schedules|length }}</div><small>Currently running{% if planned_schedules %} · +{{ planned_schedules|length }} planned{% endif %}</small></div>
-  <div class="card"><small>On-farm head</small><div class="big">{{ total_head }}</div><small>Live on farm · {{ total_losses }} losses</small></div>
+  <div class="card"><small>On-farm head</small><div class="big">{{ total_head + (egg_dash.active_hens if egg_dash else 0) }}</div><small>{{ total_head }} batch head{% if egg_dash and egg_dash.active_hens %} · {{ egg_dash.active_hens }} layers{% endif %} · {{ total_losses }} losses</small></div>
   <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
 </div>
+
+{% if egg_dash %}
+<div class="card" style="margin-bottom:18px">
+  <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+    <div>
+      <div class="row" style="align-items:center;gap:8px">
+        <h2 style="margin:0">Today's Eggs</h2>
+        <span class="pill green">{{ egg_dash.today_eggs }} collected ({{ '%.0f'|format(egg_dash.today_lay_rate) }}% lay rate)</span>
+        {% if egg_dash.ready_dozens > 0 %}
+          <a href="/eggs" class="pill amber" style="text-decoration:none">{{ egg_dash.ready_dozens }} dz ready to pack →</a>
+        {% endif %}
+      </div>
+      <small class="muted">{{ egg_dash.active_hens }} active laying hens · {{ egg_dash.loose_eggs }} loose eggs on hand · 7d avg {{ egg_dash.avg_7d_eggs }}/day</small>
+    </div>
+    <form method="post" action="/eggs/log" class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
+      <input type="hidden" name="next_url" value="/">
+      <input type="hidden" name="log_date" value="{{ egg_dash.today_iso }}">
+      <input type="number" name="total_collected" min="1" placeholder="Eggs collected" required style="width:130px;margin:0">
+      <button class="btn sm primary">+ Log eggs</button>
+      <a href="/eggs" class="btn sm">Eggs Hub →</a>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {% if timeline %}
 <div class="card">
