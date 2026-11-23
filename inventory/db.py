@@ -12,6 +12,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS merchants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    venmo_handle TEXT NOT NULL DEFAULT '',
+    paypal_handle TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 
@@ -217,6 +219,11 @@ def init_inventory_db() -> None:
             conn.execute("ALTER TABLE skus ADD COLUMN sell_mode TEXT NOT NULL DEFAULT 'unit'")
         if "item_type" not in sku_cols:
             conn.execute("ALTER TABLE skus ADD COLUMN item_type TEXT NOT NULL DEFAULT 'product'")
+        merchant_cols = {r["name"] for r in conn.execute("PRAGMA table_info(merchants)")}
+        if "venmo_handle" not in merchant_cols:
+            conn.execute("ALTER TABLE merchants ADD COLUMN venmo_handle TEXT NOT NULL DEFAULT ''")
+        if "paypal_handle" not in merchant_cols:
+            conn.execute("ALTER TABLE merchants ADD COLUMN paypal_handle TEXT NOT NULL DEFAULT ''")
         conn.commit()
     finally:
         conn.close()

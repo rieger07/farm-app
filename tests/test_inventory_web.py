@@ -778,6 +778,31 @@ class WebTest(unittest.TestCase):
         self.assertNotIn("$12.00", phys_list)
         self.assertNotIn("$18.00", phys_list)
 
+    def test_payment_handles_settings_and_quick_sale_qr(self):
+        c = self.client("zach")
+        r = c.post(
+            "/settings/payment-handles",
+            data={
+                "venmo_handle": "https://venmo.com/u/@CassberryFarm/",
+                "paypal_handle": "https://www.paypal.me/CassberryFarm/",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r.status_code, 303)
+
+        settings_html = c.get("/settings").text
+        self.assertIn("venmo.com/CassberryFarm", settings_html)
+        self.assertIn("paypal.me/CassberryFarm", settings_html)
+
+        qs_html = c.get("/quick-sale").text
+        self.assertIn('"venmo_handle": "CassberryFarm"', qs_html)
+        self.assertIn('"paypal_handle": "CassberryFarm"', qs_html)
+        self.assertIn("qrcode.min.js", qs_html)
+        self.assertIn('id="qrm"', qs_html)
+        self.assertIn('id="digital-pay-box"', qs_html)
+
+        self.assertEqual(c.get("/static/qrcode.min.js").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()
