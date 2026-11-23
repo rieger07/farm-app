@@ -8,6 +8,8 @@
     <p class="sub">{{ b.name }} · {{ b.species|title }} · Tap any weighed bird to assign a customer or update pickup</p>
   </div>
   <div class="row">
+    <a href="/batches/{{ b.id }}/preorders" class="btn sm">Pre-Orders</a>
+    <a href="/batches/{{ b.id }}/pickup" class="btn sm primary">Pickup Day →</a>
     <a href="/customers" class="btn sm">Customers</a>
     <button type="button" class="btn sm" id="copy-weights-btn" onclick="copyHarvestList()">Copy list</button>
     <a href="/batches/{{ b.id }}/harvest.csv" class="btn sm">Export CSV</a>
@@ -94,9 +96,14 @@
       <button type="button" class="btn sm" id="pk-copy" onclick="copyPickUrl()">Copy link</button>
       <a href="{{ pick_url }}" target="_blank" rel="noopener" class="btn sm primary">Open ↗</a>
     </div>
-    <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-      <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 bird per customer
-    </label>
+    <div class="row" style="gap:16px;flex-wrap:wrap">
+      <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 bird per customer
+      </label>
+      <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="pk-po-only" {{ 'checked' if tally.picking_preorder_only }} onchange="savePickingSettings()"> Pre-order customers only (early access &amp; reserved qty limit)
+      </label>
+    </div>
   </div>
 </div>
 
@@ -412,11 +419,16 @@ function copyPickupMsg() {
 async function savePickingSettings() {
   const enabled = document.getElementById('pk-enabled').checked;
   const limit1 = document.getElementById('pk-limit1').checked;
+  const poOnly = document.getElementById('pk-po-only').checked;
   document.getElementById('pk-details').hidden = !enabled;
   const resp = await fetch(`/api/batches/${BATCH_ID}/picking`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ picking_enabled: enabled, max_birds_per_customer: limit1 ? 1 : null }),
+    body: JSON.stringify({
+      picking_enabled: enabled,
+      max_birds_per_customer: limit1 ? 1 : null,
+      picking_preorder_only: poOnly,
+    }),
   });
   if (resp.ok) {
     const data = await resp.json();

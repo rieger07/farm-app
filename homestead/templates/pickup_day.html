@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}Pickup Day · {{ b.name }} · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="pagehead">
+  <div>
+    <h1>Pickup Day Checkout</h1>
+    <p class="sub">
+      {{ b.name }} ({{ b.species|title }})
+      {% if b.pickup_date %} · Pickup {{ b.pickup_date }}{% endif %}
+      {% if b.pickup_window %} ({{ b.pickup_window }}){% endif %}
+      {% if pickup_location %} · {{ pickup_location }}{% endif %}
+    </p>
+  </div>
+  <div class="row">
+    <a href="/batches/{{ b.id }}/harvest" class="btn">Harvest Tally</a>
+    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders</a>
+    <a href="/batches/{{ b.id }}" class="btn">Batch Logs</a>
+  </div>
+</div>
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<div class="cards four">
+  <div class="card">
+    <small>Pending Pickups</small>
+    <div class="big">{{ pending_groups|length }}</div>
+    <small>{{ pending_groups|sum(attribute='birds', start=[])|length }} birds waiting</small>
+  </div>
+  <div class="card">
+    <small>Completed</small>
+    <div class="big">{{ completed_groups|length }}</div>
+    <small>{{ completed_groups|sum(attribute='birds', start=[])|length }} birds picked up</small>
+  </div>
+  <div class="card">
+    <small>Balance Due</small>
+    <div class="big">${{ '%.2f'|format(total_balance_due) }}</div>
+    <small>Across pending pickups</small>
+  </div>
+  <div class="card">
+    <small>Collected So Far</small>
+    <div class="big">${{ '%.2f'|format(total_collected) }}</div>
+    <small>${{ '%.2f'|format(total_deposits) }} in deposits</small>
+  </div>
+</div>
+
+{% if not pickup_cfg.venmo_handle and not pickup_cfg.paypal_handle %}
+<div class="notice" style="background:#faf9f3;border-color:var(--line);color:var(--ink)">
+  Tip: Add your Venmo or PayPal.Me handle in <a href="/settings#pickup-payments"><b>Settings → Farm Pickup &amp; Payments</b></a> to unlock 1-tap customer QR codes right on each pickup card.
+</div>
+{% endif %}
+
+<div class="row" style="justify-content:space-between;align-items:center;margin:14px 0 10px;gap:10px;flex-wrap:wrap">
+  <h2 style="margin:0">Waiting for Pickup ({{ pending_groups|length }})</h2>
+  <input id="pu-search" type="search" placeholder="Search customer or bird #..." oninput="filterPickupCards()" style="max-width:280px;margin:0">
+</div>
+
+<div id="pu-pending-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:22px">
+{% for g in pending_groups %}
+  <div class="card pu-card" data-search="{{ (g.name ~ ' ' ~ g.phone ~ ' ' ~ g.email ~ ' ' ~ g.bird_nums_label)|lower }}" style="margin-bottom:0;display:flex;flex-direction:column;gap:10px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+      <div>
+        <a href="/customers?selected={{ g.customer_id }}" style="text-decoration:none"><b style="font-size:17px">{{ g.name }}</b></a>
+        <small class="muted" style="display:block">{{ g.phone or g.email or 'No contact on file' }}</small>
+      </div>
+      <div style="text-align:right">
+        {% if g.balance_due > 0 %}
+          <small class="muted" style="display:block">Balance due</small>
+          <b style="font-size:22px;color:var(--green)">${{ '%.2f'|format(g.balance_due) }}</b>
+        {% else %}
+          <span class="pill green">Paid in full</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px">
+      {% for bird in g.birds %}
+      <div class="row" style="justify-content:space-between;align-items:center;padding:3px 0{% if not loop.last %};border-bottom:1px solid var(--line){% endif %}">
+        <span><b>Bird #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
+        <b>${{ '%.2f'|format(bird.effective_price) }}</b>
+      </div>
+      {% endfor %}
+      {% if g.deposits_paid > 0 %}
+      <div class="row" style="justify-content:space-between;padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);color:var(--green)">
+        <span>Deposit credited</span>
+        <b>-${{ '%.2f'|format(g.deposits_paid) }}</b>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="row" style="gap:6px;flex-wrap:wrap">
+      {% if pickup_cfg.venmo_handle and g.balance_due > 0 %}
+      <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
+        onclick='openPickupQr("venmo", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.bird_nums_label|tojson }})'>
+        Venmo QR
+      </button>
+      {% endif %}
+      {% if pickup_cfg.paypal_handle and g.balance_due > 0 %}
+      <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
+        onclick='openPickupQr("paypal", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.bird_nums_label|tojson }})'>
+        PayPal QR
+      </button>
+      {% endif %}
+      {% set rem_msg = 'Hi ' ~ g.name ~ '! Reminder for your ' ~ b.name ~ ' pickup' ~ ((' on ' ~ b.pickup_date) if b.pickup_date else '') ~ ((' (' ~ b.pickup_window ~ ')') if b.pickup_window else '') ~ ((' at ' ~ pickup_location) if pickup_location else '') ~ '. Your order: Bird ' ~ g.bird_nums_label ~ ' (' ~ ('%.2f'|format(g.total_lbs)) ~ ' lb total). Balance due: $' ~ ('%.2f'|format(g.balance_due)) ~ '.' ~ ((' ' ~ pickup_instructions) if pickup_instructions else '') %}
+      {% if g.phone %}
+      <a class="btn sm" href="sms:{{ g.phone }}?&body={{ rem_msg|urlencode }}">Text reminder</a>
+      {% endif %}
+      {% if g.email %}
+      <a class="btn sm" href="mailto:{{ g.email }}?subject={{ (b.name ~ ' Pickup Reminder')|urlencode }}&body={{ rem_msg|urlencode }}">Email</a>
+      {% endif %}
+    </div>
+
+    <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/settle" id="pu-form-{{ g.customer_id }}" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
+      <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+        <label style="flex:1;min-width:120px;margin:0;font-size:12px">
+          Collected today ($)
+          <input type="number" step="0.01" min="0" name="collected_today" id="pu-amt-{{ g.customer_id }}" value="{{ '%.2f'|format(g.balance_due) }}" style="margin-top:2px">
+        </label>
+        <button class="btn primary" style="flex:1;min-width:150px">✓ Paid &amp; Picked Up</button>
+      </div>
+    </form>
+  </div>
+{% else %}
+  <div class="card empty" style="grid-column:1/-1">
+    {% if completed_groups %}
+      All pickups for this batch are complete!
+    {% else %}
+      No customers have assigned birds in this batch yet. Assign birds in <a href="/batches/{{ b.id }}/harvest">Harvest Tally</a> or open <a href="/batches/{{ b.id }}/harvest">Public Picking</a>.
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+
+{% if completed_groups %}
+<details class="card table-card">
+  <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Completed Pickups ({{ completed_groups|length }})</summary>
+  <table>
+    <thead><tr><th>Customer</th><th>Birds</th><th class="num">Weight</th><th class="num">Total Paid</th><th></th></tr></thead>
+    <tbody>
+    {% for g in completed_groups %}
+      <tr>
+        <td><b>{{ g.name }}</b><small class="muted" style="display:block">{{ g.phone or g.email or '' }}</small></td>
+        <td>Bird {{ g.bird_nums_label }}</td>
+        <td class="num">{{ '%.2f'|format(g.total_lbs) }} lb</td>
+        <td class="num"><b>${{ '%.2f'|format(g.effective_total) }}</b></td>
+        <td class="num">
+          <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/reopen" style="display:inline">
+            <button class="link">Undo</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+<dialog id="pu-qrm" class="card" style="width:100%;max-width:360px;padding:18px">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+    <div>
+      <h2 id="pu-qr-title" style="margin:0">Pay with Venmo</h2>
+      <small id="pu-qr-handle" class="muted"></small>
+    </div>
+    <b id="pu-qr-amount" style="font-size:24px;color:var(--green)">$0.00</b>
+  </div>
+  <div id="pu-qr-svg" style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:center"></div>
+  <small id="pu-qr-note" class="muted" style="display:block;text-align:center;margin:8px 0 12px"></small>
+  <div class="row" style="gap:8px;margin-bottom:10px">
+    <button type="button" id="pu-qr-copy" class="btn sm" style="flex:1">Copy link</button>
+    <a id="pu-qr-charge" class="btn sm" style="flex:1;text-align:center;text-decoration:none" href="#" target="_blank" rel="noopener" hidden>Request in Venmo</a>
+  </div>
+  <div class="row" style="justify-content:space-between;gap:8px">
+    <button type="button" class="btn" onclick="document.getElementById('pu-qrm').close()">Close</button>
+    <button type="button" id="pu-qr-done" class="btn primary" style="flex:1">Payment received · Mark Paid &amp; Picked Up</button>
+  </div>
+</dialog>
+
+<script src="{{ asset('qrcode.min.js') }}"></script>
+<script>
+const BATCH_NAME = {{ b.name|tojson }};
+const VENMO_HANDLE = {{ (pickup_cfg.venmo_handle or '')|tojson }};
+const PAYPAL_HANDLE = {{ (pickup_cfg.paypal_handle or '')|tojson }};
+let activeQrCid = null;
+let activeQrUrl = '';
+
+function filterPickupCards() {
+  const q = (document.getElementById('pu-search').value || '').trim().toLowerCase();
+  document.querySelectorAll('.pu-card').forEach(c => {
+    c.hidden = q && !(c.dataset.search || '').includes(q);
+  });
+}
+
+function openPickupQr(provider, cid, custName, birdNums) {
+  activeQrCid = cid;
+  const amtIn = document.getElementById('pu-amt-' + cid);
+  const amtVal = Math.max(0, parseFloat((amtIn && amtIn.value) || '0') || 0);
+  const amtStr = amtVal.toFixed(2);
+  const note = `Pickup: ${BATCH_NAME} (Bird ${birdNums}) - ${custName}`;
+  const isVenmo = provider === 'venmo';
+  const handle = isVenmo ? VENMO_HANDLE : PAYPAL_HANDLE;
+  if (!handle) return;
+
+  activeQrUrl = isVenmo
+    ? `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&amount=${encodeURIComponent(amtStr)}&note=${encodeURIComponent(note)}`
+    : `https://paypal.me/${encodeURIComponent(handle)}/${amtStr}USD`;
+
+  document.getElementById('pu-qr-title').textContent = isVenmo ? 'Pay with Venmo' : 'Pay with PayPal';
+  document.getElementById('pu-qr-handle').textContent = isVenmo ? ('@' + handle) : ('paypal.me/' + handle);
+  document.getElementById('pu-qr-amount').textContent = '$' + amtStr;
+  document.getElementById('pu-qr-note').textContent = note;
+
+  const stage = document.getElementById('pu-qr-svg');
+  if (typeof window.qrcode === 'function') {
+    const qr = window.qrcode(0, 'M');
+    qr.addData(activeQrUrl);
+    qr.make();
+    stage.innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
+    const svg = stage.querySelector('svg');
+    if (svg) { svg.style.width = '100%'; svg.style.maxWidth = '230px'; svg.style.height = 'auto'; }
+  }
+
+  const chargeBtn = document.getElementById('pu-qr-charge');
+  if (isVenmo) {
+    chargeBtn.hidden = false;
+    chargeBtn.href = `https://venmo.com/?txn=charge&amount=${encodeURIComponent(amtStr)}&note=${encodeURIComponent(note)}`;
+  } else {
+    chargeBtn.hidden = true;
+  }
+
+  document.getElementById('pu-qrm').showModal();
+}
+
+document.getElementById('pu-qr-copy').onclick = async function() {
+  if (!activeQrUrl) return;
+  const orig = this.textContent;
+  try {
+    await navigator.clipboard.writeText(activeQrUrl);
+    this.textContent = 'Copied!';
+    setTimeout(() => this.textContent = orig, 1500);
+  } catch (e) {
+    window.prompt('Copy payment link:', activeQrUrl);
+  }
+};
+
+document.getElementById('pu-qr-done').onclick = function() {
+  document.getElementById('pu-qrm').close();
+  if (activeQrCid) {
+    const f = document.getElementById('pu-form-' + activeQrCid);
+    if (f) f.submit();
+  }
+};
+</script>
+{% endblock %}

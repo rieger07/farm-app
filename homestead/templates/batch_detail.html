@@ -13,8 +13,11 @@
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
       <button class="btn primary">Start now</button>
     </form>
+    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders{% if po_summary.reserved_qty %} ({{ po_summary.reserved_qty }}){% endif %}</a>
     {% else %}
+    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders{% if po_summary.reserved_qty %} ({{ po_summary.reserved_qty }}){% endif %}</a>
     <a href="/batches/{{ b.id }}/harvest" class="btn primary">Harvest tally</a>
+    <a href="/batches/{{ b.id }}/pickup" class="btn">Pickup Day{% if pending_pickup_customers %} ({{ pending_pickup_customers }}){% endif %}</a>
     {% endif %}
     {% if gcal_arrival_url %}<a href="{{ gcal_arrival_url }}" target="_blank" rel="noopener" class="btn">GCal: {{ s.initial_label }}</a>{% endif %}
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
@@ -45,7 +48,10 @@
         <span class="pill gray">Public picking off</span>
       {% endif %}
     </div>
-    <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Manage in Harvest Tally →</a>
+    <div class="row" style="gap:6px">
+      <a href="/batches/{{ b.id }}/pickup" class="btn sm">Pickup Day{% if pending_pickup_customers %} ({{ pending_pickup_customers }}){% endif %} →</a>
+      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Manage in Harvest Tally →</a>
+    </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">

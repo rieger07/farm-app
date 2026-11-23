@@ -368,6 +368,169 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("1 picked", blist_html)
         self.assertIn("1 frz", blist_html)
 
+    def test_preorders_waitlist_priority_picking_and_pickup_day(self):
+        from unittest.mock import patch
+        from homestead.database import list_batches
+        from homestead.scheduling import compute_batch_schedule
+
+        # Register admin & save Farm Pickup + Venmo/PayPal handles
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
+        r_set = self.c.post("/settings/pickup-payments", data={
+            "farm_name": "Cassberry Lane Farm",
+            "pickup_address": "123 Farm Rd",
+            "pickup_instructions": "Bring a cooler!",
+            "venmo_handle": "https://venmo.com/u/@CassberryFarm/",
+            "paypal_handle": "https://paypal.me/CassberryFarm/",
+        }, follow_redirects=False)
+        self.assertEqual(r_set.status_code, 303)
+        set_html = self.c.get("/settings").text
+        self.assertIn("venmo.com/CassberryFarm", set_html)
+        self.assertIn("paypal.me/CassberryFarm", set_html)
+
+        # Create a turkey batch ($7.50/lb)
+        self.c.post("/batches/save", data={
+            "name": "Fall Turkeys",
+            "species": "turkey chicks",
+            "start_date": "2026-07-01",
+            "initial_quantity": "10",
+            "unit_cost": "12.00",
+            "avg_dressed_weight": "16.0",
+            "sale_price_per_lb": "7.50",
+            "processing_cost": "10.00",
+            "lifecycle_type": "live_arrival",
+            "next_url": "/batches",
+        }, follow_redirects=False)
+        batch = list_batches()[0]
+        bid = batch["id"]
+        slug = batch["picking_slug"]
+
+        # Enable pre-orders (cap=2, $25/bird deposit)
+        r_po_cfg = self.c.post(f"/batches/{bid}/preorders/settings", data={
+            "preorder_enabled": "1",
+            "preorder_cap": "2",
+            "deposit_per_bird": "25.00",
+            "pickup_date": "2026-11-24",
+            "pickup_window": "Tue 3pm-6pm",
+            "preorder_notes": "Pasture-raised heritage turkeys.",
+        }, follow_redirects=False)
+        self.assertEqual(r_po_cfg.status_code, 303)
+
+        anon = TestClient(app)
+        res_html = anon.get(f"/reserve/{slug}").text
+        self.assertIn("2 spots left", res_html)
+        self.assertIn("$25.00/bird", res_html)
+
+        # Customer A reserves 2 birds -> reserved, $50 deposit, fires ntfy
+        with patch("app.send_ntfy_async") as mock_ntfy:
+            r_a = anon.post(f"/api/reserve/{slug}", json={
+                "name": "Alice Green",
+                "contact": "555-222-3333",
+                "quantity": 2,
+                "notes": "Two medium birds",
+            })
+            self.assertEqual(r_a.status_code, 200)
+            da = r_a.json()
+            self.assertEqual(da["status"], "reserved")
+            self.assertAlmostEqual(da["deposit_total"], 50.0)
+            self.assertEqual(da["venmo_handle"], "CassberryFarm")
+            mock_ntfy.assert_called_once()
+
+        # Cap is now full -> page switches to Waitlist Open & Customer B goes to waitlist
+        res_full_html = anon.get(f"/reserve/{slug}").text
+        self.assertIn("Waitlist Open", res_full_html)
+        with patch("app.send_ntfy_async") as mock_ntfy:
+            r_b = anon.post(f"/api/reserve/{slug}", json={
+                "name": "Ben Waiter",
+                "contact": "ben@example.com",
+                "quantity": 1,
+            })
+            self.assertEqual(r_b.status_code, 200)
+            db_res = r_b.json()
+            self.assertEqual(db_res["status"], "waitlist")
+            mock_ntfy.assert_called_once()
+
+        # Farmer marks Alice's $50 deposit paid
+        po_id_a = da["preorder_id"]
+        po_id_b = db_res["preorder_id"]
+        r_paid = self.c.post(f"/batches/{bid}/preorders/{po_id_a}/mark-paid", data={}, follow_redirects=False)
+        self.assertEqual(r_paid.status_code, 303)
+        po_page = self.c.get(f"/batches/{bid}/preorders").text
+        self.assertIn("Paid $50.00", po_page)
+        self.assertIn("Ben Waiter", po_page)
+
+        # Weigh 3 birds and enable Pre-Order Priority Picking
+        b1 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 16.0, "for_sale": True}).json()["entries"][0]["id"]
+        b2 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 18.0, "for_sale": True}).json()["entries"][0]["id"]
+        b3 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 15.0, "for_sale": True}).json()["entries"][0]["id"]
+
+        self.assertEqual(
+            self.c.post(f"/api/batches/{bid}/picking", json={
+                "picking_enabled": True,
+                "max_birds_per_customer": 1,
+                "picking_preorder_only": True,
+            }).status_code,
+            200,
+        )
+
+        # Waitlisted Ben is blocked while picking_preorder_only is ON
+        r_ben_id = anon.post(f"/api/pick/{slug}/identify", json={"name": "Ben Waiter", "contact": "ben@example.com"})
+        self.assertEqual(r_ben_id.status_code, 403)
+
+        # Reserved Alice can identify with effective_max_birds = 2 and unapplied deposit $50
+        r_al_id = anon.post(f"/api/pick/{slug}/identify", json={"name": "Alice Green", "contact": "+1 (555) 222-3333"})
+        self.assertEqual(r_al_id.status_code, 200)
+        al_ident = r_al_id.json()
+        self.assertEqual(al_ident["effective_max_birds"], 2)
+        self.assertAlmostEqual(al_ident["unapplied_deposit"], 50.0)
+
+        # Alice claims Bird #1 ($120) & Bird #2 ($135) -> $25 deposit auto-credited onto EACH bird!
+        with patch("app.send_ntfy_async"):
+            c1 = anon.post(f"/api/pick/{slug}/claim/{b1}", json={"customer_id": al_ident["customer_id"]})
+            self.assertEqual(c1.status_code, 200)
+            self.assertAlmostEqual(c1.json()["bird"]["deposit_paid"], 25.0)
+            c2 = anon.post(f"/api/pick/{slug}/claim/{b2}", json={"customer_id": al_ident["customer_id"]})
+            self.assertEqual(c2.status_code, 200)
+            self.assertAlmostEqual(c2.json()["bird"]["deposit_paid"], 25.0)
+            # 3rd bird blocked by her reserved qty of 2
+            c3 = anon.post(f"/api/pick/{slug}/claim/{b3}", json={"customer_id": al_ident["customer_id"]})
+            self.assertEqual(c3.status_code, 409)
+
+        # Promote Ben from waitlist -> Ben can now claim Bird #3
+        self.assertEqual(
+            self.c.post(f"/batches/{bid}/preorders/{po_id_b}/promote", follow_redirects=False).status_code,
+            303,
+        )
+        r_ben_ok = anon.post(f"/api/pick/{slug}/identify", json={"name": "Ben Waiter", "contact": "ben@example.com"})
+        self.assertEqual(r_ben_ok.status_code, 200)
+        with patch("app.send_ntfy_async"):
+            self.assertEqual(
+                anon.post(f"/api/pick/{slug}/claim/{b3}", json={"customer_id": r_ben_ok.json()["customer_id"]}).status_code,
+                200,
+            )
+
+        # Pickup Day board groups Alice's 2 birds ($255 total - $50 deposit = $205 due)
+        pu_html = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn("Alice Green", pu_html)
+        self.assertIn("-$50.00", pu_html)
+        self.assertIn("$205.00", pu_html)
+        self.assertIn("Venmo QR", pu_html)
+        self.assertIn("123 Farm Rd", pu_html)
+
+        # Settle Alice with $220 collected today ($15 tip -> $270 total realized revenue!)
+        r_settle = self.c.post(
+            f"/batches/{bid}/pickup/{al_ident['customer_id']}/settle",
+            data={"collected_today": "220.00"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_settle.status_code, 303)
+        sched = compute_batch_schedule(list_batches()[0])
+        self.assertAlmostEqual(sched["actual_sales_revenue"], 270.0)
+        self.assertEqual(sched["harvest_picked_up_head"], 2)
+
+        pu_after = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn("Completed Pickups (1)", pu_after)
+        self.assertIn("$270.00", pu_after)
+
 
 if __name__ == "__main__":
     unittest.main()

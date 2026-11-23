@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Reserve · {{ batch_name }}{% endblock %}
+{% block body %}
+<div style="max-width:680px;margin:0 auto;padding:24px 16px 48px">
+  <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+    <div class="brand" style="display:flex;align-items:center;gap:10px">
+      <img src="/static/logo.png" alt="{{ farm_name }}" style="width:32px;height:32px;border-radius:8px">
+      <div>{{ batch_name }}<small>{{ farm_name }} · {{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb</small></div>
+    </div>
+    {% if preorder_enabled %}
+      {% if is_waitlist_mode %}
+        <span class="pill amber">Waitlist Open</span>
+      {% else %}
+        <span class="pill green">{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left</span>
+      {% endif %}
+    {% endif %}
+  </header>
+
+  <div id="toast" class="notice" hidden></div>
+
+  {% if not preorder_enabled %}
+  <div class="card empty">
+    <h2>Pre-orders are currently closed</h2>
+    <p class="sub">Please check back with the farm when reservations open.</p>
+  </div>
+  {% else %}
+
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px">
+      <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+        <small>Price</small>
+        <div style="font:700 18px Georgia,serif">${{ '%.2f'|format(sale_price_per_lb) }}/lb</div>
+        {% if avg_dressed_weight > 0 %}<small class="muted">~{{ '%.1f'|format(avg_dressed_weight) }} lb avg</small>{% endif %}
+      </div>
+      <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+        <small>Deposit</small>
+        <div style="font:700 18px Georgia,serif">{% if deposit_per_bird > 0 %}${{ '%.2f'|format(deposit_per_bird) }}/bird{% else %}None{% endif %}</div>
+        <small class="muted">{% if deposit_per_bird > 0 %}Credited at pickup{% else %}Pay at pickup{% endif %}</small>
+      </div>
+      {% if pickup_date or pickup_window %}
+      <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+        <small>Est. Pickup</small>
+        <div style="font:700 16px Georgia,serif">{{ pickup_date or 'TBD' }}</div>
+        {% if pickup_window %}<small class="muted">{{ pickup_window }}</small>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% if preorder_notes %}
+      <p style="margin:6px 0 0;font-size:14px;line-height:1.45">{{ preorder_notes }}</p>
+    {% endif %}
+    {% if pickup_location %}
+      <small class="muted" style="display:block;margin-top:6px">Pickup location: {{ pickup_location }}</small>
+    {% endif %}
+  </div>
+
+  <div class="card" id="reserve-form-card">
+    {% if is_waitlist_mode %}
+      <h2 style="margin-bottom:4px">All spots are currently spoken for — Join the Waitlist</h2>
+      <p class="sub" style="margin-bottom:12px">Enter your details below and we'll notify you right away if a spot opens up or we have extra birds at harvest.</p>
+    {% else %}
+      <h2 style="margin-bottom:4px">Reserve your {{ species|title }}</h2>
+      <p class="sub" style="margin-bottom:12px">Enter your name, phone or email, and how many you'd like to hold.</p>
+    {% endif %}
+    <form class="fgrid" onsubmit="submitReserve(event)">
+      <label>Your name<input id="r-name" required placeholder="e.g. Sarah Miller"></label>
+      <label>Phone or email<input id="r-contact" required placeholder="(555) 123-4567 or email"></label>
+      <label>Quantity
+        <input id="r-qty" type="number" min="1" max="25" value="1" required oninput="updateDepPreview()">
+      </label>
+      <label>Notes (optional)
+        <input id="r-notes" placeholder="Preferred size, pickup note...">
+      </label>
+      {% if deposit_per_bird > 0 and not is_waitlist_mode %}
+      <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
+        <span>Deposit to hold reservation</span>
+        <b id="r-dep-preview" style="font-size:18px;color:var(--green)">${{ '%.2f'|format(deposit_per_bird) }}</b>
+      </div>
+      {% endif %}
+      <div class="full">
+        <button type="submit" class="btn primary wide" id="r-btn">
+          {{ 'Join Waitlist →' if is_waitlist_mode else 'Reserve Now →' }}
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" id="reserve-confirm-card" hidden style="border-color:var(--green);background:#f4f9f5">
+    <h2 id="rc-title" style="margin-bottom:4px">Reservation confirmed!</h2>
+    <p id="rc-sub" class="sub" style="margin-bottom:12px"></p>
+
+    <div id="rc-deposit-box" hidden style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:10px">
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:10px">
+        <b>Send Deposit</b>
+        <b id="rc-dep-amt" style="font-size:22px;color:var(--green)">$0.00</b>
+      </div>
+      <div id="rc-qr-wrap" hidden style="text-align:center;margin:10px 0">
+        <div id="rc-qr-svg" style="display:inline-block;background:#fff;padding:10px;border:1px solid var(--line);border-radius:10px;width:200px;max-width:100%"></div>
+        <small id="rc-qr-caption" class="muted" style="display:block;margin-top:6px"></small>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+        <a id="rc-venmo-btn" class="btn primary" style="flex:1;text-align:center;text-decoration:none" href="#" target="_blank" rel="noopener" hidden>Pay Deposit with Venmo →</a>
+        <a id="rc-paypal-btn" class="btn" style="flex:1;text-align:center;text-decoration:none" href="#" target="_blank" rel="noopener" hidden>Pay with PayPal.Me ↗</a>
+      </div>
+      <small class="muted" style="display:block;margin-top:8px">Once received, your deposit will be marked paid and automatically credited toward your final balance at pickup.</small>
+    </div>
+  </div>
+
+  <script src="{{ asset('qrcode.min.js') }}"></script>
+  <script>
+  const SLUG = {{ slug|tojson }};
+  const BATCH_NAME = {{ batch_name|tojson }};
+  const DEP_PER_BIRD = {{ deposit_per_bird }};
+
+  function updateDepPreview() {
+    const el = document.getElementById('r-dep-preview');
+    if (!el) return;
+    const q = Math.max(1, parseInt(document.getElementById('r-qty').value || '1', 10) || 1);
+    el.textContent = '$' + (q * DEP_PER_BIRD).toFixed(2);
+  }
+
+  async function submitReserve(ev) {
+    ev.preventDefault();
+    const btn = document.getElementById('r-btn');
+    const toast = document.getElementById('toast');
+    toast.hidden = true;
+    btn.disabled = true;
+    try {
+      const resp = await fetch(`/api/reserve/${SLUG}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: document.getElementById('r-name').value.trim(),
+          contact: document.getElementById('r-contact').value.trim(),
+          quantity: parseInt(document.getElementById('r-qty').value || '1', 10) || 1,
+          notes: document.getElementById('r-notes').value.trim(),
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || 'Could not submit reservation.');
+
+      document.getElementById('reserve-form-card').hidden = true;
+      const cc = document.getElementById('reserve-confirm-card');
+      cc.hidden = false;
+
+      if (data.status === 'waitlist') {
+        document.getElementById('rc-title').textContent = 'You are on the Waitlist!';
+        document.getElementById('rc-sub').textContent =
+          `Thanks, ${data.customer_name}! We saved your request for ${data.quantity} × ${BATCH_NAME} on the waitlist and will reach out if a spot opens.`;
+      } else {
+        document.getElementById('rc-title').textContent = '✓ Spot Reserved!';
+        document.getElementById('rc-sub').textContent =
+          `Thanks, ${data.customer_name}! You reserved ${data.quantity} × ${BATCH_NAME}. We'll send you the live bird-picking link once harvest weighing is complete.`;
+
+        if (data.deposit_total > 0) {
+          const box = document.getElementById('rc-deposit-box');
+          box.hidden = false;
+          const amt = Number(data.deposit_total).toFixed(2);
+          document.getElementById('rc-dep-amt').textContent = '$' + amt;
+          const note = `Deposit: ${data.quantity}x ${BATCH_NAME} - ${data.customer_name}`;
+          if (data.venmo_handle) {
+            const vUrl = `https://venmo.com/${encodeURIComponent(data.venmo_handle)}?txn=pay&amount=${encodeURIComponent(amt)}&note=${encodeURIComponent(note)}`;
+            const vBtn = document.getElementById('rc-venmo-btn');
+            vBtn.href = vUrl;
+            vBtn.hidden = false;
+            if (typeof window.qrcode === 'function') {
+              const qr = window.qrcode(0, 'M');
+              qr.addData(vUrl);
+              qr.make();
+              document.getElementById('rc-qr-svg').innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
+              document.getElementById('rc-qr-caption').textContent = `Scan with phone camera to pay $${amt} via Venmo (@${data.venmo_handle})`;
+              document.getElementById('rc-qr-wrap').hidden = false;
+            }
+          }
+          if (data.paypal_handle) {
+            const pUrl = `https://paypal.me/${encodeURIComponent(data.paypal_handle)}/${amt}USD`;
+            const pBtn = document.getElementById('rc-paypal-btn');
+            pBtn.href = pUrl;
+            pBtn.hidden = false;
+            if (!data.venmo_handle && typeof window.qrcode === 'function') {
+              const qr = window.qrcode(0, 'M');
+              qr.addData(pUrl);
+              qr.make();
+              document.getElementById('rc-qr-svg').innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
+              document.getElementById('rc-qr-caption').textContent = `Scan to open paypal.me/${data.paypal_handle} and enter $${amt}`;
+              document.getElementById('rc-qr-wrap').hidden = false;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      toast.textContent = e.message;
+      toast.style.background = '#fbe9e7';
+      toast.style.color = '#a93424';
+      toast.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  </script>
+  {% endif %}
+</div>
+{% endblock %}
