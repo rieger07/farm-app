@@ -68,6 +68,7 @@ from homestead.database import (
     list_customers,
     list_farm_expenses,
     list_users,
+    merge_customers,
     save_batch,
     save_customer,
     save_google_drive_connection,
@@ -728,6 +729,25 @@ def customers_save_submit(
 def customers_delete_submit(customer_id: int, user: dict = Depends(current_user)):
     delete_customer(user["id"], customer_id)
     return RedirectResponse("/customers?msg=" + quote_plus("Customer deleted."), status_code=303)
+
+
+@app.post("/customers/{customer_id}/merge")
+def customers_merge_submit(
+    customer_id: int,
+    target_customer_id: int = Form(...),
+    user: dict = Depends(current_user),
+):
+    try:
+        merge_customers(user["id"], customer_id, target_customer_id)
+        return RedirectResponse(
+            f"/customers?selected={target_customer_id}&msg=" + quote_plus("Merged duplicate customer records."),
+            status_code=303,
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/customers?selected={customer_id}&msg=" + quote_plus(str(exc)),
+            status_code=303,
+        )
 
 
 @app.post("/api/customers")

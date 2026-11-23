@@ -2293,7 +2293,10 @@ PICKUP_STATUSES = ("unassigned", "assigned", "picked_up")
 
 
 def _norm_phone(phone: str) -> str:
-    return "".join(ch for ch in (phone or "") if ch.isdigit())
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
 
 
 def list_customers(user_id: int, search: str = "") -> list[dict]:
@@ -2402,7 +2405,7 @@ def delete_customer(user_id: int, customer_id: int) -> None:
 def find_or_create_customer(
     user_id: int, name: str, contact: str
 ) -> dict:
-    """Match an existing customer by normalized phone or lowercase email, or create one."""
+    """Match an existing customer by normalized phone (handling +1/formatting), email, or exact name; backfill missing contact."""
     clean_name = (name or "").strip()
     clean_contact = (contact or "").strip()
     if not clean_name or not clean_contact:
@@ -2413,11 +2416,41 @@ def find_or_create_customer(
         rows = conn.execute(
             "SELECT * FROM customers WHERE user_id = ?", (int(user_id),)
         ).fetchall()
+        matched = None
         for r in rows:
             if is_email and (r["email"] or "").strip().lower() == clean_contact.lower():
-                return dict(r)
+                matched = dict(r)
+                break
             if not is_email and norm_ph and _norm_phone(r["phone"] or "") == norm_ph:
-                return dict(r)
+                matched = dict(r)
+                break
+        if matched is None:
+            for r in rows:
+                if (r["name"] or "").strip().lower() == clean_name.lower():
+                    # Only auto-match by exact name if the other contact field wasn't conflicting
+                    if is_email and not (r["email"] or "").strip():
+                        matched = dict(r)
+                        break
+                    if not is_email and not _norm_phone(r["phone"] or ""):
+                        matched = dict(r)
+                        break
+        if matched is not None:
+            # Backfill missing phone or email if newly provided
+            if is_email and not (matched.get("email") or "").strip():
+                conn.execute(
+                    "UPDATE customers SET email = ? WHERE id = ? AND user_id = ?",
+                    (clean_contact, int(matched["id"]), int(user_id)),
+                )
+                conn.commit()
+                matched["email"] = clean_contact
+            elif not is_email and not _norm_phone(matched.get("phone") or ""):
+                conn.execute(
+                    "UPDATE customers SET phone = ? WHERE id = ? AND user_id = ?",
+                    (clean_contact, int(matched["id"]), int(user_id)),
+                )
+                conn.commit()
+                matched["phone"] = clean_contact
+            return matched
     cid = save_customer(
         user_id=user_id,
         name=clean_name,
@@ -2426,6 +2459,36 @@ def find_or_create_customer(
         preferred_contact="email" if is_email else "sms",
     )
     return get_customer(user_id, cid) or {"id": cid, "name": clean_name}
+
+
+def merge_customers(user_id: int, source_id: int, target_id: int) -> bool:
+    """Merge source customer into target customer: move all birds, backfill contact/notes, delete source."""
+    if int(source_id) == int(target_id):
+        raise ValueError("Cannot merge a customer into themselves.")
+    src = get_customer(user_id, source_id)
+    tgt = get_customer(user_id, target_id)
+    if not src or not tgt:
+        raise ValueError("Both customers must exist.")
+    merged_phone = (tgt.get("phone") or "").strip() or (src.get("phone") or "").strip()
+    merged_email = (tgt.get("email") or "").strip() or (src.get("email") or "").strip()
+    notes_parts = [p for p in ((tgt.get("notes") or "").strip(), (src.get("notes") or "").strip()) if p]
+    merged_notes = " · ".join(dict.fromkeys(notes_parts))
+    with get_db_connection() as conn:
+        conn.execute(
+            "UPDATE batch_harvests SET customer_id = ?"
+            " WHERE customer_id = ? AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)",
+            (int(target_id), int(source_id), int(user_id)),
+        )
+        conn.execute(
+            "UPDATE customers SET phone = ?, email = ?, notes = ? WHERE id = ? AND user_id = ?",
+            (merged_phone, merged_email, merged_notes, int(target_id), int(user_id)),
+        )
+        conn.execute(
+            "DELETE FROM customers WHERE id = ? AND user_id = ?",
+            (int(source_id), int(user_id)),
+        )
+        conn.commit()
+    return True
 
 
 def list_customer_birds(user_id: int, customer_id: int) -> list[dict]:
