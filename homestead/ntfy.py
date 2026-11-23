@@ -64,7 +64,15 @@ def send_ntfy_notification(
     if not cfg["configured"]:
         return False, "ntfy topic is not configured."
     endpoint = f"{cfg['url']}/{cfg['topic']}"
-    headers = {"Title": title[:120], "Tags": tags}
+    safe_title = (
+        (title or "Homestead Planner")
+        .replace("\u00b7", "-")
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()[:120]
+        or "Homestead Planner"
+    )
+    headers = {"Title": safe_title, "Tags": tags}
     if click_url:
         headers["Click"] = click_url
     if cfg["token"]:

@@ -894,9 +894,9 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
         click_url = f"{str(request.base_url).rstrip('/')}/batches/{batch['id']}/harvest"
         send_ntfy_async(
             int(batch["user_id"]),
-            f"Bird claimed · {batch['name']}",
+            f"Bird claimed - {batch['name']}",
             f"{buyer_name} claimed Bird #{claimed_info['num']} "
-            f"({claimed_info['dressed_lbs']:.2f} lb / {claimed_info['lb_oz']} · "
+            f"({claimed_info['dressed_lbs']:.2f} lb / {claimed_info['lb_oz']} - "
             f"Est. ${claimed_info['est_price']:.2f})",
             click_url=click_url,
         )
@@ -1424,7 +1424,7 @@ def settings_ntfy_save(
 def settings_ntfy_test(request: Request, user: dict = Depends(current_user)):
     ok, detail = send_ntfy_notification(
         user["id"],
-        "Homestead Planner · Test Notification",
+        "Homestead Planner - Test Notification",
         "ntfy push notifications are connected! You'll get alerts when customers claim birds.",
         click_url=f"{str(request.base_url).rstrip('/')}/batches",
         tags="white_check_mark,turkey",
