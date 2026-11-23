@@ -180,7 +180,7 @@ def sales_summary(
                    COUNT(*) AS n,
                    SUM(s.total_cents) AS cents,
                    COALESCE(SUM((
-                     SELECT SUM(si.quantity)
+                     SELECT SUM(CASE WHEN COALESCE(k.sell_mode, 'unit') = 'lb_stock_unit' THEN 1 ELSE si.quantity END)
                      FROM sale_items si
                      LEFT JOIN skus k ON k.id = si.sku_id
                      WHERE si.sale_id = s.id AND COALESCE(k.item_type, 'product') != 'fee'
@@ -337,7 +337,7 @@ def recent_sales(
         "SELECT s.id, s.source, s.occurred_at, s.total_cents, s.status,"
         " s.payment_type, s.cash_received_cents,"
         " COALESCE(("
-        "   SELECT SUM(si.quantity) FROM sale_items si"
+        "   SELECT SUM(CASE WHEN COALESCE(k.sell_mode, 'unit') = 'lb_stock_unit' THEN 1 ELSE si.quantity END) FROM sale_items si"
         "   LEFT JOIN skus k ON k.id = si.sku_id"
         "   WHERE si.sale_id = s.id AND COALESCE(k.item_type, 'product') != 'fee'"
         " ), 0) AS units"
@@ -438,7 +438,8 @@ def market_insights(
                    si.quantity,
                    si.unit_price_cents,
                    s.occurred_at,
-                   COALESCE(k.item_type, 'product') AS item_type
+                   COALESCE(k.item_type, 'product') AS item_type,
+                   COALESCE(k.sell_mode, 'unit') AS sell_mode
             FROM sale_items si
             JOIN sales s ON s.id = si.sale_id
             LEFT JOIN skus k ON k.id = si.sku_id
@@ -476,6 +477,7 @@ def market_insights(
 
     for r in rows:
         qty = float(r["quantity"] or 0)
+        unit_qty = 1.0 if (r["sell_mode"] or "unit") == "lb_stock_unit" else qty
         rev = round(qty * int(r["unit_price_cents"] or 0))
         if r["item_type"] == "fee":
             fee_cents += rev
@@ -486,18 +488,18 @@ def market_insights(
             name,
             {"name": name, "units": 0.0, "revenue_cents": 0, "sale_ids": set()},
         )
-        entry["units"] += qty
+        entry["units"] += unit_qty
         entry["revenue_cents"] += rev
         entry["sale_ids"].add(r["sale_id"])
 
         baskets.setdefault(r["sale_id"], set()).add(name)
-        basket_units[r["sale_id"]] = basket_units.get(r["sale_id"], 0.0) + qty
+        basket_units[r["sale_id"]] = basket_units.get(r["sale_id"], 0.0) + unit_qty
 
         if r["sku_id"] is not None:
             sid = int(r["sku_id"])
             prev_ts, prev_q = last_sold_by_sku.get(sid, ("", 0.0))
             occ = str(r["occurred_at"])
-            last_sold_by_sku[sid] = (occ if occ > prev_ts else prev_ts, prev_q + qty)
+            last_sold_by_sku[sid] = (occ if occ > prev_ts else prev_ts, prev_q + unit_qty)
 
     products = [
         {

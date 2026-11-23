@@ -237,7 +237,8 @@ def marketplace_analytics(
 
         item_rows = conn.execute(
             """
-            SELECT s.occurred_at, si.name_snapshot, si.quantity
+            SELECT s.occurred_at, si.name_snapshot, si.quantity,
+                   COALESCE(k.sell_mode, 'unit') AS sell_mode
             FROM sale_items si
             JOIN sales s ON s.id = si.sale_id
             LEFT JOIN skus k ON k.id = si.sku_id
@@ -264,7 +265,8 @@ def marketplace_analytics(
     day_items: dict[str, Counter[str]] = {}
     for it in item_rows:
         ld = _to_local_date(it["occurred_at"])
-        day_items.setdefault(ld, Counter())[str(it["name_snapshot"] or "Item")] += float(it["quantity"] or 0)
+        u_qty = 1.0 if (it["sell_mode"] or "unit") == "lb_stock_unit" else float(it["quantity"] or 0)
+        day_items.setdefault(ld, Counter())[str(it["name_snapshot"] or "Item")] += u_qty
 
     tagged_dates: set[str] = set()
     market_day_rows: list[dict] = []
@@ -580,7 +582,8 @@ def suggest_pack_list(
             key,
             {"sku_id": sid, "name": name, "sell_mode": r["sell_mode"] or "unit", "total_qty": 0.0},
         )
-        entry["total_qty"] += float(r["quantity"] or 0)
+        qty_units = 1.0 if entry["sell_mode"] == "lb_stock_unit" else float(r["quantity"] or 0)
+        entry["total_qty"] += qty_units
 
     n_days = len(days_seen)
     if not n_days:

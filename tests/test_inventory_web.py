@@ -803,6 +803,58 @@ class WebTest(unittest.TestCase):
 
         self.assertEqual(c.get("/static/qrcode.min.js").status_code, 200)
 
+    def test_lb_stock_unit_pack_list_and_units_count_birds_not_pounds(self):
+        from datetime import datetime, timedelta, timezone
+        from inventory.db import get_connection
+        from inventory.markets import suggest_pack_list
+        from inventory.sales import market_insights, record_cash_sale, sales_summary
+
+        conn = get_connection()
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,
+                                  name, variant_name, sku_code, category, price_cents,
+                                  currency, active, sell_mode, updated_at)
+                VALUES (1, 'p-turkey', '', 'Whole Turkey', '', '', 'Poultry', 750,
+                        'USD', 1, 'lb_stock_unit', '2026-01-01T00:00:00')
+                """
+            )
+            turkey_id = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason, created_at) "
+                "VALUES (1, ?, 10, 'initial', '2026-01-01T00:00:00')",
+                (turkey_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Sell 2 whole turkeys weighing 16 lb each on the same day
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        record_cash_sale(
+            1, "turkey-sale-1",
+            [{"sku_id": turkey_id, "quantity": 16.0}, {"sku_id": turkey_id, "quantity": 16.0}],
+            occurred_at=now_iso,
+        )
+
+        since = (now_dt - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        until = (now_dt + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        pack = suggest_pack_list(1, since, until, timezone.utc)
+        turkey_pack = next(i for i in pack["items"] if i["name"] == "Whole Turkey")
+        # 2 birds across pack["days"] (NOT 32 lbs -> 20/40 units!)
+        expected_avg = round(2.0 / pack["days"], 1)
+        self.assertEqual(turkey_pack["avg_per_day"], expected_avg)
+        self.assertLessEqual(turkey_pack["pack_qty"], 3)
+        self.assertEqual(turkey_pack["unit"], "units")
+
+        ins = market_insights(1, since, until)
+        turkey_ins = next(p for p in ins["top_by_revenue"] if p["name"] == "Whole Turkey")
+        self.assertEqual(turkey_ins["units"], 2)
+        self.assertEqual(turkey_ins["revenue_cents"], 32 * 750)
+
 
 if __name__ == "__main__":
     unittest.main()
