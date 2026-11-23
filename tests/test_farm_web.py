@@ -316,9 +316,10 @@ class FarmWebTest(unittest.TestCase):
         self.assertNotIn("18.0", pick_html)    # not-for-sale bird completely hidden
         self.assertNotIn("Bob Jones", pick_html)  # buyer privacy preserved!
 
-        # Identify-first flow matches existing customer Sarah by phone & claims Bird #2 atomically (fires ntfy!)
+        # Identify-first flow matches existing customer Sarah even with +1 country code & different formatting (fires ntfy!)
         from unittest.mock import patch
-        ident_sarah = anon.post(f"/api/pick/{slug}/identify", json={"name": "Sarah Miller", "contact": "(555) 123-4567"}).json()
+        ident_sarah = anon.post(f"/api/pick/{slug}/identify", json={"name": "Sarah Miller", "contact": "+1 (555) 123-4567"}).json()
+        self.assertEqual(ident_sarah["name"], "Sarah Miller")
         with patch("app.send_ntfy_async") as mock_ntfy:
             r_claim = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_sarah["customer_id"]})
             self.assertEqual(r_claim.status_code, 200)
@@ -338,6 +339,17 @@ class FarmWebTest(unittest.TestCase):
         r_lim = anon.post(f"/api/pick/{slug}/claim/{bird4_id}", json={"customer_id": ident_sarah["customer_id"]})
         self.assertEqual(r_lim.status_code, 409)
         self.assertIn("Limit of 1", r_lim.json()["detail"])
+
+        # Merge duplicate customer ("Late Buyer") into "Bob Jones" -> backfills email & removes duplicate
+        r_merge = self.c.post(
+            f"/customers/{ident_other['customer_id']}/merge",
+            data={"target_customer_id": str(c2["id"])},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_merge.status_code, 303)
+        merged_html = self.c.get(f"/customers?selected={c2['id']}").text
+        self.assertIn("late@example.com", merged_html)
+        self.assertNotIn("Late Buyer", merged_html)
 
 
 if __name__ == "__main__":

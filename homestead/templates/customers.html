@@ -88,6 +88,21 @@
         {% if sel_customer.email %}<a href="mailto:{{ sel_customer.email }}" class="btn sm">Email</a>{% endif %}
       </div>
 
+      {% set other_custs = customers|rejectattr('id', 'equalto', sel_customer.id)|list %}
+      {% if other_custs %}
+      <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)">Merge duplicate into another customer</summary>
+        <form method="post" action="/customers/{{ sel_customer.id }}/merge" onsubmit="return confirm('Merge {{ sel_customer.name }} into the selected customer? All birds, contact info, and notes will be combined.')" class="row" style="gap:8px;margin-top:8px;align-items:center">
+          <select name="target_customer_id" required style="flex:1">
+            {% for oc in other_custs %}
+            <option value="{{ oc.id }}">{{ oc.name }}{% if oc.phone %} ({{ oc.phone }}){% elif oc.email %} ({{ oc.email }}){% endif %}</option>
+            {% endfor %}
+          </select>
+          <button class="btn sm primary">Merge</button>
+        </form>
+      </details>
+      {% endif %}
+
       <!-- Per-customer insights summary -->
       <div class="batch-stats" style="margin-bottom:12px">
         <div><small>Total weight</small><b>{{ '%.1f'|format(sel_customer.total_lbs or 0) }} lb</b><small>Avg {{ '%.1f'|format(sel_customer.avg_lbs or 0) }} lb</small></div>
