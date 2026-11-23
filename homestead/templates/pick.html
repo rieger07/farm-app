@@ -110,7 +110,7 @@
       card.innerHTML = `
         <small>Bird #${b.num}</small>
         <div style="font:600 22px Georgia,serif;margin:4px 0">${Number(b.dressed_lbs).toFixed(2)} lb</div>
-        <small style="margin-bottom:8px">${b.lb_oz} · Est. $${Number(b.est_price).toFixed(2)}</small>
+        <small style="margin-bottom:8px">${b.lb_oz} · <b>$${Number(b.est_price).toFixed(2)}</b></small>
         ${btnHtml}
       `;
       grid.appendChild(card);
