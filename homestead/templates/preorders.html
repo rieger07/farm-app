@@ -1,21 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Pre-Orders · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
-<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>Pre-Orders &amp; Waitlist</h1>
-    <p class="sub">{{ b.name }} ({{ b.species|title }}) · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb · Target process {{ s.proc_date }}</p>
-  </div>
-  <div class="row">
-    <a href="/batches/{{ b.id }}" class="btn">Batch Logs</a>
-    {% if not s.is_planned %}
-    <a href="/batches/{{ b.id }}/harvest" class="btn">Harvest Tally</a>
-    <a href="/batches/{{ b.id }}/pickup" class="btn">Pickup Day</a>
-    {% endif %}
+    <h1>{{ b.name }} · Pre-Orders</h1>
+    <p class="sub">{{ b.species|title }} · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb · Target process {{ s.proc_date }}</p>
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+{% include "_batch_stage_bar.html" %}
 
 <div class="cards four">
   <div class="card">

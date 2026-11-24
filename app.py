@@ -153,13 +153,11 @@ BASE = Path(__file__).parent / "homestead"
 COOKIE = "homestead_session"
 MERCHANT_COOKIE = "homestead_merchant"
 NAV = [
-    ("radar", "Radar", "/"),
+    ("radar", "Today", "/"),
     ("batches", "Batches", "/batches"),
     ("eggs", "Eggs", "/eggs"),
     ("customers", "Customers", "/customers"),
-    ("feed", "Feed", "/feed"),
-    ("financials", "Financials", "/financials"),
-    ("settings", "Settings", "/settings"),
+    ("farm", "Farm", "/financials"),
 ]
 
 
@@ -270,7 +268,12 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
     role = user.get("role") or "owner"
     if not can_access_homestead_page(role, active):
         raise HTTPException(status_code=403, detail="Your role does not have access to this page.")
-    visible_nav = [item for item in NAV if can_access_homestead_page(role, item[0])]
+    can_farm = any(can_access_homestead_page(role, p) for p in ("feed", "financials", "settings"))
+    visible_nav = [
+        item for item in NAV
+        if (can_farm if item[0] == "farm" else can_access_homestead_page(role, item[0]))
+    ]
+    nav_active = "farm" if active in ("feed", "financials", "settings") else active
     active_count = sum(1 for b in list_batches(user_id=user["id"]) if b.get("active", 1))
     return templates.TemplateResponse(
         request, tpl,
@@ -278,7 +281,8 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
             "request": request,
             "user": user,
             "nav": visible_nav,
-            "active": active,
+            "active": nav_active,
+            "sub_active": active,
             "active_count": active_count,
             "today_iso": date.today().isoformat(),
             **kw,
@@ -452,6 +456,37 @@ def batches_page(request: Request, msg: str = "", user: dict = Depends(current_u
     )
 
 
+def _batch_stage_info(b: dict, s: dict, user_id: int, tally: dict | None = None) -> dict:
+    if tally is None:
+        tally = _harvest_tally_payload(b, user_id)
+    po_summary = batch_preorder_counts(user_id).get(
+        int(b["id"]), {"reserved_qty": 0, "waitlist_qty": 0, "deposits_paid": 0.0}
+    )
+    by_cust_stat: dict[int, bool] = {}
+    for e in tally["entries"]:
+        if not e["for_sale"] or not e["customer_id"]:
+            continue
+        cid = int(e["customer_id"])
+        done = e["pickup_status"] == "picked_up" and e["payment_status"] == "paid"
+        by_cust_stat[cid] = by_cust_stat.get(cid, True) and done
+    pending_pickup = sum(1 for done in by_cust_stat.values() if not done)
+    completed_pickup = sum(1 for done in by_cust_stat.values() if done)
+    if pending_pickup > 0:
+        current_stage = "pickup"
+    elif s.get("harvested_head", 0) > 0 or b.get("picking_enabled"):
+        current_stage = "harvest"
+    elif b.get("preorder_enabled") or po_summary["reserved_qty"] > 0:
+        current_stage = "preorders"
+    else:
+        current_stage = "grow"
+    return {
+        "po_summary": po_summary,
+        "pending_pickup_customers": pending_pickup,
+        "completed_pickup_customers": completed_pickup,
+        "current_stage": current_stage,
+    }
+
+
 @app.get("/batches/{batch_id}")
 def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict = Depends(current_user)):
     b = _get_owned_batch(batch_id, user)
@@ -495,14 +530,9 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
             elif e["customer_id"]:
                 tally_allocations.append({**e, "alloc_kind": "assigned"})
 
-    po_summary = batch_preorder_counts(user["id"]).get(
-        int(batch_id), {"reserved_qty": 0, "waitlist_qty": 0, "deposits_paid": 0.0}
-    )
-    pending_pickup_customers = len({
-        int(e["customer_id"])
-        for e in tally["entries"]
-        if e["for_sale"] and e["customer_id"] and (e["pickup_status"] != "picked_up" or e["payment_status"] != "paid")
-    })
+    stage_info = _batch_stage_info(b, s, user["id"], tally=tally)
+    po_summary = stage_info["po_summary"]
+    pending_pickup_customers = stage_info["pending_pickup_customers"]
 
     return _render(
         request, "batch_detail.html", user, "batches",
@@ -514,6 +544,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         tally_allocations=tally_allocations,
         po_summary=po_summary,
         pending_pickup_customers=pending_pickup_customers,
+        stage_info=stage_info,
+        batch_stage="grow",
         is_graduated=is_batch_graduated_to_layers(user["id"], batch_id),
         feed_logs=list_batch_feed_logs(batch_id),
         bag_weight=bag_weight,
@@ -667,11 +699,16 @@ def batch_harvest_tally_page(
     request: Request, batch_id: int, user: dict = Depends(current_user)
 ):
     b = _get_owned_batch(batch_id, user)
+    bag_weight = get_bag_weight(user_id=user["id"])
+    s = compute_batch_schedule(b, bag_weight=bag_weight)
     tally = _harvest_tally_payload(b, user["id"])
+    stage_info = _batch_stage_info(b, s, user["id"], tally=tally)
     pick_url = f"{str(request.base_url).rstrip('/')}/pick/{tally['picking_slug']}" if tally["picking_slug"] else ""
     return _render(
         request, "harvest_tally.html", user, "batches",
-        b=b, tally=tally,
+        b=b, s=s, tally=tally,
+        stage_info=stage_info,
+        batch_stage="harvest",
         customers=list_customers(user["id"]),
         pick_url=pick_url,
     )
@@ -1156,10 +1193,13 @@ def batch_preorders_page(
 
     reserved_phones = ", ".join(dict.fromkeys(p["customer_phone"] for p in reserved if p.get("customer_phone")))
     reserved_emails = ", ".join(dict.fromkeys(p["customer_email"] for p in reserved if p.get("customer_email")))
+    stage_info = _batch_stage_info(b, s, user["id"])
 
     return _render(
         request, "preorders.html", user, "batches",
         b=b, s=s,
+        stage_info=stage_info,
+        batch_stage="preorders",
         reserved=reserved,
         waitlist=waitlist,
         cancelled=cancelled,
@@ -1490,10 +1530,15 @@ def batch_pickup_page(
 
     pickup_location = (b.get("pickup_location") or "").strip() or pickup_cfg.get("pickup_address") or ""
     pickup_instructions = pickup_cfg.get("pickup_instructions") or ""
+    bag_weight = get_bag_weight(user_id=user["id"])
+    s = compute_batch_schedule(b, bag_weight=bag_weight)
+    stage_info = _batch_stage_info(b, s, user["id"], tally=tally)
 
     return _render(
         request, "pickup_day.html", user, "batches",
-        b=b,
+        b=b, s=s,
+        stage_info=stage_info,
+        batch_stage="pickup",
         tally=tally,
         pending_groups=pending_groups,
         completed_groups=completed_groups,

@@ -13,11 +13,6 @@
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
       <button class="btn primary">Start now</button>
     </form>
-    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders{% if po_summary.reserved_qty %} ({{ po_summary.reserved_qty }}){% endif %}</a>
-    {% else %}
-    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders{% if po_summary.reserved_qty %} ({{ po_summary.reserved_qty }}){% endif %}</a>
-    <a href="/batches/{{ b.id }}/harvest" class="btn primary">Harvest tally</a>
-    <a href="/batches/{{ b.id }}/pickup" class="btn">Pickup Day{% if pending_pickup_customers %} ({{ pending_pickup_customers }}){% endif %}</a>
     {% endif %}
     {% if gcal_arrival_url %}<a href="{{ gcal_arrival_url }}" target="_blank" rel="noopener" class="btn">GCal: {{ s.initial_label }}</a>{% endif %}
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
@@ -41,6 +36,7 @@
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+{% include "_batch_stage_bar.html" %}
 
 <div class="cards four">
   <div class="card"><small>Surviving / Initial</small><div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div><small>{{ s.initial_quantity - s.surviving_quantity }} losses</small></div>
@@ -97,7 +93,62 @@
 
 <div class="cards two">
   <div class="card">
+    <h2>Feed Purchase &amp; Usage Log</h2>
+    <p class="sub" style="margin-bottom:12px">
+      {% set logged_lbs = (feed_logs|sum(attribute='feed_lbs')) if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
+      {% set logged_cost = (feed_logs|sum(attribute='cost_total')) if feed_logs else (b.actual_feed_cost if b.actual_feed_cost is not none else 0.0) %}
+      Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb (${{ '%.2f'|format(logged_cost) }})</b>
+      · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
+    </p>
+    <form method="post" action="/batches/log-feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
+      <input type="hidden" name="batch_id" value="{{ b.id }}">
+      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+      <label>Date<input type="date" name="feed_date" value="{{ today_iso }}" required></label>
+      <label>Type
+        <select name="feed_type" id="bd-ftype" onchange="syncBdFeed()">
+          <option value="starter">Starter</option>
+          <option value="grower" selected>Grower / Finisher</option>
+        </select>
+      </label>
+      <label>Bags ({{ bag_weight }} lb)<input type="number" name="bags" id="bd-fbags" step="0.5" min="0" value="1" oninput="syncBdFeed()"></label>
+      <label>Total feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
+      <label>Total cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
+      <label>Notes<input name="notes" placeholder="Store, receipt..."></label>
+      <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+      <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
+      <div class="full"><button class="btn primary sm">+ Add feed</button></div>
+    </form>
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
+      <tbody>
+      {% for fl in feed_logs %}
+        <tr>
+          <td>{{ fl.feed_date }}</td><td>{{ fl.feed_type|title }}</td>
+          <td class="num">{{ fl.bags }}</td><td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
+          <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
+          <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <script>
+    function syncBdFeed() {
+      const bags = parseFloat(document.getElementById('bd-fbags').value || '0') || 0;
+      const price = document.getElementById('bd-ftype').value === 'starter'
+        ? {{ b.starter_bag_price or 24 }}
+        : {{ b.grower_bag_price or 22 }};
+      document.getElementById('bd-flbs').value = (bags * {{ bag_weight }}).toFixed(1).replace(/\.0$/, '');
+      document.getElementById('bd-fcost').value = (bags * price).toFixed(2);
+    }
+    </script>
+  </div>
+
+  <div class="card">
     <h2>Losses &amp; Mortality</h2>
+    <p class="sub" style="margin-bottom:12px">Surviving: <b>{{ s.surviving_quantity }} / {{ s.initial_quantity }} head</b> ({{ s.initial_quantity - s.surviving_quantity }} total losses)</p>
     <form method="post" action="/batches/log-loss" class="fgrid" style="margin-bottom:14px">
       <input type="hidden" name="batch_id" value="{{ b.id }}">
       <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
@@ -120,75 +171,6 @@
       </tbody>
     </table>
   </div>
-
-  <div class="card">
-    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
-      <h2 style="margin:0">Harvests &amp; Processing</h2>
-      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Open Harvest Tally →</a>
-    </div>
-    <p class="sub" style="margin-bottom:12px">
-      Harvested: <b>{{ s.harvested_head }} / {{ s.surviving_quantity }} head</b> ({{ [0, s.surviving_quantity - s.harvested_head]|max }} left)
-      · Total: <b>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb</b>{% if s.harvested_head > 0 %} (avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/head){% endif %}
-    </p>
-    <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
-      <input type="hidden" name="batch_id" value="{{ b.id }}">
-      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
-      <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
-      <label>Head<input type="number" name="head_count" min="1" value="1" required></label>
-      <label>Dressed wt (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
-      <label>Processing ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
-      <label class="full">Notes<input name="notes" placeholder="Optional"></label>
-      <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
-      <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
-      <div class="full"><button class="btn primary sm">+ Add harvest</button></div>
-    </form>
-    <table>
-      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th>Status / Buyer</th><th class="num">Proc $</th><th>Receipt</th><th></th></tr></thead>
-      <tbody>
-      {% for h in harvests %}
-        {% set ti = h.tally %}
-        <tr>
-          <td>{{ h.harvest_date }}</td><td class="num">{{ h.head_count }}</td>
-          <td class="num">{{ '%.1f'|format(h.dressed_lbs) }}</td>
-          <td>
-            {% if ti %}
-              {% if not ti.for_sale %}
-                <span class="pill gray">Home Freezer</span>
-              {% elif ti.pickup_status == 'picked_up' %}
-                <span class="pill green">Picked up</span>
-                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% endif %}
-                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
-              {% elif ti.customer_id %}
-                <span class="pill amber">Assigned</span>
-                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% elif ti.payment_status == 'deposit' %}<span class="pill amber">Deposit</span>{% endif %}
-                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
-              {% else %}
-                <span class="pill">Available</span>
-              {% endif %}
-            {% else %}
-              —
-            {% endif %}
-          </td>
-          <td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
-          <td>{% if h.receipt_url %}<a href="{{ h.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
-          <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
-        </tr>
-      {% else %}
-        <tr><td colspan="7" class="empty">No harvests recorded.</td></tr>
-      {% endfor %}
-      {% if harvests %}
-        <tr style="background:#faf9f3;font-weight:600">
-          <td>Total</td>
-          <td class="num">{{ s.harvested_head }}</td>
-          <td class="num">{{ '%.1f'|format(s.actual_dressed_lbs) }}</td>
-          <td><small class="inline muted">{{ s.harvest_picked_up_head }} picked · {{ s.harvest_assigned_head }} asgn · {{ s.harvest_freezer_head }} frz</small></td>
-          <td class="num">${{ '%.2f'|format(harvests|sum(attribute='processing_cost_total')) }}</td>
-          <td colspan="2"><small class="inline muted">{% if s.harvested_head > 0 %}avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/hd{% endif %}</small></td>
-        </tr>
-      {% endif %}
-      </tbody>
-    </table>
-  </div>
 </div>
 
 <div class="cards two">
@@ -197,22 +179,25 @@
       <h2 style="margin:0">Batch Sales &amp; Home Freezer</h2>
       <a href="/batches/{{ b.id }}/harvest" class="btn sm">Edit in Tally →</a>
     </div>
-    <p class="sub" style="margin-bottom:12px">Automatically includes Harvest Tally sales, assigned birds, and not-for-sale home freezer birds alongside manual entries below.</p>
-    <form method="post" action="/batches/log-sale" class="fgrid" style="margin-bottom:14px">
-      <input type="hidden" name="batch_id" value="{{ b.id }}">
-      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
-      <label>Date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
-      <label>Type
-        <select name="allocation_type">
-          <option value="sale">Customer sale</option>
-          <option value="freezer">Home freezer</option>
-        </select>
-      </label>
-      <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
-      <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
-      <label class="full">Notes<input name="notes" placeholder="Buyer or pack notes"></label>
-      <div class="full"><button class="btn primary sm">+ Add manual entry</button></div>
-    </form>
+    <p class="sub" style="margin-bottom:12px">Automatically includes Harvest Tally sales, assigned birds, and not-for-sale home freezer birds.</p>
+    <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">+ Add manual bulk / cut-meat sale or freezer entry</summary>
+      <form method="post" action="/batches/log-sale" class="fgrid" style="margin-top:10px">
+        <input type="hidden" name="batch_id" value="{{ b.id }}">
+        <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+        <label>Date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
+        <label>Type
+          <select name="allocation_type">
+            <option value="sale">Customer sale</option>
+            <option value="freezer">Home freezer</option>
+          </select>
+        </label>
+        <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
+        <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
+        <label class="full">Notes<input name="notes" placeholder="Buyer or pack notes"></label>
+        <div class="full"><button class="btn primary sm">+ Add manual entry</button></div>
+      </form>
+    </details>
     <table>
       <thead><tr><th>Date</th><th>Type / Buyer</th><th class="num">Weight</th><th class="num">Revenue</th><th></th></tr></thead>
       <tbody>
@@ -275,57 +260,75 @@
   </div>
 
   <div class="card">
-    <h2>Feed Purchase &amp; Usage Log</h2>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin:0">Harvests &amp; Processing</h2>
+      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Open Harvest Tally →</a>
+    </div>
     <p class="sub" style="margin-bottom:12px">
-      {% set logged_lbs = (feed_logs|sum(attribute='feed_lbs')) if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
-      {% set logged_cost = (feed_logs|sum(attribute='cost_total')) if feed_logs else (b.actual_feed_cost if b.actual_feed_cost is not none else 0.0) %}
-      Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb (${{ '%.2f'|format(logged_cost) }})</b>
-      · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
+      Harvested: <b>{{ s.harvested_head }} / {{ s.surviving_quantity }} head</b> ({{ [0, s.surviving_quantity - s.harvested_head]|max }} left)
+      · Total: <b>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb</b>{% if s.harvested_head > 0 %} (avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/head){% endif %}
     </p>
-    <form method="post" action="/batches/log-feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
-      <input type="hidden" name="batch_id" value="{{ b.id }}">
-      <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
-      <label>Date<input type="date" name="feed_date" value="{{ today_iso }}" required></label>
-      <label>Type
-        <select name="feed_type" id="bd-ftype" onchange="syncBdFeed()">
-          <option value="starter">Starter</option>
-          <option value="grower" selected>Grower / Finisher</option>
-        </select>
-      </label>
-      <label>Bags ({{ bag_weight }} lb)<input type="number" name="bags" id="bd-fbags" step="0.5" min="0" value="1" oninput="syncBdFeed()"></label>
-      <label>Total feed (lb)<input type="number" name="feed_lbs" id="bd-flbs" step="0.1" min="0" value="{{ bag_weight }}" required></label>
-      <label>Total cost ($)<input type="number" name="cost_total" id="bd-fcost" step="0.01" min="0" value="{{ '%.2f'|format(b.grower_bag_price or 22) }}" required></label>
-      <label>Notes<input name="notes" placeholder="Store, receipt..."></label>
-      <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
-      <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
-      <div class="full"><button class="btn primary sm">+ Add feed</button></div>
-    </form>
+    <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">+ Log processing receipt or bulk harvest (use Stage 3 Harvest Tally for bird-by-bird weighing)</summary>
+      <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-top:10px">
+        <input type="hidden" name="batch_id" value="{{ b.id }}">
+        <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
+        <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
+        <label>Head<input type="number" name="head_count" min="1" value="1" required></label>
+        <label>Dressed wt (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
+        <label>Processing ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
+        <label class="full">Notes<input name="notes" placeholder="Optional"></label>
+        <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+        <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
+        <div class="full"><button class="btn primary sm">+ Add harvest</button></div>
+      </form>
+    </details>
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th>Status / Buyer</th><th class="num">Proc $</th><th>Receipt</th><th></th></tr></thead>
       <tbody>
-      {% for fl in feed_logs %}
+      {% for h in harvests %}
+        {% set ti = h.tally %}
         <tr>
-          <td>{{ fl.feed_date }}</td><td>{{ fl.feed_type|title }}</td>
-          <td class="num">{{ fl.bags }}</td><td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
-          <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
-          <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
-          <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
+          <td>{{ h.harvest_date }}</td><td class="num">{{ h.head_count }}</td>
+          <td class="num">{{ '%.1f'|format(h.dressed_lbs) }}</td>
+          <td>
+            {% if ti %}
+              {% if not ti.for_sale %}
+                <span class="pill gray">Home Freezer</span>
+              {% elif ti.pickup_status == 'picked_up' %}
+                <span class="pill green">Picked up</span>
+                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% endif %}
+                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
+              {% elif ti.customer_id %}
+                <span class="pill amber">Assigned</span>
+                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% elif ti.payment_status == 'deposit' %}<span class="pill amber">Deposit</span>{% endif %}
+                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
+              {% else %}
+                <span class="pill">Available</span>
+              {% endif %}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
+          <td>{% if h.receipt_url %}<a href="{{ h.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+          <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
+        <tr><td colspan="7" class="empty">No harvests recorded.</td></tr>
       {% endfor %}
+      {% if harvests %}
+        <tr style="background:#faf9f3;font-weight:600">
+          <td>Total</td>
+          <td class="num">{{ s.harvested_head }}</td>
+          <td class="num">{{ '%.1f'|format(s.actual_dressed_lbs) }}</td>
+          <td><small class="inline muted">{{ s.harvest_picked_up_head }} picked · {{ s.harvest_assigned_head }} asgn · {{ s.harvest_freezer_head }} frz</small></td>
+          <td class="num">${{ '%.2f'|format(harvests|sum(attribute='processing_cost_total')) }}</td>
+          <td colspan="2"><small class="inline muted">{% if s.harvested_head > 0 %}avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/hd{% endif %}</small></td>
+        </tr>
+      {% endif %}
       </tbody>
     </table>
-    <script>
-    function syncBdFeed() {
-      const bags = parseFloat(document.getElementById('bd-fbags').value || '0') || 0;
-      const price = document.getElementById('bd-ftype').value === 'starter'
-        ? {{ b.starter_bag_price or 24 }}
-        : {{ b.grower_bag_price or 22 }};
-      document.getElementById('bd-flbs').value = (bags * {{ bag_weight }}).toFixed(1).replace(/\.0$/, '');
-      document.getElementById('bd-fcost').value = (bags * price).toFixed(2);
-    }
-    </script>
   </div>
 </div>
 

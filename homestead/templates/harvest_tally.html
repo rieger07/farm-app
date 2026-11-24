@@ -1,20 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Harvest Tally · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
-<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>Harvest Tally</h1>
-    <p class="sub">{{ b.name }} · {{ b.species|title }} · Tap any weighed bird to assign a customer or update pickup</p>
+    <h1>{{ b.name }} · Harvest Tally</h1>
+    <p class="sub">{{ b.species|title }} · Tap any weighed bird to assign a customer or update pickup</p>
   </div>
   <div class="row">
-    <a href="/batches/{{ b.id }}/preorders" class="btn sm">Pre-Orders</a>
-    <a href="/batches/{{ b.id }}/pickup" class="btn sm primary">Pickup Day →</a>
     <a href="/customers" class="btn sm">Customers</a>
     <button type="button" class="btn sm" id="copy-weights-btn" onclick="copyHarvestList()">Copy list</button>
     <a href="/batches/{{ b.id }}/harvest.csv" class="btn sm">Export CSV</a>
   </div>
 </div>
+{% include "_batch_stage_bar.html" %}
 
 <!-- Pinned live running tally bar -->
 <div class="card" style="position:sticky;top:10px;z-index:10;box-shadow:0 8px 24px rgba(31,58,45,.08)">

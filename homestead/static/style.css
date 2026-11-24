@@ -94,6 +94,20 @@ dialog::backdrop{background:rgba(31,58,45,.35)}
 @media(max-width:600px){:root{--tl-offset:120px}}
 
 .login{max-width:400px;margin:48px auto;padding:24px}
+.stage-bar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:18px;background:#faf9f3;border:1px solid var(--line);border-radius:12px;padding:6px}
+.stage-tab{display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-radius:9px;text-decoration:none;color:var(--ink);border:1px solid transparent;transition:background .15s}
+.stage-tab:hover{background:#f1efe3}
+.stage-tab b{font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+.stage-tab small{font-size:11px;color:var(--muted)}
+.stage-tab.on{background:var(--green);color:#fff;box-shadow:0 4px 12px rgba(45,90,67,.18)}
+.stage-tab.on b,.stage-tab.on small{color:#fff}
+.stage-tab.current:not(.on){border-color:var(--green);background:#eef5f0}
+.stage-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green)}
+.stage-tab.on .stage-dot{background:#fff}
+.subnav-bar{display:inline-flex;gap:6px;flex-wrap:wrap;background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:5px;margin-bottom:16px}
+.subnav-pill{padding:7px 14px;border-radius:7px;font-size:13px;font-weight:600;text-decoration:none;color:var(--muted)}
+.subnav-pill:hover{color:var(--ink);background:#f1efe3}
+.subnav-pill.on{background:var(--green);color:#fff}
 .bottomnav{display:none}
 @media(max-width:860px){
   .sidebar{display:none}
@@ -102,6 +116,7 @@ dialog::backdrop{background:rgba(31,58,45,.35)}
   .cards.three,.cards.four{grid-template-columns:repeat(2,1fr)}
   .cards.two{grid-template-columns:1fr}
   .fgrid{grid-template-columns:1fr}
+  .stage-bar{grid-template-columns:repeat(2,minmax(0,1fr))}
   .bottomnav{display:flex;position:fixed;left:0;right:0;bottom:0;background:#faf9f3;border-top:1px solid var(--line);z-index:30}
   .bottomnav a{flex:1;text-align:center;padding:12px 4px;font-size:12px;text-decoration:none;color:var(--muted)}
   .bottomnav a.on{color:var(--green);font-weight:700;background:var(--sage)}
