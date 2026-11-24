@@ -352,16 +352,14 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("late@example.com", merged_html)
         self.assertNotIn("Late Buyer", merged_html)
 
-        # Verify Batch Detail & Batches List bring forward Harvest Tally fulfillment, sales, assigned, and home freezer
+        # Verify Batch Detail (1. Grow & Feed) stays clean with KPIs & 4-step Stage Bar (no duplicate bird tables)
         bd_html = self.c.get(f"/batches/{bid}").text
-        self.assertIn("Harvest Tally &amp; Fulfillment", bd_html)
-        self.assertIn("Public picking live", bd_html)
-        self.assertIn("Bob Jones", bd_html)
-        self.assertIn("Sarah Miller", bd_html)
-        self.assertIn("Home Freezer", bd_html)
-        self.assertIn("18.00 lb", bd_html)
-        self.assertIn("Total Sold / Freezer", bd_html)
-        self.assertNotIn("No sales or freezer entries yet.", bd_html)
+        self.assertIn("1. Grow &amp; Feed", bd_html)
+        self.assertIn("3. Harvest &amp; Pick", bd_html)
+        self.assertIn("Picking live", bd_html)
+        self.assertIn("20.0 / 18.0 lb", bd_html)
+        self.assertIn("$115.00 sales", bd_html)
+        self.assertNotIn("Harvest Tally &amp; Fulfillment", bd_html)
 
         blist_html = self.c.get("/batches").text
         self.assertIn("1 avail", blist_html)
@@ -517,10 +515,23 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Venmo QR", pu_html)
         self.assertIn("123 Farm Rd", pu_html)
 
-        # Settle Alice with $220 collected today ($15 tip -> $270 total realized revenue!)
+        # Partial pickup: Alice picks up ONLY Bird #1 ($120 - $25 dep = $95) today, leaving Bird #2 assigned!
+        r_part1 = self.c.post(
+            f"/batches/{bid}/pickup/{al_ident['customer_id']}/settle",
+            data={"collected_today": "95.00", "bird_ids": [str(b1)]},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_part1.status_code, 303)
+        pu_mid = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn("Already picked up: Bird #1", pu_mid)
+        self.assertIn("$110.00", pu_mid)  # Bird #2 ($135 - $25 dep = $110) still waiting!
+        sched_mid = compute_batch_schedule(list_batches()[0])
+        self.assertEqual(sched_mid["harvest_picked_up_head"], 1)
+
+        # Later Alice picks up Bird #2 with $125 collected ($15 tip -> $270 total realized revenue across both birds!)
         r_settle = self.c.post(
             f"/batches/{bid}/pickup/{al_ident['customer_id']}/settle",
-            data={"collected_today": "220.00"},
+            data={"collected_today": "125.00", "bird_ids": [str(b2)]},
             follow_redirects=False,
         )
         self.assertEqual(r_settle.status_code, 303)

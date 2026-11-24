@@ -45,52 +45,6 @@
   <div class="card"><small>Reconciled Cost</small><div class="big">${{ '%.2f'|format(s.reconciled_total_cost) }}</div><small>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb meat</small></div>
 </div>
 
-{% if s.harvested_head > 0 or b.picking_enabled %}
-<div class="card" style="margin-bottom:18px">
-  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
-    <div class="row" style="align-items:center;gap:8px">
-      <h2 style="margin:0">Harvest Tally &amp; Fulfillment</h2>
-      {% if b.picking_enabled and b.picking_slug %}
-        <a href="/pick/{{ b.picking_slug }}" target="_blank" rel="noopener" class="pill green" style="text-decoration:none">Public picking live ↗</a>
-      {% else %}
-        <span class="pill gray">Public picking off</span>
-      {% endif %}
-    </div>
-    <div class="row" style="gap:6px">
-      <a href="/batches/{{ b.id }}/pickup" class="btn sm">Pickup Day{% if pending_pickup_customers %} ({{ pending_pickup_customers }}){% endif %} →</a>
-      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Manage in Harvest Tally →</a>
-    </div>
-  </div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
-    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-      <small>Available</small>
-      <div style="font:700 20px Georgia,serif">{{ s.harvest_available_head }}</div>
-      <small class="muted">{{ '%.1f'|format(s.harvest_available_lbs) }} lb</small>
-    </div>
-    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-      <small>Assigned</small>
-      <div style="font:700 20px Georgia,serif">{{ s.harvest_assigned_head }}</div>
-      <small class="muted">{{ '%.1f'|format(s.harvest_assigned_lbs) }} lb</small>
-    </div>
-    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-      <small>Picked up</small>
-      <div style="font:700 20px Georgia,serif">{{ s.harvest_picked_up_head }}</div>
-      <small class="muted">{{ '%.1f'|format(s.harvest_picked_up_lbs) }} lb · {{ s.harvest_paid_head }} paid</small>
-    </div>
-    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-      <small>Home Freezer</small>
-      <div style="font:700 20px Georgia,serif">{{ s.harvest_freezer_head }}</div>
-      <small class="muted">{{ '%.1f'|format(s.harvest_freezer_lbs) }} lb</small>
-    </div>
-    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-      <small>Balance Due</small>
-      <div style="font:700 20px Georgia,serif">${{ '%.2f'|format(s.harvest_balance_due) }}</div>
-      <small class="muted">${{ '%.2f'|format(s.harvest_deposits_paid) }} deposits</small>
-    </div>
-  </div>
-</div>
-{% endif %}
-
 <div class="cards two">
   <div class="card">
     <h2>Feed Purchase &amp; Usage Log</h2>
@@ -173,16 +127,15 @@
   </div>
 </div>
 
-<div class="cards two">
-  <div class="card">
-    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
-      <h2 style="margin:0">Batch Sales &amp; Home Freezer</h2>
-      <a href="/batches/{{ b.id }}/harvest" class="btn sm">Edit in Tally →</a>
-    </div>
-    <p class="sub" style="margin-bottom:12px">Automatically includes Harvest Tally sales, assigned birds, and not-for-sale home freezer birds.</p>
-    <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
-      <summary style="cursor:pointer;font-weight:600;font-size:13px">+ Add manual bulk / cut-meat sale or freezer entry</summary>
-      <form method="post" action="/batches/log-sale" class="fgrid" style="margin-top:10px">
+<details class="card" style="margin-top:4px">
+  <summary style="cursor:pointer;font-weight:600;font-size:14px">
+    Manual Bulk / Cut-Meat Sales &amp; Butcher Processing Invoices
+    <small class="inline muted" style="font-weight:400;margin-left:6px">(optional — for whole birds, use Stage 3 Harvest &amp; Pick and Stage 4 Pickup Day)</small>
+  </summary>
+  <div class="cards two" style="margin-top:14px">
+    <div>
+      <h3 style="margin:0 0 8px;font-size:15px">Manual Bulk Sales &amp; Freezer Packs</h3>
+      <form method="post" action="/batches/log-sale" class="fgrid" style="margin-bottom:12px">
         <input type="hidden" name="batch_id" value="{{ b.id }}">
         <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
         <label>Date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
@@ -194,143 +147,61 @@
         </label>
         <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
         <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
-        <label class="full">Notes<input name="notes" placeholder="Buyer or pack notes"></label>
+        <label class="full">Notes<input name="notes" placeholder="Cut-meat / bulk pack notes"></label>
         <div class="full"><button class="btn primary sm">+ Add manual entry</button></div>
       </form>
-    </details>
-    <table>
-      <thead><tr><th>Date</th><th>Type / Buyer</th><th class="num">Weight</th><th class="num">Revenue</th><th></th></tr></thead>
-      <tbody>
-      {% for ta in tally_allocations %}
-        <tr>
-          <td>{{ ta.harvest_date }}</td>
-          <td>
-            {% if ta.alloc_kind == 'sale' %}
-              <span class="pill green">Sale</span>
-              {% if ta.pickup_status == 'picked_up' %}<span class="pill green">Picked up</span>{% endif %}
-              {% if ta.payment_status == 'paid' %}<span class="pill green">Paid</span>{% elif ta.payment_status == 'deposit' %}<span class="pill amber">Deposit</span>{% endif %}
-              <div><b>Bird #{{ ta.num }}</b>{% if ta.customer_name %} · {{ ta.customer_name }}{% endif %}</div>
-            {% elif ta.alloc_kind == 'assigned' %}
-              <span class="pill amber">Assigned</span>
-              {% if ta.payment_status == 'deposit' %}<span class="pill amber">Deposit ${{ '%.2f'|format(ta.deposit_paid) }}</span>{% endif %}
-              <div><b>Bird #{{ ta.num }}</b>{% if ta.customer_name %} · {{ ta.customer_name }}{% endif %}</div>
-            {% else %}
-              <span class="pill gray">Home Freezer</span>
-              <div><b>Bird #{{ ta.num }}</b> <small class="inline muted">Not for sale</small></div>
-            {% endif %}
-          </td>
-          <td class="num">{{ '%.2f'|format(ta.dressed_lbs) }} lb</td>
-          <td class="num">
-            {% if ta.alloc_kind == 'sale' %}
-              <b>${{ '%.2f'|format(ta.effective_price) }}</b>
-              {% if ta.tip_diff != 0 %}<small class="muted" style="display:block">{{ '+' if ta.tip_diff > 0 else '' }}${{ '%.2f'|format(ta.tip_diff) }} vs calc</small>{% endif %}
-            {% elif ta.alloc_kind == 'assigned' %}
-              <span class="muted">${{ '%.2f'|format(ta.effective_price) }}</span>
-              <small class="muted" style="display:block">${{ '%.2f'|format(ta.balance_due) }} due</small>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
-          <td class="num"><a href="/batches/{{ b.id }}/harvest" class="link">Tally</a></td>
-        </tr>
-      {% endfor %}
-      {% for sa in sales %}
-        <tr>
-          <td>{{ sa.entry_date }}</td>
-          <td>
-            <span class="pill {{ 'green' if sa.allocation_type == 'sale' else 'gray' }}">{{ 'Customer Sale' if sa.allocation_type == 'sale' else 'Home Freezer' }}</span>
-            {% if sa.notes %}<div><small class="muted">{{ sa.notes }}</small></div>{% endif %}
-          </td>
-          <td class="num">{{ '%.1f'|format(sa.weight_lbs) }} lb</td><td class="num">${{ '%.2f'|format(sa.revenue) }}</td>
-          <td class="num"><form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/delete"><button class="link">Remove</button></form></td>
-        </tr>
-      {% endfor %}
-      {% if not tally_allocations and not sales %}
-        <tr><td colspan="5" class="empty">No sales or freezer entries yet.</td></tr>
-      {% else %}
-        <tr style="background:#faf9f3;font-weight:600">
-          <td colspan="2">Total Sold / Freezer{% if s.harvest_assigned_head > 0 %}<small class="muted" style="display:block;font-weight:400">+ {{ s.harvest_assigned_head }} assigned ({{ '%.1f'|format(s.harvest_assigned_lbs) }} lb · ${{ '%.2f'|format(s.harvest_balance_due) }} due)</small>{% endif %}</td>
-          <td class="num">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</td>
-          <td class="num">${{ '%.2f'|format(s.actual_sales_revenue) }}</td>
-          <td></td>
-        </tr>
+      {% if sales %}
+      <table>
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Weight</th><th class="num">Revenue</th><th></th></tr></thead>
+        <tbody>
+        {% for sa in sales %}
+          <tr>
+            <td>{{ sa.entry_date }}</td>
+            <td><span class="pill {{ 'green' if sa.allocation_type == 'sale' else 'gray' }}">{{ 'Customer Sale' if sa.allocation_type == 'sale' else 'Home Freezer' }}</span>{% if sa.notes %} <small class="inline muted">{{ sa.notes }}</small>{% endif %}</td>
+            <td class="num">{{ '%.1f'|format(sa.weight_lbs) }} lb</td>
+            <td class="num">${{ '%.2f'|format(sa.revenue) }}</td>
+            <td class="num"><form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/delete"><button class="link">Remove</button></form></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
       {% endif %}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
-      <h2 style="margin:0">Harvests &amp; Processing</h2>
-      <a href="/batches/{{ b.id }}/harvest" class="btn sm primary">Open Harvest Tally →</a>
     </div>
-    <p class="sub" style="margin-bottom:12px">
-      Harvested: <b>{{ s.harvested_head }} / {{ s.surviving_quantity }} head</b> ({{ [0, s.surviving_quantity - s.harvested_head]|max }} left)
-      · Total: <b>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb</b>{% if s.harvested_head > 0 %} (avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/head){% endif %}
-    </p>
-    <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
-      <summary style="cursor:pointer;font-weight:600;font-size:13px">+ Log processing receipt or bulk harvest (use Stage 3 Harvest Tally for bird-by-bird weighing)</summary>
-      <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-top:10px">
+
+    <div>
+      <h3 style="margin:0 0 8px;font-size:15px">Butcher Processing Invoice / Bulk Harvest</h3>
+      <form method="post" action="/batches/log-harvest" enctype="multipart/form-data" class="fgrid" style="margin-bottom:12px">
         <input type="hidden" name="batch_id" value="{{ b.id }}">
         <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
         <label>Date<input type="date" name="harvest_date" value="{{ today_iso }}" required></label>
         <label>Head<input type="number" name="head_count" min="1" value="1" required></label>
         <label>Dressed wt (lb)<input type="number" name="dressed_lbs" step="0.1" min="0" required></label>
         <label>Processing ($)<input type="number" name="processing_cost_total" step="0.01" min="0" value="0"></label>
-        <label class="full">Notes<input name="notes" placeholder="Optional"></label>
-        <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF (connect Drive in Settings){% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
+        <label class="full">Notes<input name="notes" placeholder="Butcher invoice or bulk harvest note"></label>
+        <label>{% if gdrive_connected %}Receipt (camera / PDF → Drive){% else %}Receipt photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
         <label>Or receipt URL<input type="url" name="receipt_url" placeholder="https://..."></label>
-        <div class="full"><button class="btn primary sm">+ Add harvest</button></div>
+        <div class="full"><button class="btn primary sm">+ Log processing invoice</button></div>
       </form>
-    </details>
-    <table>
-      <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Dressed lb</th><th>Status / Buyer</th><th class="num">Proc $</th><th>Receipt</th><th></th></tr></thead>
-      <tbody>
-      {% for h in harvests %}
-        {% set ti = h.tally %}
-        <tr>
-          <td>{{ h.harvest_date }}</td><td class="num">{{ h.head_count }}</td>
-          <td class="num">{{ '%.1f'|format(h.dressed_lbs) }}</td>
-          <td>
-            {% if ti %}
-              {% if not ti.for_sale %}
-                <span class="pill gray">Home Freezer</span>
-              {% elif ti.pickup_status == 'picked_up' %}
-                <span class="pill green">Picked up</span>
-                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% endif %}
-                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
-              {% elif ti.customer_id %}
-                <span class="pill amber">Assigned</span>
-                {% if ti.payment_status == 'paid' %}<span class="pill green">Paid</span>{% elif ti.payment_status == 'deposit' %}<span class="pill amber">Deposit</span>{% endif %}
-                {% if ti.customer_name %}<small class="inline">· {{ ti.customer_name }}</small>{% endif %}
-              {% else %}
-                <span class="pill">Available</span>
-              {% endif %}
-            {% else %}
-              —
-            {% endif %}
-          </td>
-          <td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
-          <td>{% if h.receipt_url %}<a href="{{ h.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
-          <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
-        </tr>
-      {% else %}
-        <tr><td colspan="7" class="empty">No harvests recorded.</td></tr>
-      {% endfor %}
-      {% if harvests %}
-        <tr style="background:#faf9f3;font-weight:600">
-          <td>Total</td>
-          <td class="num">{{ s.harvested_head }}</td>
-          <td class="num">{{ '%.1f'|format(s.actual_dressed_lbs) }}</td>
-          <td><small class="inline muted">{{ s.harvest_picked_up_head }} picked · {{ s.harvest_assigned_head }} asgn · {{ s.harvest_freezer_head }} frz</small></td>
-          <td class="num">${{ '%.2f'|format(harvests|sum(attribute='processing_cost_total')) }}</td>
-          <td colspan="2"><small class="inline muted">{% if s.harvested_head > 0 %}avg {{ '%.2f'|format(s.actual_dressed_lbs / s.harvested_head) }} lb/hd{% endif %}</small></td>
-        </tr>
+      {% set proc_rows = harvests|selectattr('processing_cost_total', 'gt', 0)|list %}
+      {% if proc_rows %}
+      <table>
+        <thead><tr><th>Date</th><th class="num">Head</th><th class="num">Proc $</th><th>Receipt</th><th></th></tr></thead>
+        <tbody>
+        {% for h in proc_rows %}
+          <tr>
+            <td>{{ h.harvest_date }}</td>
+            <td class="num">{{ h.head_count }}</td>
+            <td class="num">${{ '%.2f'|format(h.processing_cost_total) }}</td>
+            <td>{% if h.receipt_url %}<a href="{{ h.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+            <td class="num"><form method="post" action="/batches/{{ b.id }}/harvests/{{ h.id }}/delete"><button class="link">Remove</button></form></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
       {% endif %}
-      </tbody>
-    </table>
+    </div>
   </div>
-</div>
+</details>
 
 {% include "_batch_modal.html" %}
 {% endblock %}

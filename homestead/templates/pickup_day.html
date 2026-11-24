@@ -61,7 +61,7 @@
       <div style="text-align:right">
         {% if g.balance_due > 0 %}
           <small class="muted" style="display:block">Balance due</small>
-          <b style="font-size:22px;color:var(--green)">${{ '%.2f'|format(g.balance_due) }}</b>
+          <b id="pu-bal-disp-{{ g.customer_id }}" style="font-size:22px;color:var(--green)">${{ '%.2f'|format(g.balance_due) }}</b>
         {% else %}
           <span class="pill green">Paid in full</span>
         {% endif %}
@@ -69,16 +69,32 @@
     </div>
 
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px">
-      {% for bird in g.birds %}
+      {% set multi = g.pending_birds|length > 1 %}
+      {% for bird in g.pending_birds %}
       <div class="row" style="justify-content:space-between;align-items:center;padding:3px 0{% if not loop.last %};border-bottom:1px solid var(--line){% endif %}">
+        {% if multi %}
+        <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px">
+          <input type="checkbox" name="bird_ids" value="{{ bird.id }}" form="pu-form-{{ g.customer_id }}" checked
+                 class="pu-bird-cb-{{ g.customer_id }}" data-num="{{ bird.num }}" data-due="{{ '%.2f'|format(bird.due_amt) }}"
+                 onchange="recalcPickupCard({{ g.customer_id }})">
+          <span><b>Bird #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
+        </label>
+        {% else %}
+        <input type="hidden" name="bird_ids" value="{{ bird.id }}" form="pu-form-{{ g.customer_id }}">
         <span><b>Bird #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
+        {% endif %}
         <b>${{ '%.2f'|format(bird.effective_price) }}</b>
       </div>
       {% endfor %}
-      {% if g.deposits_paid > 0 %}
+      {% if g.pending_deposits_paid > 0 %}
       <div class="row" style="justify-content:space-between;padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);color:var(--green)">
         <span>Deposit credited</span>
-        <b>-${{ '%.2f'|format(g.deposits_paid) }}</b>
+        <b>-${{ '%.2f'|format(g.pending_deposits_paid) }}</b>
+      </div>
+      {% endif %}
+      {% if g.completed_birds %}
+      <div style="padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)">
+        ✓ Already picked up: Bird {{ g.completed_nums_label }}
       </div>
       {% endif %}
     </div>
@@ -86,17 +102,17 @@
     <div class="row" style="gap:6px;flex-wrap:wrap">
       {% if pickup_cfg.venmo_handle and g.balance_due > 0 %}
       <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
-        onclick='openPickupQr("venmo", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.bird_nums_label|tojson }})'>
+        onclick='openPickupQr("venmo", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.pending_nums_label|tojson }})'>
         Venmo QR
       </button>
       {% endif %}
       {% if pickup_cfg.paypal_handle and g.balance_due > 0 %}
       <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
-        onclick='openPickupQr("paypal", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.bird_nums_label|tojson }})'>
+        onclick='openPickupQr("paypal", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.pending_nums_label|tojson }})'>
         PayPal QR
       </button>
       {% endif %}
-      {% set rem_msg = 'Hi ' ~ g.name ~ '! Reminder for your ' ~ b.name ~ ' pickup' ~ ((' on ' ~ b.pickup_date) if b.pickup_date else '') ~ ((' (' ~ b.pickup_window ~ ')') if b.pickup_window else '') ~ ((' at ' ~ pickup_location) if pickup_location else '') ~ '. Your order: Bird ' ~ g.bird_nums_label ~ ' (' ~ ('%.2f'|format(g.total_lbs)) ~ ' lb total). Balance due: $' ~ ('%.2f'|format(g.balance_due)) ~ '.' ~ ((' ' ~ pickup_instructions) if pickup_instructions else '') %}
+      {% set rem_msg = 'Hi ' ~ g.name ~ '! Reminder for your ' ~ b.name ~ ' pickup' ~ ((' on ' ~ b.pickup_date) if b.pickup_date else '') ~ ((' (' ~ b.pickup_window ~ ')') if b.pickup_window else '') ~ ((' at ' ~ pickup_location) if pickup_location else '') ~ '. Your order: Bird ' ~ g.pending_nums_label ~ ' (' ~ ('%.2f'|format(g.pending_lbs)) ~ ' lb total). Balance due: $' ~ ('%.2f'|format(g.balance_due)) ~ '.' ~ ((' ' ~ pickup_instructions) if pickup_instructions else '') %}
       {% if g.phone %}
       <a class="btn sm" href="sms:{{ g.phone }}?&body={{ rem_msg|urlencode }}">Text reminder</a>
       {% endif %}
@@ -111,7 +127,7 @@
           Collected today ($)
           <input type="number" step="0.01" min="0" name="collected_today" id="pu-amt-{{ g.customer_id }}" value="{{ '%.2f'|format(g.balance_due) }}" style="margin-top:2px">
         </label>
-        <button class="btn primary" style="flex:1;min-width:150px">✓ Paid &amp; Picked Up</button>
+        <button class="btn primary" id="pu-sub-{{ g.customer_id }}" style="flex:1;min-width:150px">✓ Paid &amp; Picked Up</button>
       </div>
     </form>
   </div>
@@ -185,8 +201,30 @@ function filterPickupCards() {
   });
 }
 
-function openPickupQr(provider, cid, custName, birdNums) {
+function recalcPickupCard(cid) {
+  const cbs = Array.from(document.querySelectorAll('.pu-bird-cb-' + cid));
+  if (!cbs.length) return;
+  const checked = cbs.filter(c => c.checked);
+  const due = checked.reduce((sum, c) => sum + (parseFloat(c.dataset.due || '0') || 0), 0);
+  const disp = document.getElementById('pu-bal-disp-' + cid);
+  if (disp) disp.textContent = '$' + due.toFixed(2);
+  const amtIn = document.getElementById('pu-amt-' + cid);
+  if (amtIn) amtIn.value = due.toFixed(2);
+  const btn = document.getElementById('pu-sub-' + cid);
+  if (btn) {
+    btn.disabled = checked.length === 0;
+    btn.textContent = checked.length === cbs.length
+      ? '✓ Paid & Picked Up'
+      : `✓ Paid & Picked Up (${checked.length} of ${cbs.length})`;
+  }
+}
+
+function openPickupQr(provider, cid, custName, defaultBirdNums) {
   activeQrCid = cid;
+  const cbs = Array.from(document.querySelectorAll('.pu-bird-cb-' + cid));
+  const birdNums = cbs.length
+    ? cbs.filter(c => c.checked).map(c => '#' + c.dataset.num).join(', ')
+    : defaultBirdNums;
   const amtIn = document.getElementById('pu-amt-' + cid);
   const amtVal = Math.max(0, parseFloat((amtIn && amtIn.value) || '0') || 0);
   const amtStr = amtVal.toFixed(2);
