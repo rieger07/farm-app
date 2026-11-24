@@ -285,6 +285,8 @@ class FarmWebTest(unittest.TestCase):
         self.assertAlmostEqual(sched["sold_lbs"], 20.0)
         self.assertAlmostEqual(sched["actual_sales_revenue"], 115.0)
         self.assertAlmostEqual(sched["freezer_lbs"], 18.0)
+        batch_detail_html = self.c.get(f"/batches/{bid}").text
+        self.assertIn(f"${sched['effective_freezer_cost_per_lb']:.2f}/lb freezer", batch_detail_html)
 
         # Customer Insights page shows species breakdown, Paid vs Calc, and +$15.00 tip
         c_detail = self.c.get(f"/customers?selected={c2['id']}").text

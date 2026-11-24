@@ -41,7 +41,7 @@
 <div class="cards four">
   <div class="card"><small>Surviving / Initial</small><div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div><small>{{ s.initial_quantity - s.surviving_quantity }} losses</small></div>
   <div class="card"><small>Harvested</small><div class="big">{{ s.harvested_head }}</div><small>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb dressed</small></div>
-  <div class="card"><small>Sold / Freezer</small><div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div><small>${{ '%.2f'|format(s.actual_sales_revenue) }} sales</small></div>
+  <div class="card"><small>Sold / Freezer</small><div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div><small>${{ '%.2f'|format(s.actual_sales_revenue) }} sales{% if s.effective_freezer_cost_per_lb is not none %} · {% if s.effective_freezer_cost_per_lb == 0 %}<span style="color:var(--green,#15803d);font-weight:600">$0.00/lb freezer (free!)</span>{% else %}${{ '%.2f'|format(s.effective_freezer_cost_per_lb) }}/lb freezer{% endif %}{% endif %}</small></div>
   <div class="card"><small>Reconciled Cost</small><div class="big">${{ '%.2f'|format(s.reconciled_total_cost) }}</div><small>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb meat</small></div>
 </div>
 
