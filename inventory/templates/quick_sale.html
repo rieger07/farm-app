@@ -8,8 +8,28 @@
   </div>
   <div id="offline" class="notice" hidden></div>
 
+  {% if active_booth and active_booth.active %}
+  <div class="card" id="qs-booth-bar" style="padding:10px 14px;margin-bottom:12px;border-color:#9bb8a5;background:#f4f8f4">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div>
+        <span class="pill green" style="padding:2px 8px;font-size:11px">● {{ active_booth.marketplace_name }}</span>
+        <small class="inline" id="qs-booth-meta" style="margin-left:6px">
+          <b>{{ active_booth.gross_sales_cents|money }}</b> gross
+          {% if active_booth.booth_cost_cents > 0 %}
+            · {{ 'Covered booth!' if active_booth.gross_sales_cents >= active_booth.booth_cost_cents else ('%s booth'|format(active_booth.booth_cost_cents|money)) }}
+          {% endif %}
+        </small>
+      </div>
+      <a href="/market-day" class="link" style="padding:0;font-weight:600">Booth status →</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="qs-toolbar">
     <input id="q" type="search" class="search" placeholder="Search products..." style="margin-bottom:0;flex:1">
+    {% if active_booth and active_booth.active %}
+    <button type="button" id="booth-scope" class="chip on" aria-pressed="true" title="Toggle between items packed at the booth vs full catalog">At booth ({{ active_booth.packed_sku_count }})</button>
+    {% endif %}
     <button type="button" id="hide-oos" class="chip-toggle" aria-pressed="false">Hide out of stock</button>
   </div>
   <div class="chips" id="chips">
@@ -105,6 +125,7 @@
 
 <script id="skus" type="application/json">{{ skus|tojson }}</script>
 <script id="pay-handles" type="application/json">{{ payment_handles|tojson }}</script>
+<script id="active-booth" type="application/json">{{ (active_booth or {'active': false})|tojson }}</script>
 <script src="{{ asset('qrcode.min.js') }}"></script>
 <script src="{{ asset('quicksale.js') }}"></script>
 {% endblock %}

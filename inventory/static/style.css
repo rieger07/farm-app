@@ -75,8 +75,8 @@ dialog{max-width:380px}
   .sidebar,.topbar{display:none}
   .content{padding:16px 16px 90px}
   .cards.three,.cards.four,.cards.two,.cards.two.even{grid-template-columns:1fr}
-  .bottomnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:#faf9f3;border-top:1px solid var(--line);padding:8px 6px calc(8px + env(safe-area-inset-bottom));gap:4px}
-  .bottomnav a{flex:1 1 0;min-width:0;text-align:center;padding:10px 2px;font-size:12px;line-height:1.2;border-radius:10px;text-decoration:none;display:flex;align-items:center;justify-content:center}.bottomnav a.on{background:var(--sage);font-weight:600}
+  .bottomnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:#faf9f3;border-top:1px solid var(--line);padding:8px 4px calc(8px + env(safe-area-inset-bottom));gap:2px}
+  .bottomnav a{flex:1 1 0;min-width:0;text-align:center;padding:9px 2px;font-size:11px;line-height:1.15;border-radius:10px;text-decoration:none;display:flex;align-items:center;justify-content:center}.bottomnav a.on{background:var(--sage);font-weight:600}
   .filters{flex-wrap:wrap}
   td,th{padding:10px 12px}
 }

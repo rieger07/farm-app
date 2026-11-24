@@ -923,6 +923,184 @@ class WebTest(unittest.TestCase):
         self.assertEqual(rv_z.status_code, 303)
         self.assertIn("Only+Quick+sale+transactions", rv_z.headers["location"])
 
+    def test_market_day_mode_pack_live_quicksale_closeout_reopen_and_pack_ahead(self):
+        import json
+        from datetime import datetime, timedelta
+        from inventory.app import local_tz
+        from inventory.markets import close_market_day, compute_market_day_status, suggest_pack_list
+        from inventory.stock import list_stock, set_stock_count
+
+        c = self.client("zach")
+        staff = self.client("marty")
+
+        # Staff can open /market-day, while /inventory and /insights remain forbidden
+        self.assertEqual(staff.get("/market-day").status_code, 200)
+        self.assertEqual(staff.get("/inventory").status_code, 303)
+        self.assertEqual(staff.get("/insights").status_code, 303)
+
+        skus = [s for s in list_stock(1) if s.get("item_type", "product") != "fee" and s.get("show_in_quick_sale", 1)]
+        s1, s2, s3 = skus[0], skus[1], skus[2]
+        set_stock_count(1, s1["id"], 40, created_by=1)
+        set_stock_count(1, s2["id"], 30, created_by=1)
+        set_stock_count(1, s3["id"], 25, created_by=1)
+
+        tz = local_tz()
+        today_d = datetime.now(tz).date()
+        today_iso = today_d.isoformat()
+        tomorrow_iso = (today_d + timedelta(days=1)).isoformat()
+
+        # 1. Pack-Ahead for tomorrow: virtual allocation does NOT touch stock_ledger or today's Quick Sale
+        r_plan = c.post(
+            "/market-day/pack",
+            data={
+                "market_date": tomorrow_iso,
+                "new_marketplace_name": "Sunday Harbor Market",
+                "booth_fee": "35.00",
+                "travel_cost": "10.00",
+                "starting_cash": "80.00",
+                f"brought_{s1['id']}": "12",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_plan.status_code, 303)
+        plan_html = c.get(f"/market-day?date={tomorrow_iso}").text
+        self.assertIn("Pack ahead", plan_html)
+        self.assertIn("Sunday Harbor Market", plan_html)
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s1["id"]), 40)
+        self.assertNotIn('id="qs-booth-bar"', c.get("/quick-sale").text)
+
+        # 2. Start today's Market Day (including any early-bird seeded sales already on today_iso)
+        pre_md = compute_market_day_status(1, today_iso, tz)
+        pre_s1 = next(it["sold_qty"] for it in pre_md["skus"] if it["sku_id"] == s1["id"])
+        pre_s2 = next(it["sold_qty"] for it in pre_md["skus"] if it["sku_id"] == s2["id"])
+        pre_cash_cents = pre_md["physical_cash_cents"]
+
+        r_pack = staff.post(
+            "/market-day/pack",
+            data={
+                "market_date": today_iso,
+                "new_marketplace_name": "Downtown Saturday Market",
+                "booth_fee": "20.00",
+                "travel_cost": "5.00",
+                "starting_cash": "100.00",
+                f"brought_{s1['id']}": str(6 + pre_s1),
+                f"brought_{s2['id']}": str(4 + pre_s2),
+                f"brought_{s3['id']}": "0",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_pack.status_code, 303)
+        # Virtual allocation keeps main warehouse stock untouched
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s1["id"]), 40)
+
+        # Quick Sale reflects active booth bar, At booth (2) scope chip, and per-SKU booth counts
+        qs_html = staff.get("/quick-sale").text
+        self.assertIn('id="qs-booth-bar"', qs_html)
+        self.assertIn("Downtown Saturday Market", qs_html)
+        self.assertIn("At booth (2)", qs_html)
+        qs_skus_raw = qs_html.split('<script id="skus" type="application/json">', 1)[1].split("</script>", 1)[0]
+        qs_skus = {x["id"]: x for x in json.loads(qs_skus_raw)}
+        self.assertTrue(qs_skus[s1["id"]]["booth_packed"])
+        self.assertEqual(qs_skus[s1["id"]]["booth_left"], 6)
+        self.assertFalse(qs_skus[s3["id"]]["booth_packed"])
+
+        # 3. Ring up sales: sell all remaining 6 of s1 (cash) + 1 of s2 (venmo)
+        r_sale1 = staff.post("/api/cash-sale", json={
+            "client_uuid": "mday-cash-1",
+            "payment_type": "cash",
+            "items": [{"sku_id": s1["id"], "quantity": 6}],
+        })
+        self.assertEqual(r_sale1.status_code, 200)
+        cash_sale_cents = r_sale1.json()["total_cents"]
+
+        r_sale2 = staff.post("/api/cash-sale", json={
+            "client_uuid": "mday-venmo-1",
+            "payment_type": "venmo",
+            "items": [{"sku_id": s2["id"], "quantity": 1}],
+        })
+        self.assertEqual(r_sale2.status_code, 200)
+
+        # Mid-market +1 restock on s2 -> 4 left at booth
+        r_restock = staff.post(
+            "/market-day/restock",
+            data={"market_date": today_iso, "sku_id": str(s2["id"]), "delta_qty": "1"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_restock.status_code, 303)
+
+        live_md = compute_market_day_status(1, today_iso, tz)
+        by_sid = {it["sku_id"]: it for it in live_md["packed_items"]}
+        self.assertTrue(by_sid[s1["id"]]["booth_sold_out"])
+        self.assertEqual(by_sid[s1["id"]]["left_at_booth"], 0)
+        # Main stock still has 34 at home, yet booth sold out is flagged!
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s1["id"]), 34)
+        self.assertEqual(by_sid[s2["id"]]["brought_qty"], 5 + pre_s2)
+        self.assertEqual(by_sid[s2["id"]]["left_at_booth"], 4)
+
+        expected_drawer = 10000 + pre_cash_cents + cash_sale_cents
+        self.assertEqual(live_md["expected_drawer_cents"], expected_drawer)
+
+        # 4. Close out Market Day with 1 write-off on s2 and exact cash drawer count
+        s2_before_close = next(s["on_hand"] for s in list_stock(1) if s["id"] == s2["id"])
+        r_close = staff.post(
+            "/market-day/close",
+            data={
+                "market_date": today_iso,
+                "counted_cash": f"{expected_drawer / 100:.2f}",
+                "weather": "Sunny",
+                "notes": "Great crowd",
+                f"writeoff_{s2['id']}": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_close.status_code, 303)
+
+        # Write-off deducted 1 from s2 stock_ledger; Quick Sale booth bar turns off once closed
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s2["id"]), s2_before_close - 1)
+        self.assertNotIn('id="qs-booth-bar"', staff.get("/quick-sale").text)
+        closed_html = c.get(f"/market-day?date={today_iso}").text
+        self.assertIn("MARKET SCORECARD", closed_html)
+        self.assertIn("Exact ($0.00)", closed_html)
+
+        # True booth sellout on s1 triggers 1.5x buffer in Suggested Pack List despite 34 units left at home!
+        win_s, win_e = live_md["window_start_utc"], (datetime.utcnow() + timedelta(days=1)).isoformat(timespec="seconds")
+        pack_sug = suggest_pack_list(1, "2020-01-01T00:00:00", win_e, tz)
+        s1_sug = next(it for it in pack_sug["items"] if it["sku_id"] == s1["id"])
+        self.assertTrue(s1_sug["booth_sold_out"])
+        self.assertTrue(s1_sug["sold_out"])
+
+        # 5. Deterministic window cutoff check: evening post-closeout sale stays separate from closed scorecard
+        past_date = "2026-10-10"
+        c.post("/market-day/pack", data={
+            "market_date": past_date,
+            "new_marketplace_name": "Autumn Pop-Up",
+            "booth_fee": "15.00",
+            f"brought_{s1['id']}": "5",
+        })
+        c.post("/api/cash-sale", json={
+            "client_uuid": "mday-morning-oct10",
+            "occurred_at": "2026-10-10T14:00:00",
+            "payment_type": "cash",
+            "items": [{"sku_id": s1["id"], "quantity": 2}],
+        })
+        close_market_day(1, past_date, tz, closed_at_override="2026-10-10T18:00:00", created_by=1)
+        c.post("/api/cash-sale", json={
+            "client_uuid": "mday-evening-oct10",
+            "occurred_at": "2026-10-10T21:00:00",
+            "payment_type": "cash",
+            "items": [{"sku_id": s1["id"], "quantity": 1}],
+        })
+        oct_md = compute_market_day_status(1, past_date, tz)
+        self.assertEqual(oct_md["txns_count"], 1)
+        oct_s1 = next(it for it in oct_md["packed_items"] if it["sku_id"] == s1["id"])
+        self.assertEqual(oct_s1["sold_qty"], 2)
+
+        # 6. Reopen today's Market Day -> reverses closeout stock adjustment cleanly
+        r_reopen = c.post("/market-day/reopen", data={"market_date": today_iso}, follow_redirects=False)
+        self.assertEqual(r_reopen.status_code, 303)
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s2["id"]), s2_before_close)
+        self.assertIn('id="qs-booth-bar"', c.get("/quick-sale").text)
+
 
 if __name__ == "__main__":
     unittest.main()

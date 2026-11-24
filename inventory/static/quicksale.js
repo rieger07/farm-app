@@ -1,9 +1,10 @@
 (() => {
   const SKUS = JSON.parse(document.getElementById('skus').textContent);
   const HANDLES = JSON.parse((document.getElementById('pay-handles') || { textContent: '{}' }).textContent);
+  const BOOTH = JSON.parse((document.getElementById('active-booth') || { textContent: '{"active":false}' }).textContent);
   const QKEY = 'hh_cash_queue'; // legacy key name kept so queued sales survive the rename
   const lines = []; // [{ sku_id, qty }]
-  let cat = '', query = '', hideOos = false, payType = 'cash';
+  let cat = '', query = '', hideOos = false, boothOnly = !!(BOOTH && BOOTH.active), payType = 'cash';
   let wmState = null; // { sku, editIdx }
   const $ = id => document.getElementById(id);
   const money = c => '$' + (Math.round(c) / 100).toFixed(2);
@@ -96,16 +97,29 @@
     render();
   };
 
+  function effectiveStock(s) {
+    if (BOOTH && BOOTH.active && s.booth_packed && typeof s.booth_left === 'number') {
+      return s.booth_left;
+    }
+    return typeof s.on_hand === 'number' ? s.on_hand : null;
+  }
+
   function renderTiles() {
     const t = $('tiles'); t.innerHTML = '';
     const list = SKUS.filter(s => {
+      if (BOOTH && BOOTH.active && boothOnly && !s.booth_packed && !unitQty(s.id) && !lines.some(l => l.sku_id === s.id)) return false;
       if (cat && s.category !== cat) return false;
       if (!(s.name + ' ' + s.variant).toLowerCase().includes(query)) return false;
-      if (hideOos && typeof s.on_hand === 'number' && round3(s.on_hand - usedForStock(s)) <= 0) return false;
+      const eff = effectiveStock(s);
+      if (hideOos && typeof eff === 'number' && round3(eff - usedForStock(s)) <= 0) return false;
       return true;
     }).sort((a, b) => {
-      const aOos = (typeof a.on_hand === 'number' && round3(a.on_hand - usedForStock(a)) <= 0) ? 1 : 0;
-      const bOos = (typeof b.on_hand === 'number' && round3(b.on_hand - usedForStock(b)) <= 0) ? 1 : 0;
+      if (BOOTH && BOOTH.active && a.booth_packed !== b.booth_packed) {
+        return a.booth_packed ? -1 : 1;
+      }
+      const effA = effectiveStock(a), effB = effectiveStock(b);
+      const aOos = (typeof effA === 'number' && round3(effA - usedForStock(a)) <= 0) ? 1 : 0;
+      const bOos = (typeof effB === 'number' && round3(effB - usedForStock(b)) <= 0) ? 1 : 0;
       return aOos - bOos;
     });
     list.forEach(s => {
@@ -120,9 +134,16 @@
       const sub = el.querySelector('small');
       const parts = [];
       if (s.variant) parts.push(s.variant);
-      if (typeof s.on_hand === 'number') {
+      const unitSuffix = s.sell_mode === 'lb_stock_lb' ? ' lb' : '';
+      if (BOOTH && BOOTH.active && s.booth_packed && typeof s.booth_left === 'number') {
+        const left = round3(s.booth_left - usedForStock(s));
+        parts.push(left <= 0 ? `0${unitSuffix} at booth` : `${left}${unitSuffix} at booth`);
+        if (left <= 0) sub.classList.add('lowhint');
+      } else if (BOOTH && BOOTH.active && !s.booth_packed) {
+        const left = typeof s.on_hand === 'number' ? round3(s.on_hand - usedForStock(s)) : null;
+        parts.push(left !== null ? `Not packed · ${Math.max(0, left)}${unitSuffix} home` : 'Not packed');
+      } else if (typeof s.on_hand === 'number') {
         const left = round3(s.on_hand - usedForStock(s));
-        const unitSuffix = s.sell_mode === 'lb_stock_lb' ? ' lb' : '';
         parts.push(left <= 0 ? `0${unitSuffix} left` : `${left}${unitSuffix} left`);
         if (left <= 0) sub.classList.add('lowhint');
       }
@@ -360,6 +381,7 @@
   }
 
   $('record').onclick = () => {
+    const saleTotal = total();
     const sale = {
       client_uuid: crypto.randomUUID ? crypto.randomUUID()
         : 'x' + Date.now() + Math.random().toString(16).slice(2),
@@ -368,6 +390,24 @@
       cash_received_cents: payType === 'cash' ? cashCents() : null,
       items: lines.map(l => ({ sku_id: l.sku_id, quantity: l.qty })),
     };
+    const seen = new Set(lines.map(l => l.sku_id));
+    seen.forEach(sid => {
+      const s = byId[sid];
+      if (!s) return;
+      const used = usedForStock(s);
+      if (typeof s.on_hand === 'number') s.on_hand = round3(s.on_hand - used);
+      if (typeof s.booth_left === 'number') s.booth_left = Math.max(0, round3(s.booth_left - used));
+    });
+    if (BOOTH && BOOTH.active && $('qs-booth-meta')) {
+      BOOTH.gross_sales_cents = (BOOTH.gross_sales_cents || 0) + saleTotal;
+      let html = `<b>${money(BOOTH.gross_sales_cents)}</b> gross`;
+      if (BOOTH.booth_cost_cents > 0) {
+        html += BOOTH.gross_sales_cents >= BOOTH.booth_cost_cents
+          ? ' · Covered booth!'
+          : ` · ${money(BOOTH.booth_cost_cents)} booth`;
+      }
+      $('qs-booth-meta').innerHTML = html;
+    }
     const q = queue(); q.push(sale); saveQueue(q);
     lines.length = 0; $('cash').value = '';
     render(); banner(); flush();
@@ -398,6 +438,17 @@
       renderCart();
     };
   });
+  if ($('booth-scope')) {
+    $('booth-scope').onclick = () => {
+      boothOnly = !boothOnly;
+      $('booth-scope').classList.toggle('on', boothOnly);
+      $('booth-scope').setAttribute('aria-pressed', boothOnly ? 'true' : 'false');
+      $('booth-scope').textContent = boothOnly
+        ? `At booth (${BOOTH.packed_sku_count || 0})`
+        : 'All catalog';
+      renderTiles();
+    };
+  }
   if ($('hide-oos')) {
     $('hide-oos').onclick = () => {
       hideOos = !hideOos;

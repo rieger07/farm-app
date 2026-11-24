@@ -180,6 +180,11 @@ CREATE TABLE IF NOT EXISTS market_days (
     marketplace_id INTEGER NOT NULL,
     booth_fee_cents INTEGER NOT NULL DEFAULT 0,
     travel_cost_cents INTEGER NOT NULL DEFAULT 0,
+    starting_cash_cents INTEGER NOT NULL DEFAULT 0,
+    counted_cash_cents INTEGER,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    started_at TEXT,
+    closed_at TEXT,
     weather TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
@@ -188,6 +193,21 @@ CREATE TABLE IF NOT EXISTS market_days (
     FOREIGN KEY (marketplace_id) REFERENCES marketplaces(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_market_days_merchant_date ON market_days(merchant_id, market_date);
+
+CREATE TABLE IF NOT EXISTS market_day_items (
+    market_day_id INTEGER NOT NULL,
+    sku_id INTEGER NOT NULL,
+    brought_qty REAL NOT NULL DEFAULT 0,
+    write_off_qty REAL NOT NULL DEFAULT 0,
+    counted_left_qty REAL,
+    closeout_ledger_id INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (market_day_id, sku_id),
+    FOREIGN KEY (market_day_id) REFERENCES market_days(id) ON DELETE CASCADE,
+    FOREIGN KEY (sku_id) REFERENCES skus(id) ON DELETE CASCADE,
+    FOREIGN KEY (closeout_ledger_id) REFERENCES stock_ledger(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mday_items_day ON market_day_items(market_day_id);
 """
 
 
@@ -224,6 +244,17 @@ def init_inventory_db() -> None:
             conn.execute("ALTER TABLE merchants ADD COLUMN venmo_handle TEXT NOT NULL DEFAULT ''")
         if "paypal_handle" not in merchant_cols:
             conn.execute("ALTER TABLE merchants ADD COLUMN paypal_handle TEXT NOT NULL DEFAULT ''")
+        mday_cols = {r["name"] for r in conn.execute("PRAGMA table_info(market_days)")}
+        if "starting_cash_cents" not in mday_cols:
+            conn.execute("ALTER TABLE market_days ADD COLUMN starting_cash_cents INTEGER NOT NULL DEFAULT 0")
+        if "counted_cash_cents" not in mday_cols:
+            conn.execute("ALTER TABLE market_days ADD COLUMN counted_cash_cents INTEGER")
+        if "status" not in mday_cols:
+            conn.execute("ALTER TABLE market_days ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+        if "started_at" not in mday_cols:
+            conn.execute("ALTER TABLE market_days ADD COLUMN started_at TEXT")
+        if "closed_at" not in mday_cols:
+            conn.execute("ALTER TABLE market_days ADD COLUMN closed_at TEXT")
         conn.commit()
     finally:
         conn.close()
