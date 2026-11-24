@@ -85,6 +85,7 @@
     <div class="right row" style="align-items:center">
       <button type="button" class="link" style="padding:0" onclick="resetPackChecks()">Reset checks</button>
       <button type="button" class="btn" style="padding:5px 10px;font-size:12px" id="copy-pack-btn" onclick="copyPackList()">Copy pack list</button>
+      <a href="/market-day" class="btn primary" style="padding:5px 10px;font-size:12px;text-decoration:none">Pack in Market day →</a>
     </div>
   </div>
   <table id="pack-table">
@@ -95,7 +96,7 @@
         <td><input type="checkbox" class="pack-chk" data-pack-key="{{ it.key }}" aria-label="Packed {{ it.name }}"></td>
         <td>
           <b>{{ it.name }}</b>
-          {% if it.sold_out %}<span class="pill amber" style="margin-left:6px">Sold out · 1.5×</span>{% endif %}
+          {% if it.booth_sold_out %}<span class="pill amber" style="margin-left:6px">Booth sellout · 1.5×</span>{% elif it.sold_out %}<span class="pill amber" style="margin-left:6px">Sold out · 1.5×</span>{% endif %}
         </td>
         <td class="num">{{ it.avg_per_day }}</td>
         <td class="num"><b>{{ it.pack_qty }}</b> <small class="inline">{{ it.unit }}</small></td>

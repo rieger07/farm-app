@@ -8,11 +8,11 @@ from inventory.db import get_connection
 OWNER, MANAGER, STAFF = "owner", "manager", "staff"
 ROLES = (OWNER, MANAGER, STAFF)
 
-# Pages each role may open. Staff only ever see Quick sale.
+# Pages each role may open. Staff see Quick sale and Market day.
 PAGE_ACCESS = {
-    OWNER: {"inventory", "sales", "insights", "quick_sale", "settings"},
-    MANAGER: {"inventory", "sales", "insights", "quick_sale"},
-    STAFF: {"quick_sale"},
+    OWNER: {"inventory", "sales", "insights", "market_day", "quick_sale", "settings"},
+    MANAGER: {"inventory", "sales", "insights", "market_day", "quick_sale"},
+    STAFF: {"market_day", "quick_sale"},
 }
 HOME_PAGE = {OWNER: "inventory", MANAGER: "inventory", STAFF: "quick_sale"}
 

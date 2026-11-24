@@ -1,0 +1,600 @@
+{% extends "base.html" %}
+{% block title %}Market day · iron ledger{% endblock %}
+{% block content %}
+<div class="eyebrow">BOOTH &amp; COOLER</div>
+<div class="pagehead" style="flex-wrap:wrap">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h1 style="margin:0">Market day</h1>
+      {% if md.state == 'live' %}
+        <span class="pill green">● Live · {{ md.market_day.marketplace_name }}</span>
+      {% elif md.state == 'planned' %}
+        <span class="pill amber">Pack ahead · {{ md.market_day.marketplace_name }}</span>
+      {% elif md.state == 'closed' %}
+        <span class="pill" style="background:#e4e1d3;color:var(--ink)">Closed out · {{ md.market_day.marketplace_name }}</span>
+      {% else %}
+        <span class="pill amber">Not started</span>
+      {% endif %}
+    </div>
+    <p class="sub">Pack what goes in the truck, track what's left at the booth, and close out cleanly.</p>
+  </div>
+  <div class="row" style="flex-wrap:wrap;align-items:center">
+    {% if md.state == 'live' and not show_pack_editor %}
+      {% if zettle_connected %}
+      <form method="post" action="/market-day/sync" style="margin:0">
+        <input type="hidden" name="market_date" value="{{ md.market_date }}">
+        <button class="btn">↻ Sync Zettle</button>
+      </form>
+      {% endif %}
+      <a href="/market-day?date={{ md.market_date }}&amp;edit=1" class="btn">Edit pack list</a>
+      <a href="/quick-sale" class="btn primary">Open Quick sale →</a>
+    {% elif md.state == 'planned' and not show_pack_editor %}
+      <a href="/market-day?date={{ md.market_date }}&amp;edit=1" class="btn primary">Edit pack list</a>
+    {% elif md.state == 'closed' %}
+      <button type="button" class="btn primary" id="share-scorecard-btn">Share / copy scorecard</button>
+      <form method="post" action="/market-day/reopen" style="margin:0" onsubmit="return confirm('Reopen this Market Day? Any closeout stock adjustments will be reversed so you can keep selling or re-close later.')">
+        <input type="hidden" name="market_date" value="{{ md.market_date }}">
+        <button class="btn">Reopen market day</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if msg %}
+<div class="notice" style="{{ 'background:var(--red);color:var(--redink)' if msg.startswith('Error:') else 'background:var(--sage);color:var(--green)' }}">{{ msg }}</div>
+{% endif %}
+
+<div class="card" style="padding:12px 16px;margin-bottom:18px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+  <div class="chips" style="margin:0;align-items:center">
+    <a href="/market-day?date={{ today_iso }}" class="chip {{ 'on' if md.market_date == today_iso }}">Today ({{ today_iso[5:] }})</a>
+    <a href="/market-day?date={{ tomorrow_iso }}" class="chip {{ 'on' if md.market_date == tomorrow_iso }}">Tomorrow ({{ tomorrow_iso[5:] }})</a>
+    {% if next_sat_iso not in (today_iso, tomorrow_iso) %}
+    <a href="/market-day?date={{ next_sat_iso }}" class="chip {{ 'on' if md.market_date == next_sat_iso }}">Sat ({{ next_sat_iso[5:] }})</a>
+    {% endif %}
+    {% for rd in recent_days %}
+      {% if rd.market_date not in (today_iso, tomorrow_iso, next_sat_iso) %}
+      <a href="/market-day?date={{ rd.market_date }}" class="chip {{ 'on' if md.market_date == rd.market_date }}">
+        {{ rd.market_date[5:] }} · {{ rd.marketplace_name }}{% if rd.state == 'planned' %} (plan){% endif %}
+      </a>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <form method="get" action="/market-day" style="display:flex;gap:6px;align-items:center;margin:0">
+    <input type="date" name="date" value="{{ md.market_date }}" class="datein" style="padding:7px 10px" onchange="this.form.submit()">
+  </form>
+</div>
+
+{% if md.state == 'closed' %}
+<!-- ==================== CLOSED SCORECARD VIEW ==================== -->
+<div class="card" style="margin-bottom:18px;border-color:#9bb8a5;background:linear-gradient(180deg,#f5f9f5 0%,#fff 100%)">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <div class="eyebrow">MARKET SCORECARD</div>
+      <h2 style="margin:2px 0">{{ md.market_day.marketplace_name }} · {{ md.market_date }}</h2>
+      <small>
+        {% if md.market_day.weather %}{{ md.market_day.weather }} · {% endif %}
+        Booth &amp; travel: {{ md.booth_cost_cents|money }}
+        {% if md.market_day.notes %} · {{ md.market_day.notes }}{% endif %}
+      </small>
+    </div>
+    <span class="pill green">✓ Closed out</span>
+  </div>
+
+  <div class="cards four" style="margin-bottom:0">
+    <div class="card">
+      <small>Gross sales</small>
+      <div class="big">{{ md.gross_sales_cents|money }}</div>
+      <small>{{ md.txns_count }} sale{{ '' if md.txns_count == 1 else 's' }} · Card {{ md.card_cents|money }} · Dig {{ md.digital_cash_cents|money }} · Cash {{ md.physical_cash_cents|money }}</small>
+    </div>
+    <div class="card">
+      <small>Net after booth &amp; travel</small>
+      <div class="big" style="color:{{ 'var(--green)' if md.net_after_booth_cents >= 0 else 'var(--redink)' }}">{{ md.net_after_booth_cents|money }}</div>
+      <small>Cost {{ md.booth_cost_cents|money }}</small>
+    </div>
+    <div class="card">
+      <small>Booth sell-through</small>
+      <div class="big">{{ '%.0f'|format(md.overall_sell_through_pct) }}%</div>
+      <small>{{ md.total_sold_packed_qty }} of {{ md.total_brought_qty }} sold · {{ md.booth_sellouts|length }} sold out</small>
+    </div>
+    <div class="card">
+      <small>Cash drawer</small>
+      {% if md.counted_cash_cents is not none %}
+        <div class="big">{{ md.counted_cash_cents|money }}</div>
+        <small style="color:{{ 'var(--green)' if md.drawer_diff_cents == 0 else ('var(--amberink)' if md.drawer_diff_cents > 0 else 'var(--redink)') }};font-weight:600">
+          Expected {{ md.expected_drawer_cents|money }} ·
+          {% if md.drawer_diff_cents == 0 %}Exact ($0.00){% elif md.drawer_diff_cents > 0 %}+{{ md.drawer_diff_cents|money }} over{% else %}-{{ (-md.drawer_diff_cents)|money }} short{% endif %}
+        </small>
+      {% else %}
+        <div class="big">{{ md.expected_drawer_cents|money }}</div>
+        <small>Expected ({{ md.starting_cash_cents|money }} float + {{ md.physical_cash_cents|money }} cash)</small>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if md.packed_items %}
+<div class="card table-card">
+  <div style="padding:14px 18px 8px"><b>Booth inventory summary</b></div>
+  <table>
+    <thead><tr><th>Product</th><th class="num">Brought</th><th class="num">Sold</th><th class="num">Write-off</th><th class="num">Left</th><th class="num">Revenue</th></tr></thead>
+    <tbody>
+    {% for it in md.packed_items %}
+      <tr>
+        <td>
+          <b>{{ it.label }}</b>
+          {% if it.booth_sold_out %}<span class="pill red" style="margin-left:6px;padding:2px 8px;font-size:11px">Sold out{% if it.last_sold_at %} · {{ it.sell_through_pct|round(0)|int }}%{% endif %}</span>{% endif %}
+        </td>
+        <td class="num">{{ it.brought_qty }}{{ ' lb' if it.unit_label == 'lb' else '' }}</td>
+        <td class="num">{{ it.sold_qty }}{{ ' lb' if it.unit_label == 'lb' else '' }}</td>
+        <td class="num">{{ it.write_off_qty if it.write_off_qty > 0 else '—' }}</td>
+        <td class="num"><b>{{ it.left_at_booth }}{{ ' lb' if it.unit_label == 'lb' else '' }}</b></td>
+        <td class="num">{{ it.sold_revenue_cents|money }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+<textarea id="scorecard-raw" hidden>{{ md.scorecard_text }}</textarea>
+<script>
+(() => {
+  const btn = document.getElementById('share-scorecard-btn');
+  const raw = document.getElementById('scorecard-raw');
+  if (!btn || !raw) return;
+  btn.onclick = async () => {
+    const text = raw.value;
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Market Day Scorecard', text }); return; } catch (e) {}
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      const orig = btn.textContent;
+      btn.textContent = 'Copied scorecard!';
+      setTimeout(() => { btn.textContent = orig; }, 1800);
+    } catch (e) {
+      window.prompt('Copy scorecard:', text);
+    }
+  };
+})();
+</script>
+
+{% elif show_pack_editor %}
+<!-- ==================== PACK-OUT / SETUP EDITOR ==================== -->
+<form method="post" action="/market-day/pack" id="pack-form">
+  <input type="hidden" name="market_date" value="{{ md.market_date }}">
+  <div class="card" style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <h2 style="margin:0">1. Market details &amp; cash float ({{ md.market_date }})</h2>
+      {% if md.state in ('live', 'planned') and md.packed_sku_count > 0 %}
+      <a href="/market-day?date={{ md.market_date }}" class="link" style="padding:0">Cancel editing</a>
+      {% endif %}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;align-items:end">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Marketplace
+        <select name="marketplace_id" id="mp-select" onchange="syncMpDefaults()">
+          {% for mp in marketplaces %}
+          <option value="{{ mp.id }}"
+            data-booth="{{ '%.2f'|format(mp.booth_fee_cents / 100) }}"
+            data-travel="{{ '%.2f'|format(mp.travel_cost_cents / 100) }}"
+            {{ 'selected' if md.market_day and md.market_day.marketplace_id == mp.id }}>
+            {{ mp.name }}{% if mp.location %} ({{ mp.location }}){% endif %}
+          </option>
+          {% endfor %}
+          <option value="__new__" {{ 'selected' if not marketplaces }}>+ New marketplace...</option>
+        </select>
+      </label>
+
+      <label id="new-mp-wrap" style="display:flex;flex-direction:column;gap:4px;font-size:13px" {{ 'hidden' if marketplaces }}>
+        New marketplace name
+        <input name="new_marketplace_name" id="new-mp-input" placeholder="e.g. Saturday Farmers Market" class="datein" style="width:100%">
+      </label>
+
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Booth fee ($)
+        <input name="booth_fee" id="pack-booth" type="number" step="0.01" min="0" class="datein" style="width:100%"
+          value="{{ '%.2f'|format((md.market_day.booth_fee_cents if md.market_day else (marketplaces[0].booth_fee_cents if marketplaces else 0)) / 100) }}">
+      </label>
+
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Travel ($)
+        <input name="travel_cost" id="pack-travel" type="number" step="0.01" min="0" class="datein" style="width:100%"
+          value="{{ '%.2f'|format((md.market_day.travel_cost_cents if md.market_day else (marketplaces[0].travel_cost_cents if marketplaces else 0)) / 100) }}">
+      </label>
+
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+        <span>Starting cash float ($) <button type="button" class="link" style="padding:0;margin-left:4px" onclick="document.getElementById('pack-float').value='{{ '%.2f'|format(recommended_cash_cents / 100) }}'">Rec: {{ recommended_cash_cents|money }}</button></span>
+        <input name="starting_cash" id="pack-float" type="number" step="0.01" min="0" class="datein" style="width:100%"
+          value="{{ '%.2f'|format((md.market_day.starting_cash_cents if md.market_day else 0) / 100) }}">
+      </label>
+    </div>
+  </div>
+
+  <div class="card table-card" style="margin-bottom:18px">
+    <div style="padding:16px 18px 12px;border-bottom:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div>
+          <h2 style="margin:0">2. What are you bringing to the booth?</h2>
+          <small id="pack-summary">0 products packed</small>
+        </div>
+        <div class="row" style="flex-wrap:wrap">
+          <button type="button" class="btn" id="btn-fill-suggested">✦ Fill Suggested Pack List</button>
+          <button type="button" class="btn" id="btn-fill-all">Bring All On-Hand</button>
+          <button type="button" class="btn" id="btn-clear-pack">Clear</button>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input type="search" id="pack-search" class="search" placeholder="Search products..." style="margin:0;flex:1;min-width:180px">
+        <button type="button" id="pack-only-chip" class="chip-toggle" aria-pressed="false">Packed only</button>
+      </div>
+      {% if categories %}
+      <div class="chips" id="pack-cats" style="margin:10px 0 0">
+        <button type="button" class="chip on" data-cat="">All</button>
+        {% for c in categories %}<button type="button" class="chip" data-cat="{{ c }}">{{ c }}</button>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th class="num">On hand</th>
+          <th class="num" style="width:190px">Brought to booth</th>
+        </tr>
+      </thead>
+      <tbody id="pack-rows">
+      {% for s in md.skus %}
+        <tr class="pack-row" data-sku="{{ s.sku_id }}" data-cat="{{ s.category }}" data-name="{{ s.label|lower }}" data-onhand="{{ s.on_hand }}" data-step="{{ '0.5' if s.unit_label == 'lb' else '1' }}">
+          <td>
+            <b>{{ s.name }}</b>
+            {% if s.variant_name %}<small>{{ s.variant_name }}</small>{% endif %}
+            <small class="muted">{{ s.price_cents|money }}{{ '/lb' if s.sell_mode in ('lb_stock_unit', 'lb_stock_lb') else '' }} <span class="sug-hint" data-sug-for="{{ s.sku_id }}"></span></small>
+          </td>
+          <td class="num">
+            <span style="color:{{ 'var(--redink)' if s.on_hand <= 0 else 'inherit' }}">{{ s.on_hand }}{{ ' lb' if s.unit_label == 'lb' else '' }}</span>
+          </td>
+          <td class="num">
+            <div style="display:inline-flex;align-items:center;gap:6px">
+              <button type="button" class="btn" style="padding:6px 11px;font-weight:700" onclick="stepPack({{ s.sku_id }}, -1)">−</button>
+              <input type="number" name="brought_{{ s.sku_id }}" id="brought-{{ s.sku_id }}"
+                value="{{ s.brought_qty if s.brought_qty > 0 else 0 }}"
+                min="0" step="{{ '0.1' if s.unit_label == 'lb' else '1' }}" inputmode="decimal"
+                class="datein pack-input" style="width:76px;text-align:center;font-weight:600;padding:7px 6px"
+                oninput="refreshPackSummary()">
+              <button type="button" class="btn" style="padding:6px 11px;font-weight:700" onclick="stepPack({{ s.sku_id }}, 1)">+</button>
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No active products yet. Sync Zettle or add products first.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div style="padding:16px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;background:#faf9f3">
+      <button type="submit" class="btn primary" style="padding:12px 24px;font-weight:600">
+        {{ 'Save Pack-Ahead List' if md.market_date > today_iso else 'Start / Update Market Day →' }}
+      </button>
+    </div>
+  </div>
+</form>
+
+<script id="suggested-pack-json" type="application/json">{{ suggested_by_mp|tojson }}</script>
+<script>
+(() => {
+  const SUG = JSON.parse(document.getElementById('suggested-pack-json').textContent || '{}');
+  let activeCat = '', query = '', packedOnly = false;
+
+  window.syncMpDefaults = function() {
+    const sel = document.getElementById('mp-select');
+    const opt = sel && sel.options[sel.selectedIndex];
+    const isNew = !opt || opt.value === '__new__';
+    document.getElementById('new-mp-wrap').hidden = !isNew;
+    const newInp = document.getElementById('new-mp-input');
+    if (newInp) newInp.required = isNew;
+    if (opt && !isNew) {
+      document.getElementById('pack-booth').value = opt.dataset.booth || '0.00';
+      document.getElementById('pack-travel').value = opt.dataset.travel || '0.00';
+    }
+    renderSuggestedHints();
+  };
+
+  function currentSuggestedMap() {
+    const sel = document.getElementById('mp-select');
+    const mpId = sel ? sel.value : '';
+    return SUG[mpId] || SUG['default'] || {};
+  }
+
+  function renderSuggestedHints() {
+    const map = currentSuggestedMap();
+    document.querySelectorAll('[data-sug-for]').forEach(el => {
+      const sid = el.dataset.sugFor;
+      const q = map[sid];
+      el.textContent = q ? `· Suggested: ${q}` : '';
+    });
+  }
+
+  window.stepPack = function(sid, dir) {
+    const inp = document.getElementById('brought-' + sid);
+    const row = document.querySelector(`.pack-row[data-sku="${sid}"]`);
+    if (!inp || !row) return;
+    const step = parseFloat(row.dataset.step || '1') || 1;
+    const cur = parseFloat(inp.value || '0') || 0;
+    const next = Math.max(0, Math.round((cur + dir * step) * 1000) / 1000);
+    inp.value = next;
+    refreshPackSummary();
+  };
+
+  window.refreshPackSummary = function() {
+    let skus = 0, total = 0;
+    document.querySelectorAll('.pack-row').forEach(row => {
+      const inp = row.querySelector('.pack-input');
+      const v = parseFloat(inp.value || '0') || 0;
+      if (v > 0) { skus++; total += v; }
+      const matchCat = !activeCat || row.dataset.cat === activeCat;
+      const matchQ = !query || (row.dataset.name || '').includes(query);
+      const matchP = !packedOnly || v > 0;
+      row.hidden = !(matchCat && matchQ && matchP);
+    });
+    const totRound = Math.round(total * 100) / 100;
+    document.getElementById('pack-summary').textContent = `${skus} product${skus === 1 ? '' : 's'} packed (${totRound} total brought)`;
+  };
+
+  document.getElementById('btn-fill-suggested').onclick = () => {
+    const map = currentSuggestedMap();
+    document.querySelectorAll('.pack-row').forEach(row => {
+      const sid = row.dataset.sku;
+      const onHand = parseFloat(row.dataset.onhand || '0') || 0;
+      const sug = parseFloat(map[sid] || '0') || 0;
+      const inp = row.querySelector('.pack-input');
+      if (sug > 0) {
+        inp.value = onHand > 0 ? Math.min(sug, onHand) : sug;
+      } else {
+        inp.value = 0;
+      }
+    });
+    refreshPackSummary();
+  };
+
+  document.getElementById('btn-fill-all').onclick = () => {
+    document.querySelectorAll('.pack-row').forEach(row => {
+      const onHand = parseFloat(row.dataset.onhand || '0') || 0;
+      row.querySelector('.pack-input').value = onHand > 0 ? onHand : 0;
+    });
+    refreshPackSummary();
+  };
+
+  document.getElementById('btn-clear-pack').onclick = () => {
+    document.querySelectorAll('.pack-input').forEach(inp => { inp.value = 0; });
+    refreshPackSummary();
+  };
+
+  document.getElementById('pack-search').addEventListener('input', e => {
+    query = e.target.value.toLowerCase();
+    refreshPackSummary();
+  });
+
+  document.getElementById('pack-only-chip').onclick = e => {
+    packedOnly = !packedOnly;
+    e.currentTarget.classList.toggle('on', packedOnly);
+    e.currentTarget.setAttribute('aria-pressed', packedOnly ? 'true' : 'false');
+    refreshPackSummary();
+  };
+
+  const catWrap = document.getElementById('pack-cats');
+  if (catWrap) {
+    catWrap.addEventListener('click', e => {
+      const b = e.target.closest('[data-cat]');
+      if (!b) return;
+      activeCat = b.dataset.cat;
+      catWrap.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === b));
+      refreshPackSummary();
+    });
+  }
+
+  syncMpDefaults();
+  refreshPackSummary();
+})();
+</script>
+
+{% else %}
+<!-- ==================== LIVE BOOTH / PACK-AHEAD DASHBOARD ==================== -->
+<div class="cards four">
+  <div class="card">
+    <small>Gross sales</small>
+    <div class="big">{{ md.gross_sales_cents|money }}</div>
+    <small>{{ md.txns_count }} sale{{ '' if md.txns_count == 1 else 's' }} · Card {{ md.card_cents|money }} · Dig {{ md.digital_cash_cents|money }} · Cash {{ md.physical_cash_cents|money }}</small>
+  </div>
+  <div class="card">
+    <small>Booth break-even ({{ md.booth_cost_cents|money }})</small>
+    <div class="big" style="color:{{ 'var(--green)' if md.net_after_booth_cents >= 0 else 'var(--amberink)' }}">
+      {{ '+' if md.net_after_booth_cents > 0 else '' }}{{ md.net_after_booth_cents|money }}
+    </div>
+    <div style="height:8px;background:#eeece1;border-radius:99px;overflow:hidden;margin:6px 0 4px">
+      <div style="height:100%;width:{{ md.breakeven_pct }}%;background:{{ 'var(--green)' if md.net_after_booth_cents >= 0 else 'var(--yellow)' }}"></div>
+    </div>
+    <small>{{ 'Covered booth & travel!' if md.net_after_booth_cents >= 0 and md.booth_cost_cents > 0 else ('%.0f%% of %s covered'|format(md.breakeven_pct, md.booth_cost_cents|money) if md.booth_cost_cents > 0 else 'No booth fee set') }}</small>
+  </div>
+  <div class="card">
+    <small>Booth sell-through</small>
+    <div class="big">{{ '%.0f'|format(md.overall_sell_through_pct) }}%</div>
+    <small>{{ md.total_sold_packed_qty }} sold of {{ md.total_brought_qty }} brought · {{ md.booth_sellouts|length }} sold out</small>
+  </div>
+  <div class="card">
+    <small>Expected cash in drawer</small>
+    <div class="big">{{ md.expected_drawer_cents|money }}</div>
+    <small>{{ md.starting_cash_cents|money }} float + {{ md.physical_cash_cents|money }} cash sales</small>
+  </div>
+</div>
+
+<div class="card table-card" style="margin-bottom:18px">
+  <div style="padding:14px 18px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <b>At the booth ({{ md.packed_sku_count }} products)</b>
+      <small>Live counts subtract both Zettle card sales and Quick sales automatically.</small>
+    </div>
+    <a href="/market-day?date={{ md.market_date }}&amp;edit=1" class="btn" style="padding:6px 12px;font-size:13px">+ Add / edit packed items</a>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Product</th>
+        <th class="num">Brought</th>
+        <th class="num">Sold</th>
+        <th class="num">Left at booth</th>
+        <th class="num">Restock</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for it in md.packed_items %}
+      <tr>
+        <td>
+          <b>{{ it.label }}</b>
+          <small class="muted">{{ it.on_hand }}{{ ' lb' if it.unit_label == 'lb' else '' }} total on hand</small>
+        </td>
+        <td class="num">{{ it.brought_qty }}{{ ' lb' if it.unit_label == 'lb' else '' }}</td>
+        <td class="num">{{ it.sold_qty }}{{ ' lb' if it.unit_label == 'lb' else '' }}</td>
+        <td class="num">
+          {% if it.booth_sold_out %}
+            <span class="pill red">0 left{% if it.last_sold_at %} · Sold out{% endif %}</span>
+          {% elif it.left_at_booth <= 2 %}
+            <span class="pill amber">{{ it.left_at_booth }}{{ ' lb' if it.unit_label == 'lb' else '' }} left</span>
+          {% else %}
+            <b style="color:var(--green)">{{ it.left_at_booth }}{{ ' lb' if it.unit_label == 'lb' else '' }}</b>
+          {% endif %}
+        </td>
+        <td class="num">
+          <form method="post" action="/market-day/restock" style="display:inline;margin:0">
+            <input type="hidden" name="market_date" value="{{ md.market_date }}">
+            <input type="hidden" name="sku_id" value="{{ it.sku_id }}">
+            <input type="hidden" name="delta_qty" value="1">
+            <button class="btn" style="padding:5px 10px;font-size:12px" title="Brought 1 more to booth">+1</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if md.state == 'live' %}
+<details class="card" id="closeout-panel" style="margin-bottom:20px">
+  <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:17px">
+    <span>Pack up &amp; Close Out Market Day</span>
+    <span class="pill green">Wrap up →</span>
+  </summary>
+
+  <form method="post" action="/market-day/close" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">
+    <input type="hidden" name="market_date" value="{{ md.market_date }}">
+
+    <div class="cards two even" style="margin-bottom:16px">
+      <div class="card" style="background:#faf9f3">
+        <h3 style="margin:0 0 6px;font-size:15px">1. Cash drawer check (optional)</h3>
+        <small style="margin-bottom:10px">
+          Starting float <b>{{ md.starting_cash_cents|money }}</b> + Physical cash sales <b>{{ md.physical_cash_cents|money }}</b> =
+          Expected <b>{{ md.expected_drawer_cents|money }}</b>
+        </small>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+          Counted physical cash in drawer ($)
+          <input type="number" step="0.01" min="0" name="counted_cash" id="close-cash-input"
+            placeholder="{{ '%.2f'|format(md.expected_drawer_cents / 100) }}"
+            value="{{ '%.2f'|format(md.counted_cash_cents / 100) if md.counted_cash_cents is not none else '' }}"
+            class="datein" style="font-size:16px;font-weight:600">
+        </label>
+        <small id="close-cash-diff" style="margin-top:6px;font-weight:600"></small>
+      </div>
+
+      <div class="card" style="background:#faf9f3">
+        <h3 style="margin:0 0 6px;font-size:15px">2. Weather &amp; market notes</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Weather
+            <select name="weather">
+              <option value="">—</option>
+              {% for w in weather_options %}
+              <option value="{{ w }}" {{ 'selected' if md.market_day and md.market_day.weather == w }}>{{ w }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Notes
+            <input name="notes" class="datein" value="{{ md.market_day.notes if md.market_day else '' }}" placeholder="Crowd, foot traffic, sellout notes...">
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="card table-card" style="margin-bottom:16px">
+      <div style="padding:12px 16px 8px">
+        <b>3. Cooler &amp; booth check (leave blank if Expected Left matches!)</b>
+        <small>Unsold intact items stay in your Inventory automatically. Only enter breakage/samples or cooler count mismatches below.</small>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th class="num">Brought</th>
+            <th class="num">Sold</th>
+            <th class="num">Expected left</th>
+            <th class="num" style="width:130px">Write-off / comp</th>
+            <th class="num" style="width:140px">Counted left</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for it in md.packed_items %}
+          <tr>
+            <td><b>{{ it.label }}</b></td>
+            <td class="num">{{ it.brought_qty }}</td>
+            <td class="num">{{ it.sold_qty }}</td>
+            <td class="num"><b>{{ it.expected_left }}</b></td>
+            <td class="num">
+              <input type="number" step="{{ '0.1' if it.unit_label == 'lb' else '1' }}" min="0"
+                name="writeoff_{{ it.sku_id }}"
+                value="{{ it.write_off_qty if it.write_off_qty > 0 else '' }}"
+                placeholder="0" class="datein" style="width:82px;text-align:center;padding:6px">
+            </td>
+            <td class="num">
+              <input type="number" step="{{ '0.1' if it.unit_label == 'lb' else '1' }}" min="0"
+                name="counted_left_{{ it.sku_id }}"
+                value="{{ it.counted_left_qty if it.counted_left_qty is not none else '' }}"
+                placeholder="{{ it.expected_left }}" class="datein" style="width:88px;text-align:center;padding:6px">
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end">
+      <button type="submit" class="btn primary" style="padding:12px 24px;font-weight:600">✓ Close Out Market Day</button>
+    </div>
+  </form>
+</details>
+
+<script>
+(() => {
+  const expectedCents = {{ md.expected_drawer_cents }};
+  const inp = document.getElementById('close-cash-input');
+  const out = document.getElementById('close-cash-diff');
+  if (!inp || !out) return;
+  function sync() {
+    const raw = (inp.value || '').trim();
+    if (!raw) { out.textContent = ''; return; }
+    const val = Math.round((parseFloat(raw) || 0) * 100);
+    const diff = val - expectedCents;
+    if (diff === 0) {
+      out.style.color = 'var(--green)';
+      out.textContent = '✓ Exact match ($0.00 difference)';
+    } else if (diff > 0) {
+      out.style.color = 'var(--amberink)';
+      out.textContent = `+$${(diff / 100).toFixed(2)} over expected`;
+    } else {
+      out.style.color = 'var(--redink)';
+      out.textContent = `-$${(Math.abs(diff) / 100).toFixed(2)} short of expected`;
+    }
+  }
+  inp.addEventListener('input', sync);
+  sync();
+})();
+</script>
+{% endif %}
+{% endif %}
+{% endblock %}
