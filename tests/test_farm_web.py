@@ -721,6 +721,10 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Family Turkeys", sarah_tally)
         self.assertIn("17.25", sarah_tally)
         self.assertIn("Cassberry Lane Farm", sarah_tally)
+        self.assertIn("1. Grow &amp; Feed", sarah_tally)
+        self.assertIn("2. Pre-Orders", sarah_tally)
+        self.assertIn("3. Harvest &amp; Pick", sarah_tally)
+        self.assertIn("4. Pickup Day", sarah_tally)
 
         c_sarah.post("/eggs/log", data={
             "log_date": date.today().isoformat(),
@@ -733,8 +737,12 @@ class FarmWebTest(unittest.TestCase):
         eggs_html = self.c.get("/eggs").text
         self.assertIn("Sarah", eggs_html)
 
-        # Manager can view Financials & Customers, but cannot access Settings or delete a batch
-        self.assertEqual(c_sarah.get("/financials").status_code, 200)
+        # Manager can view Financials & Customers (with Farm subnav bar, without Settings & Team pill), but cannot access Settings or delete a batch
+        fin_sarah = c_sarah.get("/financials")
+        self.assertEqual(fin_sarah.status_code, 200)
+        self.assertIn("Feed Schedule", fin_sarah.text)
+        self.assertIn("Financials &amp; Taxes", fin_sarah.text)
+        self.assertNotIn("Settings &amp; Team", fin_sarah.text)
         self.assertEqual(c_sarah.get("/customers").status_code, 200)
         self.assertEqual(c_sarah.get("/settings").status_code, 403)
         self.assertEqual(c_sarah.post(f"/batches/{bid}/delete").status_code, 403)

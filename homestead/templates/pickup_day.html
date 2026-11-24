@@ -1,24 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Pickup Day · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
-<div class="eyebrow"><a href="/batches/{{ b.id }}" style="text-decoration:none">← {{ b.name|upper }}</a></div>
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>Pickup Day Checkout</h1>
+    <h1>{{ b.name }} · Pickup Day</h1>
     <p class="sub">
-      {{ b.name }} ({{ b.species|title }})
+      {{ b.species|title }}
       {% if b.pickup_date %} · Pickup {{ b.pickup_date }}{% endif %}
       {% if b.pickup_window %} ({{ b.pickup_window }}){% endif %}
       {% if pickup_location %} · {{ pickup_location }}{% endif %}
     </p>
   </div>
-  <div class="row">
-    <a href="/batches/{{ b.id }}/harvest" class="btn">Harvest Tally</a>
-    <a href="/batches/{{ b.id }}/preorders" class="btn">Pre-Orders</a>
-    <a href="/batches/{{ b.id }}" class="btn">Batch Logs</a>
-  </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+{% include "_batch_stage_bar.html" %}
 
 <div class="cards four">
   <div class="card">

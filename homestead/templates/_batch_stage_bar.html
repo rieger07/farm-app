@@ -1,0 +1,20 @@
+{% if stage_info %}
+<div class="stage-bar" role="navigation" aria-label="Batch workflow stages">
+  <a href="/batches/{{ b.id }}" class="stage-tab {{ 'on' if batch_stage == 'grow' }} {{ 'current' if stage_info.current_stage == 'grow' }}">
+    <b><span>1. Grow &amp; Feed</span>{% if stage_info.current_stage == 'grow' %}<i class="stage-dot" title="Active stage"></i>{% endif %}</b>
+    <small>{% if s.is_planned %}Starts {{ b.start_date }}{% else %}{{ s.on_farm_head }} on farm · {{ s.initial_quantity - s.surviving_quantity }} losses{% endif %}</small>
+  </a>
+  <a href="/batches/{{ b.id }}/preorders" class="stage-tab {{ 'on' if batch_stage == 'preorders' }} {{ 'current' if stage_info.current_stage == 'preorders' }}">
+    <b><span>2. Pre-Orders</span>{% if stage_info.current_stage == 'preorders' %}<i class="stage-dot" title="Active stage"></i>{% endif %}</b>
+    <small>{{ stage_info.po_summary.reserved_qty }} reserved{% if stage_info.po_summary.waitlist_qty %} · {{ stage_info.po_summary.waitlist_qty }} waitlist{% endif %}{% if b.preorder_enabled %} · Live{% endif %}</small>
+  </a>
+  <a href="/batches/{{ b.id }}/harvest" class="stage-tab {{ 'on' if batch_stage == 'harvest' }} {{ 'current' if stage_info.current_stage == 'harvest' }}">
+    <b><span>3. Harvest &amp; Pick</span>{% if stage_info.current_stage == 'harvest' %}<i class="stage-dot" title="Active stage"></i>{% endif %}</b>
+    <small>{{ s.harvested_head }} / {{ s.surviving_quantity }} weighed{% if b.picking_enabled %} · Picking live{% endif %}</small>
+  </a>
+  <a href="/batches/{{ b.id }}/pickup" class="stage-tab {{ 'on' if batch_stage == 'pickup' }} {{ 'current' if stage_info.current_stage == 'pickup' }}">
+    <b><span>4. Pickup Day</span>{% if stage_info.current_stage == 'pickup' %}<i class="stage-dot" title="Active stage"></i>{% endif %}</b>
+    <small>{{ stage_info.pending_pickup_customers }} waiting · {{ stage_info.completed_pickup_customers }} complete</small>
+  </a>
+</div>
+{% endif %}
