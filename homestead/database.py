@@ -3300,14 +3300,16 @@ def settle_customer_batch_pickup(
     collected_today: float | None = None,
     mark_paid: bool = True,
     mark_picked_up: bool = True,
+    bird_ids: list[int] | None = None,
 ) -> int:
-    """Settle all for-sale birds assigned to customer_id in batch_id on Pickup Day.
+    """Settle selected (or all) for-sale birds assigned to customer_id in batch_id on Pickup Day.
 
-    If ``collected_today`` is provided, computes ``new_total = total_deposits + collected_today``.
-    When ``new_total`` differs from the birds' current effective total (e.g. a tip/round-up or
-    adjustment), distributes ``new_total`` across the birds proportionally by dressed weight
-    into ``actual_sale_price``.
+    If ``bird_ids`` is provided, only those specific bird IDs are settled (supporting partial
+    pickups while keeping remaining birds assigned to the customer).
+    If ``collected_today`` is provided, computes ``new_total = total_deposits + collected_today``
+    for the settled birds and distributes any difference proportionally into ``actual_sale_price``.
     """
+    clean_ids = [int(x) for x in (bird_ids or []) if int(x) > 0]
     with get_db_connection() as conn:
         batch = conn.execute(
             "SELECT sale_price_per_lb FROM batches WHERE id = ? AND user_id = ?",
@@ -3316,15 +3318,28 @@ def settle_customer_batch_pickup(
         if not batch:
             return 0
         price_per_lb = float(batch["sale_price_per_lb"] or 0.0)
-        birds = conn.execute(
-            """
-            SELECT id, dressed_lbs, deposit_paid, actual_sale_price, payment_status, pickup_status
-            FROM batch_harvests
-            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
-            ORDER BY id ASC
-            """,
-            (int(batch_id), int(customer_id)),
-        ).fetchall()
+        if clean_ids:
+            marks = ",".join("?" * len(clean_ids))
+            birds = conn.execute(
+                f"""
+                SELECT id, dressed_lbs, deposit_paid, actual_sale_price, payment_status, pickup_status
+                FROM batch_harvests
+                WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+                  AND id IN ({marks})
+                ORDER BY id ASC
+                """,
+                [int(batch_id), int(customer_id), *clean_ids],
+            ).fetchall()
+        else:
+            birds = conn.execute(
+                """
+                SELECT id, dressed_lbs, deposit_paid, actual_sale_price, payment_status, pickup_status
+                FROM batch_harvests
+                WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+                ORDER BY id ASC
+                """,
+                (int(batch_id), int(customer_id)),
+            ).fetchall()
         if not birds:
             return 0
 

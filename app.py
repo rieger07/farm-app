@@ -1485,25 +1485,40 @@ def batch_pickup_page(
                 "email": e["customer_email"],
                 "pref": e["customer_pref"],
                 "birds": [],
+                "pending_birds": [],
+                "completed_birds": [],
                 "total_lbs": 0.0,
+                "pending_lbs": 0.0,
                 "calc_total": 0.0,
                 "effective_total": 0.0,
                 "deposits_paid": 0.0,
+                "pending_deposits_paid": 0.0,
                 "balance_due": 0.0,
                 "all_paid": True,
                 "all_picked_up": True,
             },
         )
-        grp["birds"].append(e)
+        due_amt = (
+            0.0
+            if e["payment_status"] == "paid"
+            else round(max(0.0, float(e["effective_price"]) - float(e["deposit_paid"])), 2)
+        )
+        bird_row = {**e, "due_amt": due_amt}
+        is_bird_done = e["payment_status"] == "paid" and e["pickup_status"] == "picked_up"
+        grp["birds"].append(bird_row)
         grp["total_lbs"] = round(grp["total_lbs"] + float(e["dressed_lbs"]), 2)
         grp["calc_total"] = round(grp["calc_total"] + float(e["est_price"]), 2)
         grp["effective_total"] = round(grp["effective_total"] + float(e["effective_price"]), 2)
         grp["deposits_paid"] = round(grp["deposits_paid"] + float(e["deposit_paid"]), 2)
+        if is_bird_done:
+            grp["completed_birds"].append(bird_row)
+        else:
+            grp["pending_birds"].append(bird_row)
+            grp["pending_lbs"] = round(grp["pending_lbs"] + float(e["dressed_lbs"]), 2)
+            grp["pending_deposits_paid"] = round(grp["pending_deposits_paid"] + float(e["deposit_paid"]), 2)
         if e["payment_status"] != "paid":
             grp["all_paid"] = False
-            grp["balance_due"] = round(
-                grp["balance_due"] + max(0.0, float(e["effective_price"]) - float(e["deposit_paid"])), 2
-            )
+            grp["balance_due"] = round(grp["balance_due"] + due_amt, 2)
         if e["pickup_status"] != "picked_up":
             grp["all_picked_up"] = False
 
@@ -1511,7 +1526,11 @@ def batch_pickup_page(
     completed_groups = []
     for g in by_cust.values():
         g["birds"].sort(key=lambda x: x["num"])
+        g["pending_birds"].sort(key=lambda x: x["num"])
+        g["completed_birds"].sort(key=lambda x: x["num"])
         g["bird_nums_label"] = ", ".join(f"#{x['num']}" for x in g["birds"])
+        g["pending_nums_label"] = ", ".join(f"#{x['num']}" for x in g["pending_birds"])
+        g["completed_nums_label"] = ", ".join(f"#{x['num']}" for x in g["completed_birds"])
         if g["all_paid"] and g["all_picked_up"]:
             completed_groups.append(g)
         else:
@@ -1524,7 +1543,8 @@ def batch_pickup_page(
     total_deposits = round(sum(g["deposits_paid"] for g in by_cust.values()), 2)
     total_collected = round(
         sum(g["effective_total"] for g in completed_groups)
-        + sum(g["deposits_paid"] for g in pending_groups),
+        + sum(sum(b["effective_price"] for b in g["completed_birds"]) for g in pending_groups)
+        + sum(g["pending_deposits_paid"] for g in pending_groups),
         2,
     )
 
@@ -1557,6 +1577,7 @@ def batch_pickup_settle_submit(
     batch_id: int,
     customer_id: int,
     collected_today: str = Form(""),
+    bird_ids: list[str] = Form(default=[]),
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
@@ -1566,9 +1587,11 @@ def batch_pickup_settle_submit(
             collected_val = max(0.0, float(collected_today))
         except ValueError:
             collected_val = None
+    sel_ids = [int(x) for x in bird_ids if str(x).strip().isdigit()]
     cnt = settle_customer_batch_pickup(
         user["id"], batch_id, customer_id,
         collected_today=collected_val, mark_paid=True, mark_picked_up=True,
+        bird_ids=sel_ids or None,
     )
     cust = get_customer(user["id"], customer_id)
     cname = cust["name"] if cust else "Customer"
