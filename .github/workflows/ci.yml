@@ -22,7 +22,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install --no-cache-dir -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run full test suite
         run: python -W ignore -m unittest discover -s tests -t . -v
