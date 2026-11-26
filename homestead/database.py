@@ -18,24 +18,23 @@ from homestead.config import (
     DEFAULT_BARREL_CAPACITY,
     LIFECYCLE_TYPES,
     LIVESTOCK_DATA,
-    get_species_defaults as _get_static_species_defaults,
     infer_lifecycle_type,
+)
+from shared.bridge import (
+    delete_ledger_entry,
+    get_sku_completed_sales_summary,
+    list_active_ledger_skus,
+    restock_ledger_sku,
+)
+from shared.db import (
+    get_connection as _shared_get_connection,
+    get_db_path,
+    migrate as _shared_migrate,
 )
 
 
-def get_db_path() -> str:
-    return os.environ.get("FARM_DB_PATH", os.path.join("data", "homestead.db"))
-
-
 def get_db_connection() -> sqlite3.Connection:
-    db_path = get_db_path()
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return _shared_get_connection()
 
 
 def get_active_user_id() -> int | None:
@@ -58,540 +57,7 @@ def _resolve_user_id(user_id: int | None = None) -> int | None:
 
 
 def init_db() -> None:
-    with get_db_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                display_name TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                password_salt TEXT NOT NULL,
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                token TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_settings (
-                user_id INTEGER NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                PRIMARY KEY (user_id, key),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS species_presets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                species TEXT NOT NULL COLLATE NOCASE,
-                lifecycle_type TEXT NOT NULL DEFAULT 'direct_arrival',
-                days_to_birth INTEGER NOT NULL DEFAULT 0,
-                starter_weeks INTEGER NOT NULL DEFAULT 3,
-                starter_feed_lbs REAL NOT NULL DEFAULT 3.0,
-                grower_weeks INTEGER NOT NULL DEFAULT 5,
-                grower_feed_lbs REAL NOT NULL DEFAULT 12.0,
-                starter_bag_price REAL NOT NULL DEFAULT 24.0,
-                grower_bag_price REAL NOT NULL DEFAULT 22.0,
-                unit_cost REAL NOT NULL DEFAULT 4.0,
-                processing_cost REAL NOT NULL DEFAULT 5.0,
-                expected_yield_lbs REAL NOT NULL DEFAULT 4.5,
-                sale_price_per_lb REAL NOT NULL DEFAULT 6.5,
-                created_at TEXT NOT NULL,
-                UNIQUE(user_id, species),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                name TEXT NOT NULL,
-                species TEXT NOT NULL,
-                lifecycle_type TEXT,
-                quantity INTEGER NOT NULL,
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                days_to_birth INTEGER NOT NULL,
-                weeks_to_proc INTEGER NOT NULL,
-                feed_total REAL NOT NULL,
-                starter_weeks INTEGER,
-                starter_feed_lbs REAL,
-                grower_weeks INTEGER,
-                grower_feed_lbs REAL,
-                starter_bag_price REAL,
-                grower_bag_price REAL,
-                unit_cost REAL,
-                processing_cost REAL,
-                expected_yield_lbs REAL,
-                sale_price_per_lb REAL,
-                actual_feed_lbs REAL,
-                actual_feed_cost REAL,
-                active INTEGER NOT NULL DEFAULT 1,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        # Migrate older databases if phased-feed / cost / reconciliation / user_id / lifecycle_type columns are missing
-        existing_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(batches)").fetchall()
-        }
-        new_columns = [
-            ("user_id", "INTEGER"),
-            ("lifecycle_type", "TEXT"),
-            ("starter_weeks", "INTEGER"),
-            ("starter_feed_lbs", "REAL"),
-            ("grower_weeks", "INTEGER"),
-            ("grower_feed_lbs", "REAL"),
-            ("starter_bag_price", "REAL"),
-            ("grower_bag_price", "REAL"),
-            ("unit_cost", "REAL"),
-            ("processing_cost", "REAL"),
-            ("expected_yield_lbs", "REAL"),
-            ("sale_price_per_lb", "REAL"),
-            ("actual_feed_lbs", "REAL"),
-            ("actual_feed_cost", "REAL"),
-            ("picking_enabled", "INTEGER DEFAULT 0"),
-            ("picking_slug", "TEXT"),
-            ("max_birds_per_customer", "INTEGER"),
-            ("preorder_enabled", "INTEGER DEFAULT 0"),
-            ("preorder_cap", "INTEGER"),
-            ("deposit_per_bird", "REAL DEFAULT 0.0"),
-            ("preorder_notes", "TEXT DEFAULT ''"),
-            ("picking_preorder_only", "INTEGER DEFAULT 0"),
-            ("pickup_date", "TEXT DEFAULT ''"),
-            ("pickup_window", "TEXT DEFAULT ''"),
-            ("pickup_location", "TEXT DEFAULT ''"),
-        ]
-        for col_name, col_type in new_columns:
-            if col_name not in existing_cols:
-                conn.execute(
-                    f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}"
-                )
-        for row in conn.execute(
-            "SELECT id FROM batches WHERE picking_slug IS NULL OR picking_slug = ''"
-        ).fetchall():
-            conn.execute(
-                "UPDATE batches SET picking_slug = ? WHERE id = ?",
-                (secrets.token_urlsafe(10), row["id"]),
-            )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_picking_slug ON batches(picking_slug)"
-        )
-
-        # Backfill any rows that were created before phased-feed / sale_price / lifecycle_type columns existed
-        legacy_rows = conn.execute(
-            "SELECT * FROM batches WHERE starter_weeks IS NULL OR starter_feed_lbs IS NULL OR sale_price_per_lb IS NULL OR lifecycle_type IS NULL"
-        ).fetchall()
-        for row in legacy_rows:
-            d = _get_static_species_defaults(row["species"])
-            total_wks = max(1, int(row["weeks_to_proc"] or d["weeks_to_proc"]))
-            total_fd = max(0.0, float(row["feed_total"] or d["feed_total"]))
-            default_wks = max(1, d["starter_weeks"] + d["grower_weeks"])
-            default_fd = max(0.001, d["starter_feed_lbs"] + d["grower_feed_lbs"])
-
-            st_wks = min(
-                total_wks,
-                max(0, round(total_wks * (d["starter_weeks"] / default_wks))),
-            )
-            gr_wks = max(0, total_wks - st_wks)
-            st_fd = round(total_fd * (d["starter_feed_lbs"] / default_fd), 2)
-            gr_fd = round(max(0.0, total_fd - st_fd), 2)
-            lc_type = row["lifecycle_type"] or infer_lifecycle_type(
-                row["species"], int(row["days_to_birth"] or 0)
-            )
-
-            conn.execute(
-                """
-                UPDATE batches
-                SET lifecycle_type = COALESCE(lifecycle_type, ?),
-                    starter_weeks = COALESCE(starter_weeks, ?),
-                    starter_feed_lbs = COALESCE(starter_feed_lbs, ?),
-                    grower_weeks = COALESCE(grower_weeks, ?),
-                    grower_feed_lbs = COALESCE(grower_feed_lbs, ?),
-                    starter_bag_price = COALESCE(starter_bag_price, ?),
-                    grower_bag_price = COALESCE(grower_bag_price, ?),
-                    unit_cost = COALESCE(unit_cost, ?),
-                    processing_cost = COALESCE(processing_cost, ?),
-                    expected_yield_lbs = COALESCE(expected_yield_lbs, ?),
-                    sale_price_per_lb = COALESCE(sale_price_per_lb, ?)
-                WHERE id = ?
-                """,
-                (
-                    lc_type,
-                    st_wks,
-                    st_fd,
-                    gr_wks,
-                    gr_fd,
-                    d["starter_bag_price"],
-                    d["grower_bag_price"],
-                    d["unit_cost"],
-                    d["processing_cost"],
-                    d["expected_yield_lbs"],
-                    d["sale_price_per_lb"],
-                    row["id"],
-                ),
-            )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_losses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id INTEGER NOT NULL,
-                loss_date TEXT NOT NULL,
-                count INTEGER NOT NULL,
-                reason TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_harvests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id INTEGER NOT NULL,
-                harvest_date TEXT NOT NULL,
-                head_count INTEGER NOT NULL,
-                dressed_lbs REAL NOT NULL,
-                processing_cost_total REAL NOT NULL,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_sales (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id INTEGER NOT NULL,
-                entry_date TEXT NOT NULL,
-                allocation_type TEXT NOT NULL,
-                weight_lbs REAL NOT NULL,
-                revenue REAL NOT NULL,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS telemetry_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                username TEXT DEFAULT '',
-                event_type TEXT NOT NULL,
-                action TEXT NOT NULL,
-                workspace TEXT DEFAULT '',
-                duration_ms REAL,
-                details TEXT DEFAULT '',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_telemetry_created ON telemetry_events(id DESC)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_milestones_ack (
-                batch_id INTEGER NOT NULL,
-                task TEXT NOT NULL,
-                done_at TEXT NOT NULL,
-                PRIMARY KEY (batch_id, task),
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_feed_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id INTEGER NOT NULL,
-                feed_date TEXT NOT NULL,
-                feed_type TEXT NOT NULL DEFAULT 'grower',
-                bags REAL NOT NULL DEFAULT 0,
-                feed_lbs REAL NOT NULL DEFAULT 0,
-                cost_total REAL NOT NULL DEFAULT 0,
-                notes TEXT DEFAULT '',
-                receipt_url TEXT DEFAULT '',
-                drive_file_id TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS google_drive_tokens (
-                user_id INTEGER PRIMARY KEY,
-                google_email TEXT DEFAULT '',
-                access_token_enc TEXT DEFAULT '',
-                refresh_token_enc TEXT DEFAULT '',
-                token_expires_at TEXT DEFAULT '',
-                folder_id TEXT DEFAULT '',
-                folder_name TEXT DEFAULT 'Homestead Planner Receipts',
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS farm_expenses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                batch_id INTEGER,
-                expense_date TEXT NOT NULL,
-                vendor TEXT DEFAULT '',
-                category TEXT NOT NULL DEFAULT 'Other',
-                amount REAL NOT NULL DEFAULT 0,
-                notes TEXT DEFAULT '',
-                receipt_url TEXT DEFAULT '',
-                drive_file_id TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE SET NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS customers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                phone TEXT DEFAULT '',
-                email TEXT DEFAULT '',
-                preferred_contact TEXT NOT NULL DEFAULT 'sms',
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS batch_preorders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                customer_id INTEGER NOT NULL,
-                quantity INTEGER NOT NULL DEFAULT 1,
-                status TEXT NOT NULL DEFAULT 'reserved',
-                deposit_per_bird REAL NOT NULL DEFAULT 0.0,
-                deposit_paid REAL NOT NULL DEFAULT 0.0,
-                deposit_status TEXT NOT NULL DEFAULT 'unpaid',
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_batch_preorders_batch ON batch_preorders(batch_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_batch_preorders_cust ON batch_preorders(customer_id)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS layer_flock_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                event_date TEXT NOT NULL,
-                delta INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT 'purchase',
-                source_batch_id INTEGER,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (source_batch_id) REFERENCES batches(id) ON DELETE SET NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_layer_flock_user_date ON layer_flock_events(user_id, event_date)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS egg_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                log_date TEXT NOT NULL,
-                total_collected INTEGER NOT NULL DEFAULT 0,
-                cracked_unusable INTEGER NOT NULL DEFAULT 0,
-                home_used INTEGER NOT NULL DEFAULT 0,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_egg_logs_user_date ON egg_logs(user_id, log_date)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS egg_pack_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                pack_date TEXT NOT NULL,
-                dozens_packed INTEGER NOT NULL DEFAULT 1,
-                eggs_used INTEGER NOT NULL DEFAULT 12,
-                ledger_sku_id INTEGER,
-                ledger_entry_id INTEGER,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_egg_pack_user_date ON egg_pack_logs(user_id, pack_date)"
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS layer_feed_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                feed_date TEXT NOT NULL,
-                feed_type TEXT NOT NULL DEFAULT 'layer',
-                bags REAL NOT NULL DEFAULT 1.0,
-                feed_lbs REAL NOT NULL DEFAULT 50.0,
-                cost_total REAL NOT NULL DEFAULT 0.0,
-                notes TEXT DEFAULT '',
-                receipt_url TEXT DEFAULT '',
-                drive_file_id TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_layer_feed_user_date ON layer_feed_logs(user_id, feed_date)"
-        )
-        lf_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(layer_feed_logs)").fetchall()
-        }
-        if "feed_type" not in lf_cols:
-            conn.execute("ALTER TABLE layer_feed_logs ADD COLUMN feed_type TEXT NOT NULL DEFAULT 'layer'")
-        if "species_tags" not in lf_cols:
-            conn.execute("ALTER TABLE layer_feed_logs ADD COLUMN species_tags TEXT NOT NULL DEFAULT 'all'")
-        lfe_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(layer_flock_events)").fetchall()
-        }
-        if "species" not in lfe_cols:
-            conn.execute("ALTER TABLE layer_flock_events ADD COLUMN species TEXT NOT NULL DEFAULT 'chicken'")
-        for etbl in ("egg_logs", "egg_pack_logs"):
-            ecols = {
-                row["name"]
-                for row in conn.execute(f"PRAGMA table_info({etbl})").fetchall()
-            }
-            if "created_by" not in ecols:
-                conn.execute(f"ALTER TABLE {etbl} ADD COLUMN created_by INTEGER")
-            if "species" not in ecols:
-                conn.execute(f"ALTER TABLE {etbl} ADD COLUMN species TEXT NOT NULL DEFAULT 'chicken'")
-            if etbl == "egg_pack_logs" and "pack_size" not in ecols:
-                conn.execute("ALTER TABLE egg_pack_logs ADD COLUMN pack_size INTEGER NOT NULL DEFAULT 12")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS merchants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                venmo_handle TEXT NOT NULL DEFAULT '',
-                paypal_handle TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS merchant_members (
-                merchant_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'staff')),
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (merchant_id, user_id),
-                FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_members_user ON merchant_members(user_id)"
-        )
-        for tbl in ("batch_feed_logs", "batch_harvests"):
-            cols = {
-                row["name"]
-                for row in conn.execute(f"PRAGMA table_info({tbl})").fetchall()
-            }
-            if "receipt_url" not in cols:
-                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN receipt_url TEXT DEFAULT ''")
-            if "drive_file_id" not in cols:
-                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN drive_file_id TEXT DEFAULT ''")
-        hv_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(batch_harvests)").fetchall()
-        }
-        for col_name, col_type in (
-            ("customer_id", "INTEGER"),
-            ("for_sale", "INTEGER NOT NULL DEFAULT 1"),
-            ("deposit_paid", "REAL NOT NULL DEFAULT 0"),
-            ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
-            ("pickup_status", "TEXT NOT NULL DEFAULT 'unassigned'"),
-            ("claimed_at", "TEXT DEFAULT ''"),
-            ("actual_sale_price", "REAL"),
-        ):
-            if col_name not in hv_cols:
-                conn.execute(
-                    f"ALTER TABLE batch_harvests ADD COLUMN {col_name} {col_type}"
-                )
-        conn.commit()
+    _shared_migrate()
 
 
 # ---------------------------------------------------------------------------
@@ -3622,38 +3088,8 @@ def save_layer_settings(
 
 
 def list_available_ledger_skus() -> list[dict]:
-    """List active Iron Ledger SKUs from the shared SQLite DB (safe if Iron Ledger tables don't exist yet)."""
-    with get_db_connection() as conn:
-        has_skus = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skus'"
-        ).fetchone()
-        if not has_skus:
-            return []
-        rows = conn.execute(
-            """
-            SELECT k.id, k.merchant_id, k.name, k.variant_name, k.price_cents,
-                   COALESCE(m.name, 'Merchant #' || k.merchant_id) AS merchant_name,
-                   COALESCE((SELECT SUM(delta) FROM stock_ledger l WHERE l.sku_id = k.id), 0) AS on_hand
-            FROM skus k
-            LEFT JOIN merchants m ON m.id = k.merchant_id
-            WHERE k.active = 1 AND COALESCE(k.item_type, 'product') != 'fee'
-            ORDER BY CASE WHEN LOWER(k.name) LIKE '%egg%' THEN 0 ELSE 1 END, k.name ASC, k.id ASC
-            """
-        ).fetchall()
-        out = []
-        for r in rows:
-            label = r["name"] + (f" · {r['variant_name']}" if r["variant_name"] else "")
-            out.append({
-                "id": int(r["id"]),
-                "merchant_id": int(r["merchant_id"]),
-                "merchant_name": r["merchant_name"],
-                "name": r["name"],
-                "variant_name": r["variant_name"] or "",
-                "label": label,
-                "price_cents": int(r["price_cents"] or 0),
-                "on_hand": float(r["on_hand"] or 0.0),
-            })
-        return out
+    """List active Iron Ledger SKUs from the shared SQLite DB."""
+    return list_active_ledger_skus()
 
 
 def add_layer_flock_event(
@@ -3869,34 +3305,14 @@ def pack_egg_cartons(
 
     with get_db_connection() as conn:
         if sku_id:
-            has_skus = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skus'"
-            ).fetchone()
-            if has_skus:
-                sku_row = conn.execute(
-                    "SELECT id, merchant_id FROM skus WHERE id = ?", (int(sku_id),)
-                ).fetchone()
-                if sku_row:
-                    l_cur = conn.execute(
-                        """
-                        INSERT INTO stock_ledger (
-                            merchant_id, sku_id, delta, reason, note, created_by, created_at
-                        ) VALUES (?, ?, ?, 'restock', ?, ?, ?)
-                        """,
-                        (
-                            int(sku_row["merchant_id"]),
-                            int(sku_id),
-                            packs_count,
-                            f"Packed {packs_count} {meta['pack_unit']} {meta['label']} eggs from Homestead Egg Log ({clean_date})",
-                            actor,
-                            now_iso,
-                        ),
-                    )
-                    ledger_entry_id = int(l_cur.lastrowid)
-                else:
-                    sku_id = None
-            else:
-                sku_id = None
+            sku_id, ledger_entry_id = restock_ledger_sku(
+                int(sku_id),
+                packs_count,
+                note=f"Packed {packs_count} {meta['pack_unit']} {meta['label']} eggs from Homestead Egg Log ({clean_date})",
+                created_by=actor,
+                created_at=now_iso,
+                conn=conn,
+            )
 
         p_cur = conn.execute(
             """
@@ -3942,14 +3358,7 @@ def delete_egg_pack_log(user_id: int, pack_id: int) -> str | None:
             return None
         sp = normalize_egg_species(row["species"] if "species" in row.keys() else "chicken")
         if row["ledger_entry_id"]:
-            has_ledger = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'stock_ledger'"
-            ).fetchone()
-            if has_ledger:
-                conn.execute(
-                    "DELETE FROM stock_ledger WHERE id = ?",
-                    (int(row["ledger_entry_id"]),),
-                )
+            delete_ledger_entry(int(row["ledger_entry_id"]), conn=conn)
         conn.execute("DELETE FROM egg_pack_logs WHERE id = ? AND user_id = ?", (int(pack_id), int(user_id)))
         conn.commit()
         return sp
@@ -4409,23 +3818,7 @@ def compute_egg_dashboard(
     ledger_dozens_sold = 0.0
     ledger_revenue = 0.0
     if linked_sku:
-        with get_db_connection() as conn:
-            has_sales = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sale_items'"
-            ).fetchone()
-            if has_sales:
-                s_row = conn.execute(
-                    """
-                    SELECT COALESCE(SUM(si.quantity), 0) AS qty,
-                           COALESCE(SUM(si.quantity * si.unit_price_cents), 0) AS rev_cents
-                    FROM sale_items si
-                    JOIN sales s ON s.id = si.sale_id
-                    WHERE si.sku_id = ? AND s.status = 'completed'
-                    """,
-                    (int(linked_sku["id"]),),
-                ).fetchone()
-                ledger_dozens_sold = round(float(s_row["qty"] or 0.0), 1)
-                ledger_revenue = round(float(s_row["rev_cents"] or 0.0) / 100.0, 2)
+        ledger_dozens_sold, ledger_revenue = get_sku_completed_sales_summary(int(linked_sku["id"]))
 
     net_egg_profit = round(ledger_revenue - reconciled_feed_cost, 2)
 
