@@ -14,7 +14,7 @@
     <p><a href="/zettle/connect">Reconnect</a></p>
   {% elif configured %}
     <p>Not connected yet. Sign in to Zettle to share your products and sales (read-only).</p>
-    <a class="btn primary" href="/zettle/connect" style="text-decoration:none;display:inline-block">Connect Zettle</a>
+    <a class="btn primary" href="/zettle/connect">Connect Zettle</a>
   {% else %}
     <p class="err">Set <code>ZETTLE_CLIENT_ID</code> and <code>ZETTLE_CLIENT_SECRET</code> on the server, then restart.</p>
   {% endif %}

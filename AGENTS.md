@@ -28,6 +28,23 @@ This repository houses two FastAPI SaaS applications backed by a **single shared
 
 ---
 
+## UI & Shared Theme Rules (Strict)
+
+1. **Single source of truth for design tokens & core UI (`shared/static/theme.css`):**
+   - Both apps mount `shared/static/` at `/shared-static` via `mount_shared_static(app, templates)` in `shared/web.py`, and both `base.html` templates load `{{ shared_asset('theme.css') }}` before `{{ asset('style.css') }}`.
+   - Use the shared CSS tokens and primitives instead of inline `style="..."` attributes:
+     - **Tokens:** `--bg`, `--surface-soft`, `--surface-muted`, `--card`, `--ink`, `--green`, `--sage`, `--muted`, `--line`, `--amber`, `--amberink`, `--yellow`, `--red`, `--redink`, `--blue`, `--bluebg`, `--blueink`.
+     - **Grids & Cards:** `.card`, `.cards.two`, `.cards.two.split-3-2`, `.cards.three`, `.cards.four`, `.kpi-strip-3`.
+     - **Controls & Feedback:** `.btn`, `.btn.sm`, `.btn.primary`, `.btn.danger`, `.btn.wide`, `.pill.{green,amber,red,gray,blue}`, `.notice`, `.notice.warn`, `.notice.err`.
+     - **Navigation & Mobile Patterns:** `.seg-group`/`.seg-btn`/`.seg-badge`, `.subnav-bar`/`.subnav-pill`, `.sticky-bar`, `.tag-chip`, and `details.hist-row` expandable mobile stacked history lists.
+     - **Forms & Helpers:** `.fgrid` (`.full`), `.stack`, `dialog`, `.flex-between`, `.mt-sm`, `.mt-md`, `.mb-0`, `.mb-sm`, `.mb-md`, `.text-green`, `.text-red`, `.text-amber`, `.text-right`.
+2. **Keep app stylesheets scoped:**
+   - Never re-declare `:root` color tokens (`--bg`, `--green`, `--sage`, etc.) or core shell/button/card/pill rules in `homestead/static/style.css` or `inventory/static/style.css`. Keep only app-specific widgets there (enforced by `tests/test_theme_guardrails.py`).
+3. **Offline PWA cache:**
+   - Keep `/shared-static/theme.css` in `inventory/static/sw.js` (`SHELL` array + `/shared-static/` fetch caching) and bump the `CACHE` version whenever shared/inventory static assets change.
+
+---
+
 ## Docker, Production & Release Guardrails
 
 - **Dockerfile parity:** `Dockerfile.inventory` explicitly copies directories (`shared/`, `homestead/`, `inventory/`). Any new top-level runtime package must also be copied there.

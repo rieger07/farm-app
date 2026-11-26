@@ -1,6 +1,6 @@
 // Minimal service worker: lets /quick-sale load offline.
-const CACHE = 'il-v4';
-const SHELL = ['/static/style.css', '/static/quicksale.js', '/static/qrcode.min.js'];
+const CACHE = 'il-v5';
+const SHELL = ['/shared-static/theme.css', '/static/style.css', '/static/quicksale.js', '/static/qrcode.min.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
@@ -21,9 +21,9 @@ self.addEventListener('fetch', e => {
     }).catch(() => caches.match(req)));
     return;
   }
-  if (url.pathname.startsWith('/static/')) {
+  if (url.pathname.startsWith('/static/') || url.pathname.startsWith('/shared-static/')) {
     e.respondWith(fetch(req).then(r => {
       const copy = r.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return r;
-    }).catch(() => caches.match(req)));
+    }).catch(() => caches.match(req, { ignoreSearch: true })));
   }
 });

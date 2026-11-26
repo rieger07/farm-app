@@ -7,7 +7,7 @@
     {% if not invite or not invite.valid %}
       <h1>Invite unavailable</h1>
       <p class="err">This invite link has expired or has already been used. Ask your administrator for a fresh link.</p>
-      <a href="/login" class="btn primary" style="text-align:center;text-decoration:none;display:block">Go to sign in</a>
+      <a href="/login" class="btn primary wide">Go to sign in</a>
     {% else %}
       {% if invite.merchant_id %}
         <h1>Join {{ invite.merchant_name }}</h1>

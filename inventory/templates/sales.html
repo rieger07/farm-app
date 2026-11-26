@@ -4,7 +4,7 @@
 <div class="eyebrow">EVERY SALE, IN ONE PLACE</div>
 <div class="pagehead">
   <div><h1>Sales</h1><p class="sub">{{ period_label }} · {{ total_count }} transaction{{ '' if total_count == 1 else 's' }}</p></div>
-  <a class="btn" href="/sales/export.csv?{{ export_qs }}" style="text-decoration:none">Export CSV</a>
+  <a class="btn" href="/sales/export.csv?{{ export_qs }}">Export CSV</a>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
@@ -47,7 +47,7 @@
   <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across products</small></div>
 </div>
 
-<div class="cards two">
+<div class="cards two split-3-2">
   <div class="card">
     <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot b"></i>Digital <i class="dot y"></i>Cash</span></div>
     <div class="chartwrap">
@@ -140,7 +140,7 @@
               <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
               <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
             </select>
-            <button class="btn" style="padding:4px 10px;font-size:12px">Save</button>
+            <button class="btn sm">Save</button>
           </form>
           {% if t.source == 'cash' %}
           <form method="post" action="/sales/{{ t.id }}/void" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap" onsubmit="return confirm('Void Quick sale #{{ t.id }}? It will be removed from sales totals, charts, and insights.')">
@@ -148,7 +148,7 @@
             <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);cursor:pointer">
               <input type="checkbox" name="restore_stock" value="1" checked> Restore stock
             </label>
-            <button class="btn" style="padding:4px 10px;font-size:12px;color:var(--redink);border-color:#e4b4ad;background:#fff5f4">Void sale</button>
+            <button class="btn sm danger">Void sale</button>
           </form>
           {% endif %}
         </div>

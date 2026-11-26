@@ -14,8 +14,8 @@ from urllib.parse import quote_plus
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from shared.web import RevalidatingStatic, mount_shared_static
 
 from homestead.calendar_export import create_gcal_link, generate_ics_calendar
 from homestead.database import (
@@ -175,16 +175,10 @@ async def lifespan(_: FastAPI):
     yield
 
 
-class RevalidatingStatic(StaticFiles):
-    async def get_response(self, path, scope):
-        resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
-
-
 app = FastAPI(title="Homestead Planner", lifespan=lifespan)
 app.mount("/static", RevalidatingStatic(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+mount_shared_static(app, templates)
 
 
 def _asset(name: str) -> str:
