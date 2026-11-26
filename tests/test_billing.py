@@ -8,11 +8,11 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from homestead.database import create_user
 from inventory import billing
 from inventory.app import app
 from inventory.db import init_inventory_db
 from inventory.merchants import create_merchant
+from shared.auth import create_user
 
 
 def _sign(payload: bytes, secret: str) -> str:
@@ -33,8 +33,8 @@ class BillingTest(unittest.TestCase):
         os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test_123"
         os.environ["STRIPE_PRICE_MONTHLY"] = "price_monthly_123"
         init_inventory_db()
-        self.admin = create_user("admin", "adminpass", "Admin", is_admin=True, claim_unowned_data=False)
-        self.zach = create_user("zach", "zachpass", "Zach", is_admin=False, claim_unowned_data=False)
+        self.admin = create_user("admin", "adminpass", "Admin", is_admin=True)
+        self.zach = create_user("zach", "zachpass", "Zach", is_admin=False)
         self.mid = create_merchant("Willow Creek Apiary", self.zach["id"])
 
     def tearDown(self):

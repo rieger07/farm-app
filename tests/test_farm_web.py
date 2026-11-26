@@ -779,8 +779,8 @@ class FarmWebTest(unittest.TestCase):
     def test_multi_species_eggs_duck_goose_feed_allocation_and_mobile_debloat(self):
         from datetime import date, datetime
         from homestead.database import compute_egg_dashboard
-        from inventory.db import get_connection, init_inventory_db
-        from inventory.merchants import create_merchant
+        from shared.db import get_connection, migrate
+        from shared.merchants import create_merchant
 
         self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
 
@@ -825,7 +825,7 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("4-Packs to Pack (4 eggs each)", goose_page_4)
 
         # 3. Create Iron Ledger SKUs for Chicken Eggs (12) and Duck Eggs (6)
-        init_inventory_db()
+        migrate()
         mid = create_merchant("Waterfowl & Coops", owner_user_id=1)
         now = datetime.utcnow().isoformat(timespec="seconds")
         conn = get_connection()

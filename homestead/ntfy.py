@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-import threading
-
-import httpx
 
 from homestead.database import get_text_setting, set_text_setting
-from inventory.crypto import decrypt_token, encrypt_token
-
-DEFAULT_NTFY_URL = "https://ntfy.sh"
+from shared.crypto import decrypt_token, encrypt_token
+from shared.ntfy import (
+    DEFAULT_NTFY_URL,
+    send_ntfy_message,
+    send_ntfy_message_async,
+)
 
 
 def get_ntfy_config(user_id: int) -> dict:
@@ -63,28 +63,16 @@ def send_ntfy_notification(
     cfg = get_ntfy_config(user_id)
     if not cfg["configured"]:
         return False, "ntfy topic is not configured."
-    endpoint = f"{cfg['url']}/{cfg['topic']}"
-    safe_title = (
-        (title or "Homestead Planner")
-        .replace("\u00b7", "-")
-        .encode("ascii", "ignore")
-        .decode("ascii")
-        .strip()[:120]
-        or "Homestead Planner"
+    return send_ntfy_message(
+        cfg["url"],
+        cfg["topic"],
+        title,
+        message,
+        token=cfg["token"],
+        click_url=click_url,
+        tags=tags,
+        default_title="Homestead Planner",
     )
-    headers = {"Title": safe_title, "Tags": tags}
-    if click_url:
-        headers["Click"] = click_url
-    if cfg["token"]:
-        headers["Authorization"] = f"Bearer {cfg['token']}"
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(endpoint, content=message.encode("utf-8"), headers=headers)
-            if resp.status_code >= 400:
-                return False, f"ntfy returned HTTP {resp.status_code}"
-        return True, "Sent"
-    except Exception as exc:
-        return False, str(exc)
 
 
 def send_ntfy_async(
@@ -96,10 +84,16 @@ def send_ntfy_async(
     tags: str = "turkey,moneybag",
 ) -> None:
     """Fire-and-forget ntfy notification in a daemon thread so claims never block."""
-    t = threading.Thread(
-        target=send_ntfy_notification,
-        args=(user_id, title, message),
-        kwargs={"click_url": click_url, "tags": tags},
-        daemon=True,
+    cfg = get_ntfy_config(user_id)
+    if not cfg["configured"]:
+        return
+    send_ntfy_message_async(
+        cfg["url"],
+        cfg["topic"],
+        title,
+        message,
+        token=cfg["token"],
+        click_url=click_url,
+        tags=tags,
+        default_title="Homestead Planner",
     )
-    t.start()

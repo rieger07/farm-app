@@ -9,11 +9,11 @@ import random
 import uuid
 from datetime import datetime, timedelta
 
-from homestead.database import create_user, get_user_by_username
 from inventory.db import get_connection, init_inventory_db
 from inventory.merchants import STAFF, add_member, create_merchant
 from inventory.sales import record_cash_sale
 from inventory.stock import add_ledger_entry
+from shared.auth import create_user, get_user_by_username
 
 PRODUCTS = [
     ("Wildflower honey", "250 g jar", "WF-250", "Honey", 800, 64),
@@ -27,7 +27,7 @@ PRODUCTS = [
 
 def _user(username, display):
     return get_user_by_username(username) or create_user(
-        username, "honey1234", display, claim_unowned_data=False
+        username, "honey1234", display
     )
 
 
@@ -52,9 +52,9 @@ def seed(days: int = 7, rng_seed: int = 7) -> int:
         sku_ids.append((int(cur.lastrowid), price, qty))
     conn.commit()
 
-    # Opening counts are larger so seeded sales leave the mock's on-hand numbers.
+    # Seed completed past days ending yesterday UTC so demo sales are never future-dated.
     start = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
-    start -= timedelta(days=days - 1)
+    start -= timedelta(days=days)
     plan = []
     for d in range(days):
         for _ in range(rng.randint(2, 6)):

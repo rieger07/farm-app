@@ -1,17 +1,10 @@
-"""SQLite persistence layer, multi-user authentication, species presets, automatic schema migrations, and JSON backup/restore."""
+"""SQLite persistence layer, species presets, and Homestead Planner workspace data."""
 
 from datetime import date, datetime, timedelta
-import hashlib
-import hmac
 import json
 import os
 import secrets
 import sqlite3
-
-try:
-    import streamlit as st
-except ModuleNotFoundError:
-    st = None  # type: ignore[assignment]
 
 from homestead.config import (
     DEFAULT_BAG_WEIGHT,
@@ -19,6 +12,20 @@ from homestead.config import (
     LIFECYCLE_TYPES,
     LIVESTOCK_DATA,
     infer_lifecycle_type,
+)
+from shared.auth import (
+    authenticate_user,
+    count_users,
+    create_user as _shared_create_user,
+    create_user_session,
+    delete_user_session,
+    get_user_by_id,
+    get_user_by_session_token,
+    get_user_by_username,
+    hash_password,
+    list_users,
+    update_user_password,
+    verify_password,
 )
 from shared.bridge import (
     delete_ledger_entry,
@@ -31,29 +38,25 @@ from shared.db import (
     get_db_path,
     migrate as _shared_migrate,
 )
+from shared.merchants import (
+    ROLES as HOMESTEAD_ROLES,
+    add_member as _shared_add_member,
+    clean_payment_handle as _clean_payment_handle,
+    create_merchant as _shared_create_merchant,
+    get_merchant_primary_owner_user_id,
+    list_members as list_homestead_merchant_members,
+    list_user_merchants as _shared_list_user_merchants,
+    remove_member as _shared_remove_member,
+    rename_merchant as _shared_rename_merchant,
+)
 
 
 def get_db_connection() -> sqlite3.Connection:
     return _shared_get_connection()
 
 
-def get_active_user_id() -> int | None:
-    """Return the currently authenticated user_id from Streamlit session_state if present."""
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        if get_script_run_ctx(suppress_warning=True) is None:
-            return None
-        uid = st.session_state.get("current_user_id")
-        return int(uid) if uid is not None else None
-    except Exception:
-        return None
-
-
 def _resolve_user_id(user_id: int | None = None) -> int | None:
-    if user_id is not None:
-        return int(user_id)
-    return get_active_user_id()
+    return int(user_id) if user_id is not None else None
 
 
 def init_db() -> None:
@@ -61,59 +64,8 @@ def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# User Authentication & Session Management
+# User Authentication & Session Management (core delegated to shared.auth)
 # ---------------------------------------------------------------------------
-def hash_password(
-    password: str, salt_hex: str | None = None
-) -> tuple[str, str]:
-    """Return (password_hash_hex, salt_hex) using PBKDF2-HMAC-SHA256."""
-    if not salt_hex:
-        salt_hex = secrets.token_hex(16)
-    salt_bytes = bytes.fromhex(salt_hex)
-    derived = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt_bytes, 200_000
-    )
-    return derived.hex(), salt_hex
-
-
-def verify_password(password: str, password_hash: str, salt_hex: str) -> bool:
-    computed_hash, _ = hash_password(password, salt_hex)
-    return hmac.compare_digest(computed_hash, password_hash)
-
-
-def count_users() -> int:
-    with get_db_connection() as conn:
-        row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
-        return int(row["cnt"]) if row else 0
-
-
-def list_users() -> list[dict]:
-    with get_db_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, username, display_name, is_admin, created_at FROM users ORDER BY id ASC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_user_by_id(user_id: int) -> dict | None:
-    with get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT id, username, display_name, is_admin, created_at FROM users WHERE id = ?",
-            (int(user_id),),
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_user_by_username(username: str) -> dict | None:
-    clean_username = str(username).strip()
-    if not clean_username:
-        return None
-    with get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT id, username, display_name, is_admin, created_at FROM users WHERE username = ? COLLATE NOCASE",
-            (clean_username,),
-        ).fetchone()
-        return dict(row) if row else None
 
 
 def seed_user_species_presets(
@@ -219,47 +171,19 @@ def create_user(
     is_admin: bool | None = None,
     claim_unowned_data: bool = True,
 ) -> dict:
-    clean_username = str(username).strip()
-    if not clean_username:
-        raise ValueError("Username cannot be empty.")
-    if len(str(password)) < 4:
-        raise ValueError("Password must be at least 4 characters.")
-
-    clean_display = str(display_name).strip() or clean_username
-    pw_hash, pw_salt = hash_password(str(password))
-    now_iso = datetime.utcnow().isoformat(timespec="seconds")
-
     with get_db_connection() as conn:
         existing_cnt = int(
             conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()["cnt"]
         )
         first_user = existing_cnt == 0
-        resolved_admin = (
-            1
-            if (is_admin if is_admin is not None else first_user)
-            else 0
+        user = _shared_create_user(
+            username,
+            password,
+            display_name=display_name,
+            is_admin=is_admin,
+            conn=conn,
         )
-        try:
-            cursor = conn.execute(
-                """
-                INSERT INTO users (username, display_name, password_hash, password_salt, is_admin, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    clean_username,
-                    clean_display,
-                    pw_hash,
-                    pw_salt,
-                    resolved_admin,
-                    now_iso,
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError(
-                f"Username '{clean_username}' is already taken."
-            ) from exc
-
-        new_uid = int(cursor.lastrowid)
+        new_uid = int(user["id"])
         seed_user_species_presets(new_uid, reset_defaults=False, conn=conn)
 
         if first_user and claim_unowned_data:
@@ -314,54 +238,12 @@ def create_user(
                             float(cb["processing_cost"] or 5.0),
                             float(cb["expected_yield_lbs"] or 4.5),
                             float(cb["sale_price_per_lb"] or 6.5),
-                            now_iso,
+                            user["created_at"],
                         ),
                     )
 
         conn.commit()
-        return {
-            "id": new_uid,
-            "username": clean_username,
-            "display_name": clean_display,
-            "is_admin": bool(resolved_admin),
-            "created_at": now_iso,
-        }
-
-
-def authenticate_user(username: str, password: str) -> dict | None:
-    clean_username = str(username).strip()
-    if not clean_username or not password:
-        return None
-    with get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
-            (clean_username,),
-        ).fetchone()
-        if not row:
-            return None
-        if not verify_password(
-            str(password), row["password_hash"], row["password_salt"]
-        ):
-            return None
-        return {
-            "id": int(row["id"]),
-            "username": row["username"],
-            "display_name": row["display_name"],
-            "is_admin": bool(row["is_admin"]),
-            "created_at": row["created_at"],
-        }
-
-
-def update_user_password(user_id: int, new_password: str) -> None:
-    if len(str(new_password)) < 4:
-        raise ValueError("Password must be at least 4 characters.")
-    pw_hash, pw_salt = hash_password(str(new_password))
-    with get_db_connection() as conn:
-        conn.execute(
-            "UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
-            (pw_hash, pw_salt, int(user_id)),
-        )
-        conn.commit()
+        return user
 
 
 def delete_user(user_id: int) -> None:
@@ -387,74 +269,6 @@ def delete_user(user_id: int) -> None:
             "DELETE FROM user_sessions WHERE user_id = ?", (int(user_id),)
         )
         conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
-        conn.commit()
-
-
-def _hash_session_token(raw_token: str) -> str:
-    return hashlib.sha256(str(raw_token).encode("utf-8")).hexdigest()
-
-
-def create_user_session(user_id: int, days_valid: int = 30) -> str:
-    raw_token = secrets.token_urlsafe(32)
-    token_hash = _hash_session_token(raw_token)
-    now = datetime.utcnow()
-    expires = now + timedelta(days=max(1, int(days_valid)))
-    with get_db_connection() as conn:
-        conn.execute(
-            "DELETE FROM user_sessions WHERE expires_at < ?",
-            (now.isoformat(timespec="seconds"),),
-        )
-        conn.execute(
-            """
-            INSERT INTO user_sessions (token, user_id, expires_at, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                token_hash,
-                int(user_id),
-                expires.isoformat(timespec="seconds"),
-                now.isoformat(timespec="seconds"),
-            ),
-        )
-        conn.commit()
-    return raw_token
-
-
-def get_user_by_session_token(token: str) -> dict | None:
-    if not token:
-        return None
-    token_hash = _hash_session_token(str(token))
-    now_iso = datetime.utcnow().isoformat(timespec="seconds")
-    with get_db_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT u.id, u.username, u.display_name, u.is_admin, u.created_at
-            FROM user_sessions s
-            JOIN users u ON u.id = s.user_id
-            WHERE s.token = ? AND s.expires_at >= ?
-            """,
-            (token_hash, now_iso),
-        ).fetchone()
-        if not row:
-            return None
-        return {
-            "id": int(row["id"]),
-            "username": row["username"],
-            "display_name": row["display_name"],
-            "is_admin": bool(row["is_admin"]),
-            "created_at": row["created_at"],
-        }
-
-
-def delete_user_session(token: str) -> None:
-    if not token:
-        return
-    token_hash = _hash_session_token(str(token))
-    with get_db_connection() as conn:
-        conn.execute(
-            "DELETE FROM user_sessions WHERE token = ? OR token = ?",
-            (token_hash, str(token)),
-        )
         conn.commit()
 
 
@@ -2434,44 +2248,6 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
     }
 
 
-def _clean_payment_handle(raw: str, kind: str) -> str:
-    """Normalize a Venmo username or PayPal.Me handle (strips @ and URL prefixes)."""
-    val = str(raw or "").strip()
-    if not val:
-        return ""
-    low = val.lower()
-    if kind == "venmo":
-        for prefix in (
-            "https://venmo.com/u/",
-            "http://venmo.com/u/",
-            "https://www.venmo.com/u/",
-            "https://venmo.com/",
-            "http://venmo.com/",
-            "https://www.venmo.com/",
-            "venmo.com/u/",
-            "venmo.com/",
-        ):
-            if low.startswith(prefix):
-                val = val[len(prefix):]
-                break
-    elif kind == "paypal":
-        for prefix in (
-            "https://www.paypal.me/",
-            "http://www.paypal.me/",
-            "https://paypal.me/",
-            "http://paypal.me/",
-            "www.paypal.me/",
-            "paypal.me/",
-        ):
-            if low.startswith(prefix):
-                val = val[len(prefix):]
-                break
-    val = val.split("?", 1)[0].split("#", 1)[0].strip().strip("/").lstrip("@")
-    if "/" in val:
-        val = val.split("/", 1)[0]
-    return val[:64]
-
-
 def get_farm_pickup_settings(user_id: int) -> dict[str, str]:
     return {
         "farm_name": get_text_setting("farm_name", "", user_id=user_id).strip(),
@@ -3892,9 +3668,8 @@ def compute_egg_dashboard(
 
 
 # ---------------------------------------------------------------------------
-# Shared Farm / Merchant Workspaces & Member Access (shared with Iron Ledger)
+# Shared Farm / Merchant Workspaces & Member Access (delegated to shared.merchants)
 # ---------------------------------------------------------------------------
-HOMESTEAD_ROLES = ("owner", "manager", "staff")
 HOMESTEAD_ROLE_PAGES = {
     "owner": {"radar", "batches", "eggs", "customers", "feed", "financials", "settings"},
     "manager": {"radar", "batches", "eggs", "customers", "feed", "financials"},
@@ -3904,20 +3679,6 @@ HOMESTEAD_ROLE_PAGES = {
 
 def can_access_homestead_page(role: str, page: str) -> bool:
     return page in HOMESTEAD_ROLE_PAGES.get(role or "staff", set())
-
-
-def _merchant_primary_owner_user_id(conn, merchant_id: int, fallback_user_id: int) -> int:
-    row = conn.execute(
-        """
-        SELECT user_id FROM merchant_members
-        WHERE merchant_id = ?
-        ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
-                 created_at ASC, user_id ASC
-        LIMIT 1
-        """,
-        (int(merchant_id),),
-    ).fetchone()
-    return int(row["user_id"]) if row else int(fallback_user_id)
 
 
 def ensure_user_merchant_workspace(user: dict) -> None:
@@ -3954,7 +3715,7 @@ def ensure_user_merchant_workspace(user: dict) -> None:
             farm_name = f"{disp}'s Farm"
         cur = conn.execute(
             "INSERT INTO merchants (name, created_at) VALUES (?, ?)",
-            (farm_name, now_iso),
+            (farm_name[:120], now_iso),
         )
         mid = int(cur.lastrowid)
         conn.execute(
@@ -3966,35 +3727,13 @@ def ensure_user_merchant_workspace(user: dict) -> None:
 
 def list_homestead_user_merchants(user_id: int, is_admin: bool = False) -> list[dict]:
     uid = int(user_id)
+    merchants = _shared_list_user_merchants(uid, is_admin=is_admin)
     with get_db_connection() as conn:
-        if is_admin:
-            rows = conn.execute(
-                """
-                SELECT mr.id AS merchant_id, mr.name AS merchant_name,
-                       COALESCE(m.role, 'owner') AS role
-                FROM merchants mr
-                LEFT JOIN merchant_members m ON m.merchant_id = mr.id AND m.user_id = ?
-                ORDER BY mr.id ASC
-                """,
-                (uid,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT m.merchant_id, mr.name AS merchant_name, m.role
-                FROM merchant_members m
-                JOIN merchants mr ON mr.id = m.merchant_id
-                WHERE m.user_id = ?
-                ORDER BY m.merchant_id ASC
-                """,
-                (uid,),
-            ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["owner_user_id"] = _merchant_primary_owner_user_id(conn, int(d["merchant_id"]), uid)
-            out.append(d)
-        return out
+        for d in merchants:
+            d["owner_user_id"] = get_merchant_primary_owner_user_id(
+                int(d["merchant_id"]), uid, conn=conn
+            )
+    return merchants
 
 
 def resolve_homestead_workspace(user: dict, preferred_merchant_id: int | None = None) -> dict:
@@ -4034,89 +3773,29 @@ def resolve_homestead_workspace(user: dict, preferred_merchant_id: int | None = 
     }
 
 
-def list_homestead_merchant_members(merchant_id: int) -> list[dict]:
-    with get_db_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT m.merchant_id, m.user_id, m.role, m.created_at,
-                   u.username, COALESCE(NULLIF(u.display_name, ''), u.username) AS display_name
-            FROM merchant_members m
-            JOIN users u ON u.id = m.user_id
-            WHERE m.merchant_id = ?
-            ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
-                     u.username ASC
-            """,
-            (int(merchant_id),),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
 def add_homestead_merchant_member(merchant_id: int, user_id: int, role: str = "manager") -> None:
-    if role not in HOMESTEAD_ROLES:
-        raise ValueError(f"Invalid role: {role}")
-    now_iso = datetime.utcnow().isoformat(timespec="seconds")
-    with get_db_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO merchant_members (merchant_id, user_id, role, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(merchant_id, user_id) DO UPDATE SET role = excluded.role
-            """,
-            (int(merchant_id), int(user_id), role, now_iso),
-        )
-        conn.commit()
+    try:
+        _shared_add_member(merchant_id, user_id, role)
+    except ValueError as exc:
+        raise ValueError(f"Invalid role: {role}") from exc
 
 
 def remove_homestead_merchant_member(merchant_id: int, user_id: int) -> None:
-    with get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT role FROM merchant_members WHERE merchant_id = ? AND user_id = ?",
-            (int(merchant_id), int(user_id)),
-        ).fetchone()
-        if not row:
-            return
-        if row["role"] == "owner":
-            owners = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM merchant_members WHERE merchant_id = ? AND role = 'owner'",
-                    (int(merchant_id),),
-                ).fetchone()[0]
-            )
-            if owners <= 1:
-                raise ValueError("Cannot remove the last owner of the farm workspace.")
-        conn.execute(
-            "DELETE FROM merchant_members WHERE merchant_id = ? AND user_id = ?",
-            (int(merchant_id), int(user_id)),
-        )
-        conn.commit()
+    try:
+        _shared_remove_member(merchant_id, user_id)
+    except ValueError as exc:
+        raise ValueError("Cannot remove the last owner of the farm workspace.") from exc
 
 
 def rename_homestead_merchant(merchant_id: int, new_name: str) -> None:
-    clean = str(new_name or "").strip()
-    if not clean:
-        raise ValueError("Farm workspace name cannot be empty.")
-    with get_db_connection() as conn:
-        conn.execute(
-            "UPDATE merchants SET name = ? WHERE id = ?",
-            (clean[:120], int(merchant_id)),
-        )
-        conn.commit()
+    try:
+        _shared_rename_merchant(merchant_id, new_name)
+    except ValueError as exc:
+        raise ValueError("Farm workspace name cannot be empty.") from exc
 
 
 def create_homestead_merchant(name: str, owner_user_id: int) -> int:
-    clean = str(name or "").strip()
-    if not clean:
-        raise ValueError("Farm workspace name cannot be empty.")
-    now_iso = datetime.utcnow().isoformat(timespec="seconds")
-    with get_db_connection() as conn:
-        cur = conn.execute(
-            "INSERT INTO merchants (name, created_at) VALUES (?, ?)",
-            (clean[:120], now_iso),
-        )
-        mid = int(cur.lastrowid)
-        conn.execute(
-            "INSERT INTO merchant_members (merchant_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
-            (mid, int(owner_user_id), now_iso),
-        )
-        conn.commit()
-        return mid
+    try:
+        return _shared_create_merchant(name, owner_user_id)
+    except ValueError as exc:
+        raise ValueError("Farm workspace name cannot be empty.") from exc

@@ -140,7 +140,7 @@ from homestead.ntfy import (
     send_ntfy_async,
     send_ntfy_notification,
 )
-from inventory.crypto import encrypt_token
+from shared.crypto import encrypt_token
 from homestead.financials import (
     compute_purchasing_schedule,
     compute_roi_summary_table,

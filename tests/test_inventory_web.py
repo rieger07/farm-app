@@ -285,7 +285,8 @@ class WebTest(unittest.TestCase):
             self.assertEqual(c.get(url).status_code, 200, url)
 
         # Custom range, including a reversed one and a garbage one (falls back, no crash)
-        today = datetime.utcnow().date()
+        from inventory.app import local_tz
+        today = datetime.now(local_tz()).date()
         a, b = (today - timedelta(days=45)).isoformat(), today.isoformat()
         long = c.get(f"/sales?period=custom&from={a}&to={b}")
         self.assertEqual(long.status_code, 200)
@@ -590,7 +591,8 @@ class WebTest(unittest.TestCase):
         self.assertIn("1 unit", sales_html)
         self.assertIn("Card charge", sales_html)
         self.assertIn("Market day", sales_html)
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        from inventory.app import local_tz
+        today_str = datetime.now(local_tz()).strftime("%Y-%m-%d")
         self.assertEqual(c.get(f"/sales?period=day&date={today_str}").status_code, 200)
 
         # Cash filter includes Zettle cash transactions (and excludes card); Card filter shows only card
@@ -660,7 +662,8 @@ class WebTest(unittest.TestCase):
             "client_uuid": "mp-sale-1",
             "items": [{"sku_id": sku_id, "quantity": 5}],
         })
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        from inventory.app import local_tz
+        today_str = datetime.now(local_tz()).strftime("%Y-%m-%d")
         ins_before = c.get("/insights?period=all").text
         self.assertIn("Untagged sale days", ins_before)
         self.assertIn(today_str, ins_before)
@@ -798,10 +801,12 @@ class WebTest(unittest.TestCase):
         self.assertIn('"venmo_handle": "CassberryFarm"', qs_html)
         self.assertIn('"paypal_handle": "CassberryFarm"', qs_html)
         self.assertIn("qrcode.min.js", qs_html)
+        self.assertIn("pay_qr.js", qs_html)
         self.assertIn('id="qrm"', qs_html)
         self.assertIn('id="digital-pay-box"', qs_html)
 
-        self.assertEqual(c.get("/static/qrcode.min.js").status_code, 200)
+        self.assertEqual(c.get("/shared-static/qrcode.min.js").status_code, 200)
+        self.assertEqual(c.get("/shared-static/pay_qr.js").status_code, 200)
 
     def test_lb_stock_unit_pack_list_and_units_count_birds_not_pounds(self):
         from datetime import datetime, timedelta, timezone

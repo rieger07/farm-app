@@ -4,25 +4,20 @@ FROM python:3.11-alpine
 # Set the working directory inside the container
 WORKDIR /app
 
+COPY requirements.txt ./
+
 # 1. Upgrade all Alpine OS packages, pull patched musl & sqlite-libs from edge, and install tzdata (for zoneinfo)
 # 2. Remove bundled ensurepip wheels
-# 3. Install latest patched application dependencies
+# 3. Install pinned application dependencies from requirements.txt
 # 4. Uninstall pip, setuptools, and wheel (removes build tools and vendored SBOMs)
 # 5. Create a non-root user and persistent data directory
 RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
-    && (apk upgrade --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main musl musl-utils sqlite-libs \
-        || apk upgrade --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main musl musl-utils sqlite-libs) \
+    && (apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs \
+        || apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs) \
     && apk add --no-cache tzdata \
     && rm -rf /usr/local/lib/python*/ensurepip \
-    && pip3 install --no-cache-dir --upgrade \
-        pip \
-        setuptools \
-        wheel \
-        fastapi \
-        uvicorn \
-        jinja2 \
-        python-multipart \
-        httpx \
+    && pip3 install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip3 install --no-cache-dir -r requirements.txt \
     && pip3 uninstall -y pip setuptools wheel \
     && addgroup -S appgroup && adduser -S appuser -G appgroup \
     && mkdir -p /app/data \
@@ -32,7 +27,6 @@ RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
 COPY --chown=appuser:appgroup shared/ ./shared/
 COPY --chown=appuser:appgroup homestead/ ./homestead/
 COPY --chown=appuser:appgroup inventory/ ./inventory/
-COPY --chown=appuser:appgroup requirements-inventory.txt ./
 
 # Configure persistent SQLite database path and default timezone
 ENV FARM_DB_PATH=/app/data/homestead.db \

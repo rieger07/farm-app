@@ -105,7 +105,8 @@
     </div>
   </div>
 
-  <script src="{{ asset('qrcode.min.js') }}"></script>
+  <script src="{{ shared_asset('qrcode.min.js') }}"></script>
+  <script src="{{ shared_asset('pay_qr.js') }}"></script>
   <script>
   const SLUG = {{ slug|tojson }};
   const BATCH_NAME = {{ batch_name|tojson }};
@@ -154,34 +155,32 @@
         if (data.deposit_total > 0) {
           const box = document.getElementById('rc-deposit-box');
           box.hidden = false;
-          const amt = Number(data.deposit_total).toFixed(2);
-          document.getElementById('rc-dep-amt').textContent = '$' + amt;
           const note = `Deposit: ${data.quantity}x ${BATCH_NAME} - ${data.customer_name}`;
-          if (data.venmo_handle) {
-            const vUrl = `https://venmo.com/${encodeURIComponent(data.venmo_handle)}?txn=pay&amount=${encodeURIComponent(amt)}&note=${encodeURIComponent(note)}`;
+          const vInfo = data.venmo_handle
+            ? window.PayQR.buildPaymentInfo('venmo', data.venmo_handle, data.deposit_total, note)
+            : null;
+          const pInfo = data.paypal_handle
+            ? window.PayQR.buildPaymentInfo('paypal', data.paypal_handle, data.deposit_total, note)
+            : null;
+          const amt = (vInfo || pInfo)
+            ? (vInfo || pInfo).amountStr
+            : Number(data.deposit_total).toFixed(2);
+          document.getElementById('rc-dep-amt').textContent = '$' + amt;
+          if (vInfo && vInfo.payUrl) {
             const vBtn = document.getElementById('rc-venmo-btn');
-            vBtn.href = vUrl;
+            vBtn.href = vInfo.payUrl;
             vBtn.hidden = false;
-            if (typeof window.qrcode === 'function') {
-              const qr = window.qrcode(0, 'M');
-              qr.addData(vUrl);
-              qr.make();
-              document.getElementById('rc-qr-svg').innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
-              document.getElementById('rc-qr-caption').textContent = `Scan with phone camera to pay $${amt} via Venmo (@${data.venmo_handle})`;
+            if (window.PayQR.renderQrSvg(document.getElementById('rc-qr-svg'), vInfo.payUrl, { silentFallback: true })) {
+              document.getElementById('rc-qr-caption').textContent = `Scan with phone camera to pay $${amt} via Venmo (${vInfo.displayHandle})`;
               document.getElementById('rc-qr-wrap').hidden = false;
             }
           }
-          if (data.paypal_handle) {
-            const pUrl = `https://paypal.me/${encodeURIComponent(data.paypal_handle)}/${amt}USD`;
+          if (pInfo && pInfo.payUrl) {
             const pBtn = document.getElementById('rc-paypal-btn');
-            pBtn.href = pUrl;
+            pBtn.href = pInfo.payUrl;
             pBtn.hidden = false;
-            if (!data.venmo_handle && typeof window.qrcode === 'function') {
-              const qr = window.qrcode(0, 'M');
-              qr.addData(pUrl);
-              qr.make();
-              document.getElementById('rc-qr-svg').innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
-              document.getElementById('rc-qr-caption').textContent = `Scan to open paypal.me/${data.paypal_handle} and enter $${amt}`;
+            if (!vInfo && window.PayQR.renderQrSvg(document.getElementById('rc-qr-svg'), pInfo.payUrl, { silentFallback: true })) {
+              document.getElementById('rc-qr-caption').textContent = `Scan to open ${pInfo.displayHandle} and enter $${amt}`;
               document.getElementById('rc-qr-wrap').hidden = false;
             }
           }

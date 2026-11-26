@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from inventory import zettle
-from inventory.crypto import decrypt_token, encrypt_token
+from shared.crypto import decrypt_token, encrypt_token
 from inventory.db import get_connection
 from inventory.stock import fmt_qty
 
