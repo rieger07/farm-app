@@ -52,9 +52,9 @@ def seed(days: int = 7, rng_seed: int = 7) -> int:
         sku_ids.append((int(cur.lastrowid), price, qty))
     conn.commit()
 
-    # Opening counts are larger so seeded sales leave the mock's on-hand numbers.
+    # Seed completed past days ending yesterday UTC so demo sales are never future-dated.
     start = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
-    start -= timedelta(days=days - 1)
+    start -= timedelta(days=days)
     plan = []
     for d in range(days):
         for _ in range(rng.randint(2, 6)):
