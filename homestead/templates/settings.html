@@ -58,6 +58,37 @@
   </form>
 </div>
 
+<div class="card" id="egg-species">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+    <h2 style="margin:0">Active Laying Species &amp; Carton Defaults</h2>
+    <span class="pill green">{{ layer_cfg.enabled_species|map('title')|join(' · ') }}</span>
+  </div>
+  <p class="sub" style="margin-bottom:12px">Enable only the laying flocks kept on your farm so Radar and the Eggs Hub stay focused and clutter-free.</p>
+  <form method="post" action="/settings/egg-species" class="fgrid">
+    <div class="full" style="display:flex;flex-direction:column;gap:8px">
+      {% for sp in egg_species_order %}
+        {% set meta = layer_cfg.species_meta[sp] %}
+        <label style="flex-direction:row;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;cursor:pointer">
+          <span style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" name="enabled_species" value="{{ sp }}" {{ 'checked' if meta.enabled }}>
+            <b>{{ meta.label }}</b>
+            <small class="inline muted">Pack: {{ meta.pack_size }} ({{ meta.pack_unit_full }}) · Quick-add: +{{ meta.quick_add|join(', +') }}</small>
+          </span>
+        </label>
+      {% endfor %}
+    </div>
+    <label>Goose Carton / Pack Size
+      <select name="goose_pack_size">
+        <option value="4" {{ 'selected' if layer_cfg.goose_pack_size == 4 }}>4-Pack (4 eggs)</option>
+        <option value="1" {{ 'selected' if layer_cfg.goose_pack_size == 1 }}>Single Egg (1 egg)</option>
+      </select>
+    </label>
+    <div style="display:flex;align-items:flex-end">
+      <button class="btn sm primary">Save laying species</button>
+    </div>
+  </form>
+</div>
+
 <div class="card">
   <div class="row" style="justify-content:space-between;margin-bottom:10px">
     <h2>Species presets</h2>

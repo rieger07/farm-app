@@ -14,22 +14,22 @@
 
 <div class="cards three">
   <div class="card"><small>Next feed buy</small><div class="big">{{ next_feed.Date if next_feed else '—' }}</div><small>{{ next_feed.Details if next_feed else 'No upcoming feed purchases' }}</small></div>
-  <div class="card"><small>Peak weekly feed</small><div class="big">{{ '%.1f'|format(feed_stats.peak_weekly_lbs + (egg_dash.weekly_feed_lbs if egg_dash else 0)) }} lb</div><small>{{ '%.1f'|format(feed_stats.peak_weekly_lbs) }} lb batches{% if egg_dash and egg_dash.active_hens %} + {{ '%.1f'|format(egg_dash.weekly_feed_lbs) }} lb layers{% endif %}</small></div>
+  <div class="card"><small>Peak weekly feed</small><div class="big">{{ '%.1f'|format(feed_stats.peak_weekly_lbs + (egg_dash.weekly_feed_lbs if egg_dash else 0)) }} lb</div><small>{{ '%.1f'|format(feed_stats.peak_weekly_lbs) }} lb batches{% if egg_dash and egg_dash.total_active_layers %} + {{ '%.1f'|format(egg_dash.weekly_feed_lbs) }} lb layers{% endif %}</small></div>
   <div class="card"><small>Peak barrels needed</small><div class="big">{{ feed_stats.peak_concurrent_barrels }}</div><small>At {{ barrel_capacity }} lb/barrel</small></div>
 </div>
 
-{% if egg_dash and egg_dash.active_hens > 0 %}
+{% if egg_dash and egg_dash.total_active_layers > 0 %}
 <div class="card" style="margin-bottom:18px">
   <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
     <div>
-      <h2 style="margin:0">Laying Flock Feed Demand ({{ egg_dash.active_hens }} active hens)</h2>
+      <h2 style="margin:0">Laying Flock Feed Demand ({{ egg_dash.total_active_layers }} active {{ 'hens' if egg_dash.enabled_species == ['chicken'] else 'layers' }})</h2>
       <small class="muted">
-        Daily burn: <b>{{ '%.1f'|format(egg_dash.daily_feed_burn_lbs) }} lb/day</b> ({{ egg_dash.settings.feed_lbs_per_hen_day }} lb/hen)
+        Daily burn: <b>{{ '%.1f'|format(egg_dash.total_daily_feed_burn_lbs) }} lb/day</b>
         · Weekly: <b>{{ '%.1f'|format(egg_dash.weekly_feed_lbs) }} lb</b>
         · Monthly: <b>{{ '%.1f'|format(egg_dash.monthly_feed_lbs) }} lb (~{{ '%.1f'|format(egg_dash.monthly_bags) }} bags @ ${{ '%.2f'|format(egg_dash.settings.bag_price) }}/bag)</b>
       </small>
     </div>
-    <a href="/eggs" class="btn sm primary">Log Layer Feed →</a>
+    <a href="/eggs?tab=flock" class="btn sm primary">Log Layer Feed →</a>
   </div>
 </div>
 {% endif %}

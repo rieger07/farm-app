@@ -8,37 +8,84 @@
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 
-<div class="cards three">
-  <div class="card"><small>Active batches</small><div class="big">{{ active_schedules|length }}</div><small>Currently running{% if planned_schedules %} · +{{ planned_schedules|length }} planned{% endif %}</small></div>
-  <div class="card"><small>On-farm head</small><div class="big">{{ total_head + (egg_dash.active_hens if egg_dash else 0) }}</div><small>{{ total_head }} batch head{% if egg_dash and egg_dash.active_hens %} · {{ egg_dash.active_hens }} layers{% endif %} · {{ total_losses }} losses</small></div>
-  <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Upcoming milestones</small></div>
+<div class="kpi-strip-3">
+  <div class="card"><small>Active batches</small><div class="big">{{ active_schedules|length }}</div><small>Running{% if planned_schedules %} · +{{ planned_schedules|length }} planned{% endif %}</small></div>
+  <div class="card"><small>On-farm head</small><div class="big">{{ total_head + (egg_dash.total_active_layers if egg_dash else 0) }}</div><small>{{ total_head }} batch{% if egg_dash and egg_dash.total_active_layers %} · {{ egg_dash.total_active_layers }} layers{% endif %}</small></div>
+  <div class="card"><small>Next 14 days</small><div class="big">{{ milestones|length }}</div><small>Milestones</small></div>
 </div>
 
 {% if egg_dash %}
 <div class="card" style="margin-bottom:18px">
-  <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-    <div>
-      <div class="row" style="align-items:center;gap:8px">
-        <h2 style="margin:0">Today's Eggs</h2>
-        <span class="pill green">{{ egg_dash.today_eggs }} collected ({{ '%.0f'|format(egg_dash.today_lay_rate) }}% lay rate)</span>
-        {% if egg_dash.ready_dozens > 0 %}
-          <a href="/eggs" class="pill amber" style="text-decoration:none">{{ egg_dash.ready_dozens }} dz ready to pack →</a>
-        {% endif %}
-      </div>
-      <small class="muted">
-        {{ egg_dash.active_hens }} active laying hens · {{ egg_dash.loose_eggs }} loose eggs on hand · 7d avg {{ egg_dash.avg_7d_eggs }}/day
-        {% if egg_dash.today_last_logged_by %} · Last logged today by <b>{{ egg_dash.today_last_logged_by }}</b>{% endif %}
-      </small>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <h2 style="margin:0">Today's Eggs</h2>
+      {% if egg_dash.today_multi_species_summary %}
+        <span class="pill green">{{ egg_dash.today_multi_species_summary }}</span>
+      {% else %}
+        <span class="pill green" id="radar-egg-pill">{{ egg_dash.today_eggs }} collected ({{ '%.0f'|format(egg_dash.today_lay_rate) }}% lay rate)</span>
+      {% endif %}
+      {% if egg_dash.total_ready_packs > 0 %}
+        <a href="/eggs?tab=inventory" class="pill amber" style="text-decoration:none">{{ egg_dash.total_ready_packs }} ready to pack →</a>
+      {% endif %}
     </div>
-    <form method="post" action="/eggs/log" class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
-      <input type="hidden" name="next_url" value="/">
-      <input type="hidden" name="log_date" value="{{ egg_dash.today_iso }}">
-      <input type="number" name="total_collected" min="1" placeholder="Eggs collected" required style="width:130px;margin:0">
-      <button class="btn sm primary">+ Log eggs</button>
-      <a href="/eggs" class="btn sm">Eggs Hub →</a>
-    </form>
+    <a href="/eggs" class="link" id="radar-eggs-hub-link" style="padding:0;font-weight:600;white-space:nowrap">Eggs Hub →</a>
   </div>
+
+  {% if egg_dash.enabled_species|length > 1 %}
+  <div class="seg-group" id="radar-species-pills" style="margin:4px 0 8px">
+    {% for sp in egg_dash.enabled_species %}
+      {% set sm = egg_dash.species_summaries[sp] %}
+      <button type="button"
+              class="seg-btn {{ 'on' if sp == egg_dash.active_species }}"
+              data-sp="{{ sp }}"
+              data-label="{{ sm.label }}"
+              data-birds="{{ sm.active_birds }}"
+              data-bird-label="{{ sm.bird_label }}"
+              data-today="{{ sm.today_eggs }}"
+              data-loose="{{ sm.loose_eggs }}"
+              onclick="selectRadarEggSpecies(this)">
+        <span>{{ sm.label }}</span>
+        {% if sm.today_eggs > 0 %}<span class="seg-badge">{{ sm.today_eggs }}</span>{% endif %}
+      </button>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <small class="muted" id="radar-egg-sub" style="margin-bottom:10px">
+    {{ egg_dash.active_hens }} active {{ egg_dash.active_meta.bird_label }} · {{ egg_dash.loose_eggs }} loose eggs on hand · 7d avg {{ egg_dash.avg_7d_eggs }}/day
+    {% if egg_dash.today_last_logged_by %} · Last logged today by <b>{{ egg_dash.today_last_logged_by }}</b>{% endif %}
+  </small>
+
+  <form method="post" action="/eggs/log" class="radar-egg-stepper">
+    <input type="hidden" name="next_url" value="/">
+    <input type="hidden" name="log_date" value="{{ egg_dash.today_iso }}">
+    <input type="hidden" name="species" id="radar-egg-species" value="{{ egg_dash.active_species }}">
+    <button type="button" class="btn step-btn" aria-label="Decrease count" onclick="stepRadarEggs(-1)">−</button>
+    <input type="number" id="radar-egg-count" name="total_collected" min="1" placeholder="{{ egg_dash.active_meta.label }} eggs collected" required>
+    <button type="button" class="btn step-btn" aria-label="Increase count" onclick="stepRadarEggs(1)">+</button>
+    <button class="btn primary" id="radar-egg-submit" style="white-space:nowrap;height:38px">+ Log eggs</button>
+  </form>
 </div>
+<script>
+function stepRadarEggs(delta) {
+  const inp = document.getElementById('radar-egg-count');
+  if (!inp) return;
+  const cur = parseInt(inp.value || '0', 10) || 0;
+  const next = cur + delta;
+  inp.value = next > 0 ? next : '';
+  inp.focus();
+}
+function selectRadarEggSpecies(btn) {
+  const sp = btn.dataset.sp;
+  const label = btn.dataset.label;
+  document.getElementById('radar-egg-species').value = sp;
+  const inp = document.getElementById('radar-egg-count');
+  if (inp) inp.placeholder = label + ' eggs collected';
+  const hub = document.getElementById('radar-eggs-hub-link');
+  if (hub) hub.href = '/eggs?species=' + encodeURIComponent(sp);
+  document.querySelectorAll('#radar-species-pills .seg-btn').forEach(b => b.classList.toggle('on', b === btn));
+}
+</script>
 {% endif %}
 
 {% if timeline %}

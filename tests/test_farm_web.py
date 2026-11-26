@@ -776,6 +776,159 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(c_mom.get("/customers").status_code, 403)
         self.assertEqual(c_mom.get("/settings").status_code, 403)
 
+    def test_multi_species_eggs_duck_goose_feed_allocation_and_mobile_debloat(self):
+        from datetime import date, datetime
+        from homestead.database import compute_egg_dashboard
+        from inventory.db import get_connection, init_inventory_db
+        from inventory.merchants import create_merchant
+
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
+
+        # 1. Default state: only Chicken enabled; Duck & Goose tabs not rendered in sticky switcher
+        eggs_default = self.c.get("/eggs").text
+        self.assertIn("sticky-species-bar", eggs_default)
+        self.assertNotIn('href="/eggs?species=duck', eggs_default)
+        self.assertNotIn('href="/eggs?species=goose', eggs_default)
+        self.assertIn("egg-subtabs", eggs_default)
+        self.assertNotIn("<table", eggs_default)  # replaced wide clipping tables with stacked hist-row items
+
+        # 2. Enable Chicken + Duck + Goose in Farm Settings with Goose pack_size = 1
+        r_sp = self.c.post(
+            "/settings/egg-species",
+            data={
+                "enabled_species": ["chicken", "duck", "goose"],
+                "goose_pack_size": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_sp.status_code, 303)
+
+        duck_page = self.c.get("/eggs?species=duck").text
+        self.assertIn("bumpEggs(1)", duck_page)
+        self.assertIn("bumpEggs(6)", duck_page)
+        self.assertIn("Half-Dozens (6-pk) to Pack (6 eggs each)", duck_page)
+
+        goose_page_1 = self.c.get("/eggs?species=goose").text
+        self.assertIn("bumpEggs(4)", goose_page_1)
+        self.assertIn("Single Eggs to Pack (1 egg each)", goose_page_1)
+
+        # Switch Goose pack size to 4 via /eggs/settings
+        self.c.post("/eggs/settings", data={
+            "species": "goose",
+            "goose_pack_size": "4",
+            "feed_lbs_per_hen_day": "0.50",
+            "bag_price": "22.00",
+            "scratch_lbs_per_day": "0",
+            "scratch_bag_price": "16.00",
+        }, follow_redirects=False)
+        goose_page_4 = self.c.get("/eggs?species=goose").text
+        self.assertIn("4-Packs to Pack (4 eggs each)", goose_page_4)
+
+        # 3. Create Iron Ledger SKUs for Chicken Eggs (12) and Duck Eggs (6)
+        init_inventory_db()
+        mid = create_merchant("Waterfowl & Coops", owner_user_id=1)
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        conn = get_connection()
+        try:
+            chicken_sku = conn.execute(
+                "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid, name, price_cents, updated_at)"
+                " VALUES (?, 'p-chk', 'v-chk', 'Chicken Eggs (Dozen)', 500, ?)",
+                (mid, now),
+            ).lastrowid
+            duck_sku = conn.execute(
+                "INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid, name, price_cents, updated_at)"
+                " VALUES (?, 'p-dck', 'v-dck', 'Duck Eggs (Half-Dozen)', 600, ?)",
+                (mid, now),
+            ).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.c.post("/eggs/settings", data={
+            "species": "chicken",
+            "feed_lbs_per_hen_day": "0.25",
+            "bag_price": "20.00",
+            "scratch_lbs_per_day": "0.0",
+            "scratch_bag_price": "15.00",
+            "ledger_sku_id": str(chicken_sku),
+        }, follow_redirects=False)
+        self.c.post("/eggs/settings", data={
+            "species": "duck",
+            "feed_lbs_per_hen_day": "0.40",
+            "bag_price": "28.00",
+            "scratch_lbs_per_day": "0.0",
+            "scratch_bag_price": "15.00",
+            "ledger_sku_id": str(duck_sku),
+        }, follow_redirects=False)
+
+        # 4. Log separate headcounts & egg collections for Chickens and Ducks
+        today_iso = date.today().isoformat()
+        self.c.post("/eggs/flock", data={"species": "chicken", "event_date": today_iso, "reason": "initial", "count": "10"})
+        self.c.post("/eggs/flock", data={"species": "duck", "event_date": today_iso, "reason": "initial", "count": "5"})
+
+        self.c.post("/eggs/log", data={"species": "chicken", "log_date": today_iso, "total_collected": "12"})
+        self.c.post("/eggs/log", data={"species": "duck", "log_date": today_iso, "total_collected": "8", "next_url": "/"})
+
+        # Radar shows 3-col compact KPI strip, top-right Eggs Hub link, inline species pills & combined summary!
+        radar_html = self.c.get("/").text
+        self.assertIn("kpi-strip-3", radar_html)
+        self.assertIn("radar-species-pills", radar_html)
+        self.assertIn("radar-eggs-hub-link", radar_html)
+        self.assertIn("12 chicken · 8 duck", radar_html)
+
+        # 5. Pack 1 Duck half-dozen (6 eggs) -> restocks Duck SKU in Iron Ledger, leaves 2 loose duck eggs & 12 loose chicken eggs
+        r_pk_duck = self.c.post("/eggs/pack", data={
+            "species": "duck",
+            "pack_date": today_iso,
+            "dozens_packed": "1",
+            "sync_to_ledger": "1",
+        }, follow_redirects=False)
+        self.assertEqual(r_pk_duck.status_code, 303)
+
+        duck_dash = compute_egg_dashboard(1, species="duck")
+        chk_dash = compute_egg_dashboard(1, species="chicken")
+        self.assertEqual(duck_dash["loose_eggs"], 2)
+        self.assertEqual(duck_dash["linked_sku"]["on_hand"], 1.0)
+        self.assertEqual(chk_dash["loose_eggs"], 12)
+
+        # 6. Shared Feed Log species_tags allocation: $20/50lb ($0.40/lb) Chickens vs $30/50lb ($0.60/lb) Waterfowl
+        self.c.post("/eggs/feed", data={
+            "species": "chicken",
+            "feed_date": today_iso,
+            "feed_type": "layer",
+            "species_tags": ["chicken"],
+            "bags": "1",
+            "feed_lbs": "50",
+            "cost_total": "20.00",
+        }, follow_redirects=False)
+        self.c.post("/eggs/feed", data={
+            "species": "duck",
+            "feed_date": today_iso,
+            "feed_type": "layer",
+            "species_tags": ["waterfowl"],
+            "bags": "1",
+            "feed_lbs": "50",
+            "cost_total": "30.00",
+        }, follow_redirects=False)
+
+        chk_alloc = compute_egg_dashboard(1, species="chicken")
+        duck_alloc = compute_egg_dashboard(1, species="duck")
+        # Chickens: 10 hens * 0.25 lb = 2.5 lb * $0.40/lb = $1.00 / 1.0 dz = $1.00/dz (0% of waterfowl feed)
+        self.assertAlmostEqual(chk_alloc["species_logged_feed_cost"], 20.0)
+        self.assertAlmostEqual(chk_alloc["reconciled_feed_cost"], 1.0)
+        self.assertAlmostEqual(chk_alloc["cost_per_dozen"], 1.0)
+        # Ducks: 5 ducks * 0.40 lb = 2.0 lb * $0.60/lb = $1.20 / (8/6 = 1.33 half-dz) = $0.90/half-dz (0% of chicken feed)
+        self.assertAlmostEqual(duck_alloc["species_logged_feed_cost"], 30.0)
+        self.assertAlmostEqual(duck_alloc["reconciled_feed_cost"], 1.20)
+        self.assertAlmostEqual(duck_alloc["cost_per_pack"], round(1.20 / 1.33, 2))
+
+        # Undo duck carton pack reverses Iron Ledger restock cleanly
+        pack_id = duck_alloc["pack_logs"][0]["id"]
+        self.c.post(f"/eggs/pack/{pack_id}/delete", data={"species": "duck"}, follow_redirects=False)
+        duck_after_undo = compute_egg_dashboard(1, species="duck")
+        self.assertEqual(duck_after_undo["loose_eggs"], 8)
+        self.assertEqual(duck_after_undo["linked_sku"]["on_hand"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
