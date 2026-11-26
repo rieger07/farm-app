@@ -16,8 +16,9 @@
     {% endif %}
     {% if gcal_arrival_url %}<a href="{{ gcal_arrival_url }}" target="_blank" rel="noopener" class="btn">GCal: {{ s.initial_label }}</a>{% endif %}
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
-    {% if 'chicken' in (b.species or '')|lower and not is_graduated and not s.is_planned and s.on_farm_head > 0 %}
-    <form method="post" action="/batches/{{ b.id }}/graduate-layers" style="display:inline" onsubmit="return confirm('Graduate {{ s.on_farm_head }} surviving pullets/hens from {{ b.name }} into your active Laying Flock and archive this batch?')">
+    {% set b_sp_low = (b.species or '')|lower %}
+    {% if ('chicken' in b_sp_low or 'duck' in b_sp_low or 'goose' in b_sp_low or 'geese' in b_sp_low) and not is_graduated and not s.is_planned and s.on_farm_head > 0 %}
+    <form method="post" action="/batches/{{ b.id }}/graduate-layers" style="display:inline" onsubmit="return confirm('Graduate {{ s.on_farm_head }} surviving birds from {{ b.name }} into your active Laying Flock and archive this batch?')">
       <input type="hidden" name="head_count" value="{{ s.on_farm_head }}">
       <button class="btn">Graduate to Laying Flock (+{{ s.on_farm_head }})</button>
     </form>
