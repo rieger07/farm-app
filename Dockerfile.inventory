@@ -29,6 +29,7 @@ RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
     && chown -R appuser:appgroup /app
 
 # Copy application code into the container with non-root ownership
+COPY --chown=appuser:appgroup shared/ ./shared/
 COPY --chown=appuser:appgroup homestead/ ./homestead/
 COPY --chown=appuser:appgroup inventory/ ./inventory/
 COPY --chown=appuser:appgroup requirements-inventory.txt ./
