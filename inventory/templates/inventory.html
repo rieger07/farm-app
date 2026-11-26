@@ -49,7 +49,7 @@
           {% else %}<span class="pill red">Count needed</span>{% endif %}
         </td>
         <td class="c-act" style="text-align:right">
-          <button type="button" class="btn" style="padding:6px 12px;font-size:13px"
+          <button type="button" class="btn sm"
             onclick='openStockModal({{ r.id }}, {{ (r.name ~ (" · " ~ r.variant_name if r.variant_name else ""))|tojson }}, {{ r.on_hand }}, {{ r.low_stock_threshold }}, {{ 1 if r.show_in_quick_sale else 0 }}, {{ r.sell_mode|tojson }})'>
             Update
           </button>

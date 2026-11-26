@@ -16,7 +16,7 @@
         <small class="inline muted" style="margin-left:6px">Not tagged to a marketplace yet.</small>
       {% endif %}
     </div>
-    <button type="button" class="btn" style="padding:6px 12px;font-size:13px" onclick="document.getElementById('mday-form').hidden = !document.getElementById('mday-form').hidden">
+    <button type="button" class="btn sm" onclick="document.getElementById('mday-form').hidden = !document.getElementById('mday-form').hidden">
       {{ 'Edit market day' if active_market_day else '+ Assign marketplace' }}
     </button>
   </div>
@@ -47,9 +47,9 @@
     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;flex:1;min-width:160px">Notes
       <input name="notes" value="{{ active_market_day.notes if active_market_day else '' }}" placeholder="Rainy morning, festival...">
     </label>
-    <button class="btn primary" style="padding:8px 14px">Save</button>
+    <button class="btn sm primary">Save</button>
     {% if active_market_day %}
-    <button type="submit" formaction="/market-days/delete" class="btn" style="padding:8px 12px;color:var(--redink)">Unassign</button>
+    <button type="submit" formaction="/market-days/delete" class="btn sm danger">Unassign</button>
     {% endif %}
   </form>
   <script>

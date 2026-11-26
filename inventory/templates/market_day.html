@@ -11,7 +11,7 @@
       {% elif md.state == 'planned' %}
         <span class="pill amber">Pack ahead · {{ md.market_day.marketplace_name }}</span>
       {% elif md.state == 'closed' %}
-        <span class="pill" style="background:#e4e1d3;color:var(--ink)">Closed out · {{ md.market_day.marketplace_name }}</span>
+        <span class="pill gray">Closed out · {{ md.market_day.marketplace_name }}</span>
       {% else %}
         <span class="pill amber">Not started</span>
       {% endif %}
@@ -41,7 +41,7 @@
 </div>
 
 {% if msg %}
-<div class="notice" style="{{ 'background:var(--red);color:var(--redink)' if msg.startswith('Error:') else 'background:var(--sage);color:var(--green)' }}">{{ msg }}</div>
+<div class="notice {{ 'err' if msg.startswith('Error:') }}">{{ msg }}</div>
 {% endif %}
 
 <div class="card" style="padding:12px 16px;margin-bottom:18px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
@@ -433,7 +433,7 @@
       <b>At the booth ({{ md.packed_sku_count }} products)</b>
       <small>Live counts subtract both Zettle card sales and Quick sales automatically.</small>
     </div>
-    <a href="/market-day?date={{ md.market_date }}&amp;edit=1" class="btn" style="padding:6px 12px;font-size:13px">+ Add / edit packed items</a>
+    <a href="/market-day?date={{ md.market_date }}&amp;edit=1" class="btn sm">+ Add / edit packed items</a>
   </div>
   <table>
     <thead>
@@ -468,7 +468,7 @@
             <input type="hidden" name="market_date" value="{{ md.market_date }}">
             <input type="hidden" name="sku_id" value="{{ it.sku_id }}">
             <input type="hidden" name="delta_qty" value="1">
-            <button class="btn" style="padding:5px 10px;font-size:12px" title="Brought 1 more to booth">+1</button>
+            <button class="btn sm" title="Brought 1 more to booth">+1</button>
           </form>
         </td>
       </tr>

@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from shared.web import RevalidatingStatic, mount_shared_static
 
 from homestead.database import (
     authenticate_user,
@@ -120,15 +120,6 @@ async def lifespan(_: FastAPI):
         task.cancel()
 
 
-class RevalidatingStatic(StaticFiles):
-    """Static files that browsers and CDNs must revalidate, so CSS/JS updates ship."""
-
-    async def get_response(self, path, scope):
-        resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
-
-
 def asset(name: str) -> str:
     """URL for a static file with a version query so a new deploy busts every cache."""
     try:
@@ -141,6 +132,7 @@ def asset(name: str) -> str:
 app = FastAPI(title="iron ledger", lifespan=lifespan)
 app.mount("/static", RevalidatingStatic(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
+mount_shared_static(app, templates)
 templates.env.filters["money"] = money
 templates.env.globals["asset"] = asset
 
