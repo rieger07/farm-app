@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from homestead.database import create_user
 from inventory import sync, zettle
-from inventory.crypto import PREFIX, decrypt_token, encrypt_token
 from inventory.db import get_connection, init_inventory_db
 from inventory.merchants import create_merchant
 from inventory.stock import list_stock
+from shared.auth import create_user
+from shared.crypto import PREFIX, decrypt_token, encrypt_token
 
 
 def _ts(delta_minutes=0):

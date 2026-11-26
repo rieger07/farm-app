@@ -4,8 +4,24 @@ This repository houses two FastAPI SaaS applications backed by a **single shared
 
 - **Homestead Planner** (`app.py`, `homestead/`) — livestock batch planning, Harvest Tally, Pre-Orders, `/pick/<slug>`, Pickup Day checkout, Daily Eggs & Laying Flock, Feed, Financials.
 - **Iron Ledger** (`inventory/`) — Zettle POS sync, Quick Sale (Cash/Venmo/PayPal), Sales analytics, Insights, Market Day Mode.
-- **Shared Core** (`shared/`) — canonical database connection, ordered schema migrations, and cross-app bridges.
+- **Shared Core** (`shared/`) — canonical database connection & migrations (`shared/db/`), auth & sessions (`shared/auth.py`), workspaces/invites/handles (`shared/merchants.py`), token encryption (`shared/crypto.py`), ntfy transport (`shared/ntfy.py`), cross-app SKU bridge (`shared/bridge.py`), and shared UI theme & JS helpers (`shared/web.py`, `shared/static/`).
 - **Marketing Site** (`site/`).
+
+---
+
+## Architecture & Import Boundaries (Strict)
+
+1. **No cross-app imports (`tests/test_architecture_guardrails.py`):**
+   - `app.py` and `homestead/` must never import `inventory.*`.
+   - `inventory/` must never import `homestead.*` or `app`.
+   - `shared/` must never import `homestead.*`, `inventory.*`, or `app` (only immutable `shared/db/migrations/0001_baseline.py` retains a legacy import of `homestead.config`).
+   - Put reusable auth, crypto, workspace/invite, notification, or static assets in `shared/`.
+2. **Legacy Streamlit UI is removed:**
+   - Do not reintroduce `streamlit`, `homestead/ui/`, or `homestead/telemetry.py` (enforced by `tests/test_architecture_guardrails.py`).
+3. **Single dependency file (`requirements.txt`):**
+   - Both `Dockerfile` and `Dockerfile.inventory` install from `requirements.txt` (never hardcode inline pip lists).
+4. **CI & Release Gate (`.github/workflows/`):**
+   - `ci.yml` runs the full `unittest` suite on every PR and `main` push; `docker-image.yml` gates Docker image builds and VPS deploys behind `needs: test`.
 
 ---
 
@@ -41,7 +57,7 @@ This repository houses two FastAPI SaaS applications backed by a **single shared
 2. **Keep app stylesheets scoped:**
    - Never re-declare `:root` color tokens (`--bg`, `--green`, `--sage`, etc.) or core shell/button/card/pill rules in `homestead/static/style.css` or `inventory/static/style.css`. Keep only app-specific widgets there (enforced by `tests/test_theme_guardrails.py`).
 3. **Offline PWA cache:**
-   - Keep `/shared-static/theme.css` in `inventory/static/sw.js` (`SHELL` array + `/shared-static/` fetch caching) and bump the `CACHE` version whenever shared/inventory static assets change.
+   - Keep `/shared-static/theme.css`, `/shared-static/qrcode.min.js`, and `/shared-static/pay_qr.js` in `inventory/static/sw.js` (`SHELL` array + `/shared-static/` fetch caching) and bump the `CACHE` version whenever shared/inventory static assets change.
 
 ---
 

@@ -7,9 +7,9 @@ RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
         || apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs || true) \
     && rm -rf /usr/local/lib/python*/ensurepip
 
-COPY requirements-inventory.txt ./
+COPY requirements.txt ./
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip3 install --no-cache-dir -r requirements-inventory.txt \
+    && pip3 install --no-cache-dir -r requirements.txt \
     && pip3 uninstall -y pip setuptools wheel \
     && addgroup -S appgroup && adduser -S appuser -G appgroup \
     && mkdir -p /app/data \

@@ -9,11 +9,11 @@ import random
 import uuid
 from datetime import datetime, timedelta
 
-from homestead.database import create_user, get_user_by_username
 from inventory.db import get_connection, init_inventory_db
 from inventory.merchants import STAFF, add_member, create_merchant
 from inventory.sales import record_cash_sale
 from inventory.stock import add_ledger_entry
+from shared.auth import create_user, get_user_by_username
 
 PRODUCTS = [
     ("Wildflower honey", "250 g jar", "WF-250", "Honey", 800, 64),
@@ -27,7 +27,7 @@ PRODUCTS = [
 
 def _user(username, display):
     return get_user_by_username(username) or create_user(
-        username, "honey1234", display, claim_unowned_data=False
+        username, "honey1234", display
     )
 
 

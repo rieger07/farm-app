@@ -241,36 +241,11 @@
   }
 
   function digitalPayInfo(cents) {
-    const amountStr = (Math.round(cents) / 100).toFixed(2);
     const note = cartNote();
-    if (payType === 'venmo') {
-      const handle = (HANDLES.venmo_handle || '').trim();
-      const qs = `amount=${encodeURIComponent(amountStr)}${note ? '&note=' + encodeURIComponent(note) : ''}`;
-      return {
-        provider: 'venmo',
-        label: 'Venmo',
-        handle,
-        displayHandle: handle ? '@' + handle : '',
-        payUrl: handle ? `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&${qs}` : '',
-        chargeUrl: `https://venmo.com/?txn=charge&${qs}`,
-        amountStr,
-        note,
-      };
-    }
-    if (payType === 'paypal') {
-      const handle = (HANDLES.paypal_handle || '').trim();
-      return {
-        provider: 'paypal',
-        label: 'PayPal',
-        handle,
-        displayHandle: handle ? `paypal.me/${handle}` : '',
-        payUrl: handle ? `https://paypal.me/${encodeURIComponent(handle)}/${amountStr}USD` : '',
-        chargeUrl: '',
-        amountStr,
-        note,
-      };
-    }
-    return null;
+    const handle = payType === 'venmo'
+      ? (HANDLES.venmo_handle || '')
+      : (payType === 'paypal' ? (HANDLES.paypal_handle || '') : '');
+    return window.PayQR.buildPaymentInfo(payType, handle, Math.round(cents) / 100, note);
   }
 
   function renderDigitalPay(cents) {
@@ -317,14 +292,7 @@
     $('qr-amount').textContent = `$${info.amountStr}`;
     $('qr-note').textContent = info.note || '';
     const stage = $('qr-svg');
-    if (typeof window.qrcode === 'function') {
-      const qr = window.qrcode(0, 'M');
-      qr.addData(info.payUrl);
-      qr.make();
-      stage.innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
-    } else {
-      stage.innerHTML = '<small class="muted">QR library unavailable</small>';
-    }
+    window.PayQR.renderQrSvg(stage, info.payUrl);
     const smsBody = info.note
       ? `Here is your ${info.label} payment link for $${info.amountStr} (${info.note}): ${info.payUrl}`
       : `Here is your ${info.label} payment link for $${info.amountStr}: ${info.payUrl}`;

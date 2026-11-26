@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from datetime import datetime
 
-from homestead.database import create_user
 from inventory.db import get_connection, init_inventory_db
 from inventory.merchants import (
     MANAGER,
@@ -19,6 +18,7 @@ from inventory.merchants import (
     remove_member,
 )
 from inventory.stock import add_ledger_entry, list_stock
+from shared.auth import create_user
 
 
 def _add_sku(merchant_id, name="Clover honey", price=900, threshold=10):

@@ -75,9 +75,10 @@ Static `nginx:alpine` container serving `www.ironcladsystems.dev` with brand log
 ├── Dockerfile.inventory          # Alpine Python 3.11 + uvicorn for Iron Ledger (port 8600)
 ├── Dockerfile.site               # nginx:alpine for www.ironcladsystems.dev (port 8080)
 ├── docker-compose.yml            # Multi-container compose setup
-├── requirements-inventory.txt    # Shared FastAPI/uvicorn/Jinja2/httpx dependencies
-├── homestead/                    # Homestead DB, Google Drive receipts, scheduling, financials & templates
-├── inventory/                    # Iron Ledger routes, markets/insights, crypto, Zettle sync, Stripe billing & UI
+├── requirements.txt              # Shared FastAPI/uvicorn/Jinja2/httpx dependencies
+├── shared/                       # Shared DB connection, migrations, auth, crypto, workspaces & theme
+├── homestead/                    # Homestead DB helpers, Google Drive receipts, scheduling, financials & UI
+├── inventory/                    # Iron Ledger routes, markets/insights, Zettle sync, Stripe billing & UI
 ├── site/                         # Static HTML/CSS/JS, brand assets & nginx.conf for Ironclad Systems LLC
 └── tests/                        # Unit & integration tests (unittest + FastAPI TestClient)
 ```
@@ -88,7 +89,7 @@ Static `nginx:alpine` container serving `www.ironcladsystems.dev` with brand log
 
 ```bash
 # Install runtime dependencies
-pip install -r requirements-inventory.txt
+pip install -r requirements.txt
 
 # Run Homestead Planner (http://localhost:8501)
 FARM_COOKIE_SECURE=0 uvicorn app:app --host 0.0.0.0 --port 8501

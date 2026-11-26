@@ -16,7 +16,7 @@ from homestead.database import (
     save_google_drive_connection,
     update_google_drive_tokens,
 )
-from inventory.crypto import decrypt_token, encrypt_token
+from shared.crypto import decrypt_token, encrypt_token
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"

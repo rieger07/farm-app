@@ -186,7 +186,8 @@
   </div>
 </dialog>
 
-<script src="{{ asset('qrcode.min.js') }}"></script>
+<script src="{{ shared_asset('qrcode.min.js') }}"></script>
+<script src="{{ shared_asset('pay_qr.js') }}"></script>
 <script>
 const BATCH_NAME = {{ b.name|tojson }};
 const VENMO_HANDLE = {{ (pickup_cfg.venmo_handle or '')|tojson }};
@@ -227,35 +228,25 @@ function openPickupQr(provider, cid, custName, defaultBirdNums) {
     : defaultBirdNums;
   const amtIn = document.getElementById('pu-amt-' + cid);
   const amtVal = Math.max(0, parseFloat((amtIn && amtIn.value) || '0') || 0);
-  const amtStr = amtVal.toFixed(2);
   const note = `Pickup: ${BATCH_NAME} (Bird ${birdNums}) - ${custName}`;
-  const isVenmo = provider === 'venmo';
-  const handle = isVenmo ? VENMO_HANDLE : PAYPAL_HANDLE;
-  if (!handle) return;
+  const handle = provider === 'venmo' ? VENMO_HANDLE : PAYPAL_HANDLE;
+  const info = window.PayQR.buildPaymentInfo(provider, handle, amtVal, note);
+  if (!info || !info.payUrl) return;
 
-  activeQrUrl = isVenmo
-    ? `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&amount=${encodeURIComponent(amtStr)}&note=${encodeURIComponent(note)}`
-    : `https://paypal.me/${encodeURIComponent(handle)}/${amtStr}USD`;
+  activeQrUrl = info.payUrl;
 
-  document.getElementById('pu-qr-title').textContent = isVenmo ? 'Pay with Venmo' : 'Pay with PayPal';
-  document.getElementById('pu-qr-handle').textContent = isVenmo ? ('@' + handle) : ('paypal.me/' + handle);
-  document.getElementById('pu-qr-amount').textContent = '$' + amtStr;
-  document.getElementById('pu-qr-note').textContent = note;
+  document.getElementById('pu-qr-title').textContent = `Pay with ${info.label}`;
+  document.getElementById('pu-qr-handle').textContent = info.displayHandle;
+  document.getElementById('pu-qr-amount').textContent = '$' + info.amountStr;
+  document.getElementById('pu-qr-note').textContent = info.note;
 
   const stage = document.getElementById('pu-qr-svg');
-  if (typeof window.qrcode === 'function') {
-    const qr = window.qrcode(0, 'M');
-    qr.addData(activeQrUrl);
-    qr.make();
-    stage.innerHTML = qr.createSvgTag({ scalable: true, margin: 2 });
-    const svg = stage.querySelector('svg');
-    if (svg) { svg.style.width = '100%'; svg.style.maxWidth = '230px'; svg.style.height = 'auto'; }
-  }
+  window.PayQR.renderQrSvg(stage, activeQrUrl, { maxWidth: '230px', silentFallback: true });
 
   const chargeBtn = document.getElementById('pu-qr-charge');
-  if (isVenmo) {
+  if (info.chargeUrl) {
     chargeBtn.hidden = false;
-    chargeBtn.href = `https://venmo.com/?txn=charge&amount=${encodeURIComponent(amtStr)}&note=${encodeURIComponent(note)}`;
+    chargeBtn.href = info.chargeUrl;
   } else {
     chargeBtn.hidden = true;
   }

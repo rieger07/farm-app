@@ -126,6 +126,7 @@
 <script id="skus" type="application/json">{{ skus|tojson }}</script>
 <script id="pay-handles" type="application/json">{{ payment_handles|tojson }}</script>
 <script id="active-booth" type="application/json">{{ (active_booth or {'active': false})|tojson }}</script>
-<script src="{{ asset('qrcode.min.js') }}"></script>
+<script src="{{ shared_asset('qrcode.min.js') }}"></script>
+<script src="{{ shared_asset('pay_qr.js') }}"></script>
 <script src="{{ asset('quicksale.js') }}"></script>
 {% endblock %}

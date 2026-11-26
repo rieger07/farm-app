@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from shared.web import RevalidatingStatic, mount_shared_static
 
-from homestead.database import (
+from shared.auth import (
     authenticate_user,
     create_user,
     create_user_session,
@@ -588,7 +588,6 @@ def invite_accept(
                 password,
                 display_name=display_name,
                 is_admin=False,
-                claim_unowned_data=False,
             )
         except ValueError as exc:
             return templates.TemplateResponse(
@@ -1483,7 +1482,6 @@ def settings_add_member(
                 password,
                 display_name=display_name,
                 is_admin=False,
-                claim_unowned_data=False,
             )
             uid = user["id"]
         add_member(ctx.merchant_id, uid, role)
@@ -1597,7 +1595,6 @@ def admin_create_merchant(
                     owner_password,
                     display_name=owner_display_name,
                     is_admin=False,
-                    claim_unowned_data=False,
                 )
                 owner_id = created["id"]
         mid = create_merchant(merchant_name, owner_user_id=owner_id)
@@ -1666,7 +1663,6 @@ def admin_save_member(
                 password,
                 display_name=display_name,
                 is_admin=False,
-                claim_unowned_data=False,
             )
             uid = created["id"]
         add_member(merchant_id, uid, role)

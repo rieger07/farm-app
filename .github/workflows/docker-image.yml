@@ -5,8 +5,29 @@ on:
     types: [published]
 
 jobs:
+  test:
+    name: Run full test suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run full test suite
+        run: python -W ignore -m unittest discover -s tests -t . -v
+
   push_to_registry:
     name: Push ${{ matrix.image }} to Docker Hub
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

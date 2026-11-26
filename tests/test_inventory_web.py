@@ -798,10 +798,12 @@ class WebTest(unittest.TestCase):
         self.assertIn('"venmo_handle": "CassberryFarm"', qs_html)
         self.assertIn('"paypal_handle": "CassberryFarm"', qs_html)
         self.assertIn("qrcode.min.js", qs_html)
+        self.assertIn("pay_qr.js", qs_html)
         self.assertIn('id="qrm"', qs_html)
         self.assertIn('id="digital-pay-box"', qs_html)
 
-        self.assertEqual(c.get("/static/qrcode.min.js").status_code, 200)
+        self.assertEqual(c.get("/shared-static/qrcode.min.js").status_code, 200)
+        self.assertEqual(c.get("/shared-static/pay_qr.js").status_code, 200)
 
     def test_lb_stock_unit_pack_list_and_units_count_birds_not_pounds(self):
         from datetime import datetime, timedelta, timezone
