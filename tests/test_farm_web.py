@@ -144,7 +144,7 @@ class FarmWebTest(unittest.TestCase):
 
         # Multipart receipt upload -> mocked Google Drive uploader
         from unittest.mock import patch
-        with patch("app.upload_receipt_to_drive", return_value=("drv999", "https://drive.google.com/file/d/drv999/view")) as mock_up:
+        with patch("homestead.gdrive.upload_receipt_to_drive", return_value=("drv999", "https://drive.google.com/file/d/drv999/view")) as mock_up:
             r_up = self.c.post(
                 "/expenses/add",
                 data={
@@ -323,7 +323,7 @@ class FarmWebTest(unittest.TestCase):
         from unittest.mock import patch
         ident_sarah = anon.post(f"/api/pick/{slug}/identify", json={"name": "Sarah Miller", "contact": "+1 (555) 123-4567"}).json()
         self.assertEqual(ident_sarah["name"], "Sarah Miller")
-        with patch("app.send_ntfy_async") as mock_ntfy:
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
             r_claim = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_sarah["customer_id"]})
             self.assertEqual(r_claim.status_code, 200)
             self.assertAlmostEqual(r_claim.json()["bird"]["est_price"], 80.0)
@@ -422,7 +422,7 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("$25.00/bird", res_html)
 
         # Customer A reserves 2 birds -> reserved, $50 deposit, fires ntfy
-        with patch("app.send_ntfy_async") as mock_ntfy:
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
             r_a = anon.post(f"/api/reserve/{slug}", json={
                 "name": "Alice Green",
                 "contact": "555-222-3333",
@@ -439,7 +439,7 @@ class FarmWebTest(unittest.TestCase):
         # Cap is now full -> page switches to Waitlist Open & Customer B goes to waitlist
         res_full_html = anon.get(f"/reserve/{slug}").text
         self.assertIn("Waitlist Open", res_full_html)
-        with patch("app.send_ntfy_async") as mock_ntfy:
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
             r_b = anon.post(f"/api/reserve/{slug}", json={
                 "name": "Ben Waiter",
                 "contact": "ben@example.com",
@@ -485,7 +485,7 @@ class FarmWebTest(unittest.TestCase):
         self.assertAlmostEqual(al_ident["unapplied_deposit"], 50.0)
 
         # Alice claims Bird #1 ($120) & Bird #2 ($135) -> $25 deposit auto-credited onto EACH bird!
-        with patch("app.send_ntfy_async"):
+        with patch("homestead.ntfy.send_ntfy_async"):
             c1 = anon.post(f"/api/pick/{slug}/claim/{b1}", json={"customer_id": al_ident["customer_id"]})
             self.assertEqual(c1.status_code, 200)
             self.assertAlmostEqual(c1.json()["bird"]["deposit_paid"], 25.0)
@@ -503,7 +503,7 @@ class FarmWebTest(unittest.TestCase):
         )
         r_ben_ok = anon.post(f"/api/pick/{slug}/identify", json={"name": "Ben Waiter", "contact": "ben@example.com"})
         self.assertEqual(r_ben_ok.status_code, 200)
-        with patch("app.send_ntfy_async"):
+        with patch("homestead.ntfy.send_ntfy_async"):
             self.assertEqual(
                 anon.post(f"/api/pick/{slug}/claim/{b3}", json={"customer_id": r_ben_ok.json()["customer_id"]}).status_code,
                 200,
