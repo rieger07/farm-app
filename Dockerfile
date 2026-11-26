@@ -1,17 +1,25 @@
-FROM python:3.11-alpine
+# Homestead Planner (port 8501) on the latest stable Debian-slim Python
+FROM python:3.15-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
-    && (apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs \
-        || apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs || true) \
-    && rm -rf /usr/local/lib/python*/ensurepip
-
 COPY requirements.txt ./
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip3 install --no-cache-dir -r requirements.txt \
-    && pip3 uninstall -y pip setuptools wheel \
-    && addgroup -S appgroup && adduser -S appuser -G appgroup \
+
+# 1. Apply Debian security updates (tzdata ships with the python slim image)
+# 2. Install application dependencies from requirements.txt
+# 3. Uninstall pip (removes build tooling from the runtime image)
+# 4. Create a non-root user and persistent data directory
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y pip setuptools wheel \
+    && groupadd --system appgroup \
+    && useradd --system --gid appgroup --no-create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \
     && chown -R appuser:appgroup /app
 
@@ -24,7 +32,8 @@ USER appuser
 
 EXPOSE 8501
 
+# Slim images have no wget/curl, so probe /healthz with the Python stdlib
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8501/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/healthz', timeout=4)" || exit 1
 
 ENTRYPOINT ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8501", "--proxy-headers", "--forwarded-allow-ips=*"]

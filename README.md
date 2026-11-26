@@ -71,8 +71,8 @@ Static `nginx:alpine` container serving `www.ironcladsystems.dev` with brand log
 
 ```text
 ├── app.py                        # Homestead Planner FastAPI entrypoint (port 8501)
-├── Dockerfile                    # Alpine Python 3.11 + uvicorn for Homestead Planner
-├── Dockerfile.inventory          # Alpine Python 3.11 + uvicorn for Iron Ledger (port 8600)
+├── Dockerfile                    # python:3.15-slim + uvicorn for Homestead Planner (port 8501)
+├── Dockerfile.inventory          # python:3.15-slim + uvicorn for Iron Ledger (port 8600)
 ├── Dockerfile.site               # nginx:alpine for www.ironcladsystems.dev (port 8080)
 ├── docker-compose.yml            # Multi-container compose setup
 ├── requirements.txt              # Shared FastAPI/uvicorn/Jinja2/httpx dependencies

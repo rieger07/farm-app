@@ -1,25 +1,26 @@
-# Use a slim Alpine version of Python to keep the image size and attack surface small
-FROM python:3.11-alpine
+# Iron Ledger (port 8600) on the latest stable Debian-slim Python
+FROM python:3.15-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Set the working directory inside the container
 WORKDIR /app
 
 COPY requirements.txt ./
 
-# 1. Upgrade all Alpine OS packages, pull patched musl & sqlite-libs from edge, and install tzdata (for zoneinfo)
-# 2. Remove bundled ensurepip wheels
-# 3. Install pinned application dependencies from requirements.txt
-# 4. Uninstall pip, setuptools, and wheel (removes build tools and vendored SBOMs)
-# 5. Create a non-root user and persistent data directory
-RUN (apk upgrade --no-cache || apk upgrade --no-cache) \
-    && (apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs \
-        || apk upgrade --no-cache --repository=https://dl-cdn.alpinux.org/alpine/edge/main musl musl-utils sqlite-libs) \
-    && apk add --no-cache tzdata \
-    && rm -rf /usr/local/lib/python*/ensurepip \
-    && pip3 install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip3 install --no-cache-dir -r requirements.txt \
-    && pip3 uninstall -y pip setuptools wheel \
-    && addgroup -S appgroup && adduser -S appuser -G appgroup \
+# 1. Apply Debian security updates (tzdata for zoneinfo ships with the python slim image)
+# 2. Install application dependencies from requirements.txt
+# 3. Uninstall pip (removes build tooling from the runtime image)
+# 4. Create a non-root user and persistent data directory
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y pip setuptools wheel \
+    && groupadd --system appgroup \
+    && useradd --system --gid appgroup --no-create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \
     && chown -R appuser:appgroup /app
 
@@ -39,9 +40,9 @@ USER appuser
 # Expose the inventory service port
 EXPOSE 8600
 
-# Configure healthcheck using built-in BusyBox wget
+# Slim images have no wget/curl, so probe /healthz with the Python stdlib
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8600/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8600/healthz', timeout=4)" || exit 1
 
 # Run FastAPI via uvicorn (proxy-headers enabled for Nginx / Cloudflare reverse proxy)
 ENTRYPOINT [ \
