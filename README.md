@@ -77,8 +77,8 @@ Static `nginx:alpine` container serving `www.ironcladsystems.dev` with brand log
 ├── docker-compose.yml            # Multi-container compose setup
 ├── requirements.txt              # Shared FastAPI/uvicorn/Jinja2/httpx dependencies
 ├── shared/                       # Shared DB connection, migrations, auth, crypto, workspaces & theme
-├── homestead/                    # Homestead DB helpers, Google Drive receipts, scheduling, financials & UI
-├── inventory/                    # Iron Ledger routes, markets/insights, Zettle sync, Stripe billing & UI
+├── homestead/                    # Homestead DB domain modules (db/), routes (routes/), scheduling, financials & UI
+├── inventory/                    # Iron Ledger domain modules (stock, sales, market_day, insights), routes (routes/) & UI
 ├── site/                         # Static HTML/CSS/JS, brand assets & nginx.conf for Ironclad Systems LLC
 └── tests/                        # Unit & integration tests (unittest + FastAPI TestClient)
 ```
