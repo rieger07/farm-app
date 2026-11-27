@@ -2982,6 +2982,322 @@ class FarmWebTest(unittest.TestCase):
             200,
         )
 
+    def test_alpaca_shearing_mill_lots_yarn_conversion_tax_books_and_iron_ledger(self):
+        from datetime import date, datetime
+
+        from homestead.db.fiber import (
+            FIBER_SKU_KEYWORDS,
+            compute_fiber_dashboard,
+            list_fiber_mill_lots,
+            list_fiber_shearings,
+        )
+        from homestead.db.herds import list_herd_animals, list_herds
+        from homestead.tax_books import build_unified_tax_books
+        from shared.bridge import list_active_ledger_skus
+        from shared.db.connection import get_connection
+
+        today_iso = date.today().isoformat()
+        yr = date.today().year
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # 1. Create Alpaca Herd with two differently colored named alpacas
+        self.c.post(
+            "/herds/save",
+            data={
+                "name": "Alpaca Herd",
+                "species": "alpaca",
+                "herd_type": "fiber",
+                "head_count": "2",
+            },
+            follow_redirects=False,
+        )
+        alp_id = list_herds(1)[0]["id"]
+        self.c.post(
+            f"/herds/{alp_id}/animals/save",
+            data={"name": "Luna", "sex_role": "female", "color": "White", "birth_year": "2022"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/animals/save",
+            data={"name": "Cocoa", "sex_role": "female", "color": "Dark Chocolate", "birth_year": "2021"},
+            follow_redirects=False,
+        )
+        animals = {a["name"]: a for a in list_herd_animals(1, herd_id=alp_id)}
+        luna_id = animals["Luna"]["id"]
+        cocoa_id = animals["Cocoa"]["id"]
+
+        # Seed Iron Ledger SKUs (Goat Milk Soap first alphabetically, Alpaca Yarn second)
+        now_iso = datetime.utcnow().isoformat(timespec="seconds")
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,
+                                  name, variant_name, sku_code, category, price_cents,
+                                  currency, active, sell_mode, updated_at)
+                VALUES (1, 'p-soap', '', 'Goat Milk Soap', '', '', 'Bath', 800,
+                        'USD', 1, 'unit', ?)
+                """,
+                (now_iso,),
+            )
+            yarn_sku_id = int(
+                conn.execute(
+                    """
+                    INSERT INTO skus (merchant_id, zettle_product_uuid, zettle_variant_uuid,
+                                      name, variant_name, sku_code, category, price_cents,
+                                      currency, active, sell_mode, updated_at)
+                    VALUES (1, 'p-yarn', 'v-luna-white', 'Alpaca Yarn', 'Luna White DK', '', 'Fiber', 2800,
+                            'USD', 1, 'unit', ?)
+                    """,
+                    (now_iso,),
+                ).lastrowid
+            )
+            conn.commit()
+
+        ordered_skus = list_active_ledger_skus(merchant_id=1, prefer_keywords=FIBER_SKU_KEYWORDS)
+        self.assertEqual(ordered_skus[0]["id"], yarn_sku_id)
+
+        # 2. Log annual shearings (colors auto-fill from named alpacas)
+        self.c.post(
+            f"/herds/{alp_id}/shearings/add",
+            data={
+                "animal_id": str(luna_id),
+                "shear_date": today_iso,
+                "fleece_color": "",
+                "prime_lbs": "5.0",
+                "seconds_lbs": "1.0",
+                "shearing_fee": "35.00",
+                "notes": "Clean first clip",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/shearings/add",
+            data={
+                "animal_id": str(cocoa_id),
+                "shear_date": today_iso,
+                "fleece_color": "",
+                "prime_lbs": "4.5",
+                "seconds_lbs": "0",
+                "shearing_fee": "35.00",
+            },
+            follow_redirects=False,
+        )
+
+        shearings = {s["animal_name"]: s for s in list_fiber_shearings(1, herd_id=alp_id)}
+        self.assertEqual(shearings["Luna"]["fleece_color"], "White")
+        self.assertAlmostEqual(shearings["Luna"]["total_lbs"], 6.0, places=2)
+        self.assertEqual(shearings["Cocoa"]["fleece_color"], "Dark Chocolate")
+
+        sh_html = self.c.get(f"/herds?herd_id={alp_id}&tab=shearing")
+        self.assertEqual(sh_html.status_code, 200)
+        self.assertIn("10.5 lb", sh_html.text)
+        self.assertIn("White", sh_html.text)
+        self.assertIn("Dark Chocolate", sh_html.text)
+
+        luna_sh_id = shearings["Luna"]["id"]
+        cocoa_sh_id = shearings["Cocoa"]["id"]
+
+        # 3. Over-allocation (> 6.0 lb) is rejected gracefully
+        r_over = self.c.post(
+            f"/herds/{alp_id}/mill-lots/save",
+            data={
+                "lot_name": "Too Heavy",
+                "inputs_submitted": "1",
+                "shearing_ids": [str(luna_sh_id)],
+                f"raw_lbs_{luna_sh_id}": "7.0",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_over.status_code, 303)
+        self.assertIn("Error", r_over.headers["location"])
+
+        # 4. Create color-separated White mill lot (5.0 lb prime out of 6.0 lb shorn; 1.0 lb remains)
+        r_lot1 = self.c.post(
+            f"/herds/{alp_id}/mill-lots/save",
+            data={
+                "lot_name": "2026 Luna White DK Yarn",
+                "mill_name": "Battenkill Fibers",
+                "status": "sent_to_mill",
+                "sent_date": today_iso,
+                "inputs_submitted": "1",
+                "shearing_ids": [str(luna_sh_id)],
+                f"raw_lbs_{luna_sh_id}": "5.0",
+                "shipping_out_cost": "22.00",
+                "milling_fee": "180.00",
+                "shipping_back_cost": "23.00",
+                "other_handling_fee": "15.00",
+                "include_in_tax_books": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_lot1.status_code, 303)
+
+        lots = list_fiber_mill_lots(1, herd_id=alp_id)
+        self.assertEqual(len(lots), 1)
+        lot1 = lots[0]
+        lot1_id = lot1["id"]
+        self.assertEqual(lot1["color_group"], "White")
+        self.assertFalse(lot1["mixed_color_warning"])
+        self.assertAlmostEqual(lot1["total_mill_cost"], 240.00, places=2)
+        self.assertAlmostEqual(lot1["allocated_shearing_cost"], 29.17, places=2)
+        self.assertAlmostEqual(lot1["total_direct_cogs"], 269.17, places=2)
+
+        sh_after = {s["animal_name"]: s for s in list_fiber_shearings(1, herd_id=alp_id)}
+        self.assertAlmostEqual(sh_after["Luna"]["remaining_lbs"], 1.0, places=2)
+        self.assertAlmostEqual(sh_after["Cocoa"]["remaining_lbs"], 4.5, places=2)
+
+        # 5. Log 20 returned skeins (70.0 oz) & auto-restock Iron Ledger
+        r_out1 = self.c.post(
+            f"/herds/{alp_id}/mill-lots/{lot1_id}/outputs/add",
+            data={
+                "product_type": "yarn_skein",
+                "product_name": "Luna White DK (200 yd)",
+                "unit": "skeins",
+                "quantity": "20",
+                "finished_weight_oz": "70.0",
+                "ledger_sku_id": str(yarn_sku_id),
+                "sync_to_ledger": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_out1.status_code, 303)
+
+        dash1 = compute_fiber_dashboard(1, alp_id, merchant_id=1)
+        lot1_after = dash1["mill_lots"][0]
+        self.assertEqual(lot1_after["status"], "received")
+        self.assertAlmostEqual(lot1_after["yield_pct"], 87.5, places=1)
+        out1 = lot1_after["outputs"][0]
+        self.assertTrue(out1["synced"])
+        self.assertAlmostEqual(out1["cost_per_unit"], 13.46, places=2)
+        self.assertAlmostEqual(out1["margin_per_unit"], 14.54, places=2)
+
+        yarn_sku = next(s for s in list_active_ledger_skus(merchant_id=1) if s["id"] == yarn_sku_id)
+        self.assertAlmostEqual(yarn_sku["on_hand"], 20.0, places=1)
+
+        # Log unlinked output #2, sync later, guard double-sync, then remove (reverses restock)
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/{lot1_id}/outputs/add",
+            data={
+                "product_type": "roving_bump",
+                "product_name": "White Roving Bump",
+                "unit": "bumps",
+                "quantity": "2",
+                "finished_weight_oz": "0",
+            },
+            follow_redirects=False,
+        )
+        lot1_two = list_fiber_mill_lots(1, herd_id=alp_id)[0]
+        out2_id = next(o["id"] for o in lot1_two["outputs"] if o["product_name"] == "White Roving Bump")
+
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/{lot1_id}/outputs/{out2_id}/sync-ledger",
+            data={"ledger_sku_id": str(yarn_sku_id)},
+            follow_redirects=False,
+        )
+        self.assertAlmostEqual(
+            next(s for s in list_active_ledger_skus(merchant_id=1) if s["id"] == yarn_sku_id)["on_hand"],
+            22.0,
+            places=1,
+        )
+        r_dup_sync = self.c.post(
+            f"/herds/{alp_id}/mill-lots/{lot1_id}/outputs/{out2_id}/sync-ledger",
+            data={"ledger_sku_id": str(yarn_sku_id)},
+            follow_redirects=False,
+        )
+        self.assertIn("Error", r_dup_sync.headers["location"])
+        self.assertAlmostEqual(
+            next(s for s in list_active_ledger_skus(merchant_id=1) if s["id"] == yarn_sku_id)["on_hand"],
+            22.0,
+            places=1,
+        )
+
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/{lot1_id}/outputs/{out2_id}/delete",
+            follow_redirects=False,
+        )
+        self.assertAlmostEqual(
+            next(s for s in list_active_ledger_skus(merchant_id=1) if s["id"] == yarn_sku_id)["on_hand"],
+            20.0,
+            places=1,
+        )
+
+        # 6. Schedule F Tax Books includes shearing + mill costs (and respects include_in_tax_books=0)
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/save",
+            data={
+                "lot_name": "2026 Cocoa Chocolate Lot",
+                "inputs_submitted": "1",
+                "shearing_ids": [str(cocoa_sh_id)],
+                f"raw_lbs_{cocoa_sh_id}": "4.5",
+                "milling_fee": "120.00",
+                "include_in_tax_books": "",
+            },
+            follow_redirects=False,
+        )
+        books = build_unified_tax_books(1, merchant_id=1, tax_year=yr)
+        fiber_entries = [e for e in books["entries"] if e["source_key"] in ("fiber_shearing", "fiber_mill")]
+        self.assertAlmostEqual(sum(e["amount"] for e in fiber_entries), 310.00, places=2)
+
+        mill_page = self.c.get(f"/herds?herd_id={alp_id}&tab=mill")
+        self.assertEqual(mill_page.status_code, 200)
+        self.assertIn("2026 Luna White DK Yarn", mill_page.text)
+        self.assertIn("$13.46", mill_page.text)
+
+        # 7. Staff (200 GET / 403 POST) and cross-farm user (404 POST)
+        self.c.post(
+            "/settings/members",
+            data={"username": "helper", "display_name": "Helper", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "helper", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(c_staff.get(f"/herds?herd_id={alp_id}&tab=mill").status_code, 200)
+        self.assertEqual(
+            c_staff.post(
+                f"/herds/{alp_id}/shearings/add",
+                data={"prime_lbs": "3.0"},
+                follow_redirects=False,
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            c_staff.post(
+                f"/herds/{alp_id}/mill-lots/save",
+                data={"lot_name": "Blocked"},
+                follow_redirects=False,
+            ).status_code,
+            403,
+        )
+
+        self.c.post(
+            "/settings/admin/users",
+            data={"username": "other", "display_name": "Other Farm", "password": "secret"},
+            follow_redirects=False,
+        )
+        c_other = TestClient(app)
+        c_other.post("/login", data={"username": "other", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(
+            c_other.post(
+                f"/herds/{alp_id}/shearings/add",
+                data={"prime_lbs": "3.0"},
+                follow_redirects=False,
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            c_other.post(
+                f"/herds/{alp_id}/mill-lots/save",
+                data={"lot_name": "Intruder"},
+                follow_redirects=False,
+            ).status_code,
+            404,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

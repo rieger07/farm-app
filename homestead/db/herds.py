@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from homestead.db.core import get_db_connection
+from shared.bridge import delete_ledger_entry
 
 HERD_TYPES = ("breeding", "fiber", "other")
 HERD_SPECIES = ("pig", "alpaca", "goat", "sheep", "cattle", "other")
@@ -261,10 +262,23 @@ def save_herd(
 
 
 def delete_herd(user_id: int, herd_id: int) -> bool:
+    uid = int(user_id)
+    hid = int(herd_id)
     with get_db_connection() as conn:
+        outs = conn.execute(
+            """
+            SELECT fo.ledger_entry_id
+            FROM fiber_lot_outputs fo
+            JOIN fiber_mill_lots ml ON ml.id = fo.lot_id
+            WHERE ml.herd_id = ? AND ml.user_id = ? AND fo.ledger_entry_id IS NOT NULL
+            """,
+            (hid, uid),
+        ).fetchall()
+        for o in outs:
+            delete_ledger_entry(int(o["ledger_entry_id"]), conn=conn)
         cur = conn.execute(
             "DELETE FROM herds WHERE id = ? AND user_id = ?",
-            (int(herd_id), int(user_id)),
+            (hid, uid),
         )
         conn.commit()
         return cur.rowcount > 0

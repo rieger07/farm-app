@@ -12,6 +12,7 @@ from homestead.db.batches import (
 )
 from homestead.db.eggs import list_layer_feed_logs
 from homestead.db.expenses import list_farm_expenses, schedule_f_line_for
+from homestead.db.fiber import list_fiber_mill_lots, list_fiber_shearings
 from homestead.db.herds import list_herd_feed_logs
 from homestead.db.shares import effective_share_weight, list_batch_harvest_shares
 from shared.bridge import (
@@ -196,6 +197,59 @@ def build_unified_tax_books(
                 receipt_url=hv.get("receipt_url") or "",
                 receipt_group_id="",
                 source_url=f"/batches/{bid}",
+                can_delete=False,
+                can_attach_receipt=True,
+            )
+        )
+
+    # 4b. Fiber shearing & mill processing fees
+    for sh in list_fiber_shearings(uid):
+        fee = float(sh.get("shearing_fee") or 0.0)
+        if fee <= 0:
+            continue
+        hid = int(sh["herd_id"])
+        who_or_clr = sh.get("animal_name") or sh.get("fleece_color") or "Shearing"
+        all_entries.append(
+            _make_entry(
+                entry_id=int(sh["id"]),
+                date_str=sh["shear_date"],
+                source_key="fiber_shearing",
+                source_label="Fiber Shearing",
+                category="Processing",
+                vendor="",
+                allocation_label=f"{sh.get('herd_name') or 'Herd'} · {who_or_clr}",
+                amount=fee,
+                notes=sh.get("notes") or "",
+                receipt_url="",
+                receipt_group_id="",
+                source_url=f"/herds?herd_id={hid}&tab=shearing",
+                can_delete=False,
+                can_attach_receipt=False,
+            )
+        )
+
+    for lot in list_fiber_mill_lots(uid):
+        if not lot.get("include_in_tax_books"):
+            continue
+        cost = float(lot.get("total_mill_cost") or 0.0)
+        if cost <= 0:
+            continue
+        hid = int(lot["herd_id"])
+        dt_str = (lot.get("received_date") or lot.get("sent_date") or str(lot.get("created_at") or "")[:10])
+        all_entries.append(
+            _make_entry(
+                entry_id=int(lot["id"]),
+                date_str=dt_str,
+                source_key="fiber_mill",
+                source_label="Fiber Mill",
+                category="Processing",
+                vendor=lot.get("mill_name") or "",
+                allocation_label=f"{lot.get('herd_name') or 'Herd'} · {lot['lot_name']}",
+                amount=cost,
+                notes=lot.get("notes") or "",
+                receipt_url=lot.get("receipt_url") or "",
+                receipt_group_id="",
+                source_url=f"/herds?herd_id={hid}&tab=mill",
                 can_delete=False,
                 can_attach_receipt=True,
             )
