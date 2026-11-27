@@ -22,8 +22,10 @@ from homestead.db.customers import (
     settle_customer_batch_pickup,
     update_batch_preorder,
     update_batch_preorder_settings,
+    update_customer_batch_payment_method,
     update_harvest_assignment,
 )
+from shared.bridge import HOMESTEAD_PAYMENT_METHODS
 from homestead.scheduling import compute_batch_schedule
 from homestead.web import (
     _batch_stage_info,
@@ -414,6 +416,13 @@ def batch_pickup_page(
         g["bird_nums_label"] = ", ".join(f"#{x['num']}" for x in g["birds"])
         g["pending_nums_label"] = ", ".join(f"#{x['num']}" for x in g["pending_birds"])
         g["completed_nums_label"] = ", ".join(f"#{x['num']}" for x in g["completed_birds"])
+        comp_pms = {str(x.get("payment_method") or "").strip().lower() for x in g["completed_birds"]}
+        if len(comp_pms) == 1:
+            g["payment_method"] = next(iter(comp_pms))
+        elif len(comp_pms) > 1:
+            g["payment_method"] = "mixed"
+        else:
+            g["payment_method"] = ""
         if g["all_paid"] and g["all_picked_up"]:
             completed_groups.append(g)
         else:
@@ -451,6 +460,7 @@ def batch_pickup_page(
         pickup_cfg=pickup_cfg,
         pickup_location=pickup_location,
         pickup_instructions=pickup_instructions,
+        payment_methods=HOMESTEAD_PAYMENT_METHODS,
         msg=msg,
     )
 
@@ -460,6 +470,7 @@ def batch_pickup_settle_submit(
     batch_id: int,
     customer_id: int,
     collected_today: str = Form(""),
+    payment_method: str = Form("cash"),
     bird_ids: list[str] = Form(default=[]),
     user: dict = Depends(current_user),
 ):
@@ -471,15 +482,41 @@ def batch_pickup_settle_submit(
         except ValueError:
             collected_val = None
     sel_ids = [int(x) for x in bird_ids if str(x).strip().isdigit()]
-    cnt = settle_customer_batch_pickup(
-        user["id"], batch_id, customer_id,
-        collected_today=collected_val, mark_paid=True, mark_picked_up=True,
-        bird_ids=sel_ids or None,
-    )
+    try:
+        cnt = settle_customer_batch_pickup(
+            user["id"], batch_id, customer_id,
+            collected_today=collected_val, mark_paid=True, mark_picked_up=True,
+            bird_ids=sel_ids or None, payment_method=payment_method,
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Error: {exc}"),
+            status_code=303,
+        )
     cust = get_customer(user["id"], customer_id)
     cname = cust["name"] if cust else "Customer"
     return RedirectResponse(
-        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} bird{'s' if cnt != 1 else ''}) paid & picked up!"),
+        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} bird{'s' if cnt != 1 else ''}) paid & picked up ({payment_method})!"),
+        status_code=303,
+    )
+
+
+@router.post("/batches/{batch_id}/pickup/{customer_id}/payment-method")
+def batch_pickup_payment_method_submit(
+    batch_id: int,
+    customer_id: int,
+    payment_method: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    try:
+        cnt = update_customer_batch_payment_method(user["id"], batch_id, customer_id, payment_method)
+        lbl = payment_method.strip().capitalize() if payment_method.strip() else "Untagged"
+        msg = f"Updated payment method to {lbl} ({cnt} bird{'s' if cnt != 1 else ''})."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(
+        f"/batches/{batch_id}/pickup?msg=" + quote_plus(msg),
         status_code=303,
     )
 

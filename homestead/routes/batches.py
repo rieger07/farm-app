@@ -25,8 +25,10 @@ from homestead.db.batches import (
     list_batch_sales,
     save_batch,
     set_batch_active,
+    update_batch_sale_payment_method,
 )
 from homestead.db.core import get_bag_weight, get_species_catalog
+from shared.bridge import HOMESTEAD_PAYMENT_METHODS
 from homestead.db.customers import batch_preorder_counts
 from homestead.db.eggs import (
     EGG_SPECIES_DEFAULTS,
@@ -127,6 +129,7 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         bag_weight=bag_weight,
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
         species_catalog=get_species_catalog(user_id=user["id"]),
+        payment_methods=HOMESTEAD_PAYMENT_METHODS,
         msg=msg,
     )
 
@@ -345,14 +348,39 @@ def batch_log_sale(
     allocation_type: str = Form("sale"),
     weight_lbs: float = Form(...),
     revenue: float = Form(0.0),
+    payment_method: str = Form("cash"),
     notes: str = Form(""),
     next_url: str = Form("/"),
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
-    add_batch_sale(batch_id, entry_date, allocation_type, weight_lbs, revenue, notes.strip())
     target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus("Saved sale/freezer entry."), status_code=303)
+    try:
+        add_batch_sale(
+            batch_id, entry_date, allocation_type, weight_lbs, revenue,
+            notes.strip(), payment_method=payment_method,
+        )
+        msg = "Saved sale/freezer entry."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
+
+
+@router.post("/batches/{batch_id}/sales/{sale_id}/payment-method")
+def batch_sale_payment_method_submit(
+    batch_id: int,
+    sale_id: int,
+    payment_method: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    _get_owned_batch(batch_id, user)
+    try:
+        updated = update_batch_sale_payment_method(batch_id, sale_id, payment_method)
+        lbl = payment_method.strip().capitalize() if payment_method.strip() else "Untagged"
+        msg = f"Updated sale payment method to {lbl}." if updated else "Customer sale not found."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/batches/{batch_id}?msg=" + quote_plus(msg), status_code=303)
 
 
 @router.post("/batches/{batch_id}/sales/{sale_id}/delete")

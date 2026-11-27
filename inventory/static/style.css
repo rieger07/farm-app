@@ -12,7 +12,7 @@
 /* Sales chart & payment mix */
 .legend{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 12px}
-.dot.g,.g{background:var(--green)}.dot.y,.y{background:var(--yellow)}.dot.b,.seg.b,.split .b{background:var(--blue)}
+.dot.g,.g{background:var(--green)}.dot.y,.y{background:var(--yellow)}.dot.b,.seg.b,.split .b{background:var(--blue)}.dot.m,.seg.m,.split .m{background:#8c7a6b}
 .chartwrap{overflow-x:auto}
 .chart{display:flex;gap:6px;align-items:flex-end;height:170px;padding:8px 4px;border-bottom:1px solid var(--line)}
 .barcol{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
@@ -20,7 +20,7 @@
 .seg{min-height:0}
 .split{display:flex;height:10px;border-radius:6px;overflow:hidden;margin:12px 0}
 .srcrow{display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
-.src{font-weight:600}.src.zettle{color:var(--green)}.src.cash{color:var(--amberink)}
+.src{font-weight:600}.src.zettle{color:var(--green)}.src.cash{color:var(--amberink)}.src.homestead{color:#2c5e4f}
 
 /* Quick Sale & offline POS */
 .qs{max-width:520px;margin:0 auto}
@@ -86,6 +86,8 @@ details.sale[open]{background:var(--surface-soft)}
 .pay-badge.card{background:var(--sage);color:var(--green)}
 .pay-badge.cash{background:var(--amber);color:var(--amberink)}
 .pay-badge.venmo,.pay-badge.paypal{background:var(--bluebg);color:var(--blueink)}
+.pay-badge.check{background:#efe7dc;color:#5b4636}
+.pay-badge.unset{background:var(--red);color:var(--redink)}
 
 /* Inventory desktop table / mobile cards */
 .desktop-table{display:table}

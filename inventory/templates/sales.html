@@ -9,7 +9,7 @@
 {% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
 
 <div class="chips" style="margin-bottom:10px;align-items:center">
-  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days')) %}
+  {% for key, label in (('today','Today'),('yesterday','Yesterday'),('week','7 days'),('month','30 days'),('all','All time')) %}
   <a class="chip {{ 'on' if period == key }}" href="/sales?period={{ key }}&source={{ source }}{% if selected_marketplace %}&marketplace={{ selected_marketplace }}{% endif %}" style="text-decoration:none">{{ label }}</a>
   {% endfor %}
   <button type="button" class="chip {{ 'on' if period == 'custom' }}" onclick="document.getElementById('customrange').hidden = !document.getElementById('customrange').hidden">Custom</button>
@@ -41,21 +41,22 @@
 {% include "_market_day_banner.html" %}
 
 <div class="cards four">
-  <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}</small></div>
-  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.card_count }} card · {{ summary.digital_count }} digital · {{ summary.cash_count }} cash</small></div>
+  <div class="card"><small>Total sales</small><div class="big">{{ summary.total_cents|money }}</div><small>{{ period_label }}{% if summary.homestead_count %} · incl. {{ summary.homestead_count }} Homestead ({{ summary.homestead_cents|money }}){% endif %}</small></div>
+  <div class="card"><small>Transactions</small><div class="big">{{ summary.count }}</div><small>{{ summary.card_count }} card · {{ summary.digital_count }} digital · {{ summary.cash_count }} cash{% if summary.check_count %} · {{ summary.check_count }} check{% endif %}{% if summary.unset_count %} · {{ summary.unset_count }} untagged{% endif %}</small></div>
   <div class="card"><small>Average sale</small><div class="big">{{ summary.avg_cents|money }}</div><small>Per transaction</small></div>
-  <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across products</small></div>
+  <div class="card"><small>Units sold</small><div class="big">{{ summary.units }}</div><small>Across products &amp; birds</small></div>
 </div>
 
 <div class="cards two split-3-2">
   <div class="card">
-    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot b"></i>Digital <i class="dot y"></i>Cash</span></div>
+    <div class="legend"><b>{{ 'Sales by week' if weekly else 'Sales by day' }}</b><span><i class="dot g"></i>Card <i class="dot b"></i>Digital <i class="dot y"></i>Cash <i class="dot m"></i>Check / Other</span></div>
     <div class="chartwrap">
       <div class="chart" style="min-width: {{ days|length * 26 }}px">
         {% for d in days %}
-        {% set tot = d.card_cents + d.digital_cents + d.cash_cents %}
+        {% set tot = d.card_cents + d.digital_cents + d.cash_cents + d.other_cents %}
         <div class="barcol">
-          <div class="bar" title="{{ d.title }}: {{ tot|money }} (Card {{ d.card_cents|money }}, Digital {{ d.digital_cents|money }}, Cash {{ d.cash_cents|money }})" style="height: {{ (tot / peak * 100)|round|int }}%">
+          <div class="bar" title="{{ d.title }}: {{ tot|money }} (Card {{ d.card_cents|money }}, Digital {{ d.digital_cents|money }}, Cash {{ d.cash_cents|money }}{% if d.other_cents %}, Other {{ d.other_cents|money }}{% endif %})" style="height: {{ (tot / peak * 100)|round|int }}%">
+            <div class="seg m" style="flex: {{ d.other_cents }}"></div>
             <div class="seg y" style="flex: {{ d.cash_cents }}"></div>
             <div class="seg b" style="flex: {{ d.digital_cents }}"></div>
             <div class="seg g" style="flex: {{ d.card_cents }}"></div>
@@ -65,20 +66,30 @@
         {% endfor %}
       </div>
     </div>
-    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.card_cents + best.digital_cents + best.cash_cents)|money }}).</small>
+    <small class="muted">Strongest {{ 'week' if weekly else 'day' }}: {{ best.title }} ({{ (best.card_cents + best.digital_cents + best.cash_cents + best.other_cents)|money }}).</small>
   </div>
   <div class="card">
     <b>Cash, digital, or card. All accounted for.</b>
     <small class="muted block">{{ period_label|upper }} · PAYMENT BREAKDOWN</small>
-    {% set tot = (summary.card_cents + summary.digital_cents + summary.cash_cents) or 1 %}
+    {% set tot = (summary.card_cents + summary.digital_cents + summary.cash_cents + summary.check_cents + summary.unset_cents) or 1 %}
     <div class="split">
       <div class="g" style="width: {{ (summary.card_cents / tot * 100)|round|int }}%"></div>
       <div class="b" style="width: {{ (summary.digital_cents / tot * 100)|round|int }}%"></div>
       <div class="y" style="width: {{ (summary.cash_cents / tot * 100)|round|int }}%"></div>
+      <div class="m" style="width: {{ ((summary.check_cents + summary.unset_cents) / tot * 100)|round|int }}%"></div>
     </div>
-    <div class="srcrow"><div><b>Card</b><small>{{ summary.card_count }} sales · Zettle</small></div><b>{{ summary.card_cents|money }}</b></div>
+    <div class="srcrow"><div><b>Card</b><small>{{ summary.card_count }} sales</small></div><b>{{ summary.card_cents|money }}</b></div>
     <div class="srcrow"><div><b>Digital cash</b><small>{{ summary.digital_count }} sales · Venmo ({{ summary.venmo_cents|money }}) + PayPal ({{ summary.paypal_cents|money }})</small></div><b>{{ summary.digital_cents|money }}</b></div>
     <div class="srcrow"><div><b>Physical cash</b><small>{{ summary.cash_count }} sales · Zettle ({{ summary.zettle_cash_cents|money }}) + Quick sale ({{ summary.quick_cash_cents|money }})</small></div><b>{{ summary.cash_cents|money }}</b></div>
+    {% if summary.check_count %}
+    <div class="srcrow"><div><b>Check</b><small>{{ summary.check_count }} sales</small></div><b>{{ summary.check_cents|money }}</b></div>
+    {% endif %}
+    {% if summary.unset_count %}
+    <div class="srcrow">
+      <div><b>Needs payment tag</b><small>{{ summary.unset_count }} older Homestead sales · <a href="/sales?period={{ period }}&source=unset">Filter &amp; tag →</a></small></div>
+      <b class="text-red">{{ summary.unset_cents|money }}</b>
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -92,11 +103,14 @@
       {% if selected_marketplace %}<input type="hidden" name="marketplace" value="{{ selected_marketplace }}">{% endif %}
       <select name="source" onchange="this.form.submit()">
         <option value="all" {{ 'selected' if source=='all' }}>All transactions</option>
+        <option value="homestead" {{ 'selected' if source=='homestead' }}>Homestead (Farm Pickups)</option>
         <option value="cash" {{ 'selected' if source=='cash' }}>Physical Cash</option>
         <option value="digital" {{ 'selected' if source=='digital' }}>Digital Cash (Venmo + PayPal)</option>
         <option value="venmo" {{ 'selected' if source=='venmo' }}>Venmo only</option>
         <option value="paypal" {{ 'selected' if source=='paypal' }}>PayPal only</option>
-        <option value="card" {{ 'selected' if source=='card' }}>Card (Zettle)</option>
+        <option value="card" {{ 'selected' if source=='card' }}>Card</option>
+        <option value="check" {{ 'selected' if source=='check' }}>Check</option>
+        <option value="unset" {{ 'selected' if source=='unset' }}>Needs payment tag</option>
         <option value="zettle" {{ 'selected' if source=='zettle' }}>Zettle (all)</option>
         <option value="quick_sale" {{ 'selected' if source=='quick_sale' }}>Quick sale (all)</option>
         <option value="voided" {{ 'selected' if source=='voided' }}>Voided / Excluded</option>
@@ -110,9 +124,9 @@
       <summary>
         <div class="when"><b>{{ t.date_label }}</b><small>{{ t.time_label }}</small></div>
         <div class="what">
-          <span class="src {{ t.source }}">{{ 'Quick sale' if t.source == 'cash' else 'Zettle' }}</span>
-          <span class="pay-badge {{ t.pay_method }}">{{ t.pay_method|capitalize }}</span>
-          <small>#{{ t.id }} · {{ t.units }} unit{{ '' if t.units == 1 else 's' }}{% if t.status != 'completed' %} · {{ t.status }}{% endif %}</small>
+          <span class="src {{ t.source }}">{{ 'Homestead' if t.source == 'homestead' else ('Quick sale' if t.source == 'cash' else 'Zettle') }}</span>
+          <span class="pay-badge {{ t.pay_method or 'unset' }}">{{ t.pay_label if t.source == 'homestead' else (t.pay_method|capitalize) }}</span>
+          <small>{% if t.source == 'homestead' %}{{ t.customer_name }} · {{ t.batch_name }} ({{ t.units }}){% else %}#{{ t.id }} · {{ t.units }} unit{{ '' if t.units == 1 else 's' }}{% if t.status != 'completed' %} · {{ t.status }}{% endif %}{% endif %}</small>
         </div>
         <b class="amt {{ 'neg' if t.total_cents < 0 }}">{{ t.total_cents|money }}</b>
         <span class="chev" aria-hidden="true">▾</span>
@@ -129,7 +143,26 @@
         <div class="line"><span>Cash received</span><span>{{ t.cash_received_cents|money }}</span></div>
         <div class="line"><span>Change given</span><span>{{ t.change_cents|money }}</span></div>
         {% endif %}
-        {% if t.status != 'voided' %}
+        {% if t.source == 'homestead' %}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <form method="post" action="/sales/homestead/payment-type" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <input type="hidden" name="record_type" value="{{ t.record_type }}">
+            <input type="hidden" name="record_ids" value="{{ t.record_ids_csv }}">
+            <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <small class="muted">Payment method:</small>
+            <select name="payment_type" style="padding:4px 8px;font-size:12px">
+              <option value="" {{ 'selected' if not t.pay_method }}>— Untagged —</option>
+              <option value="cash" {{ 'selected' if t.pay_method=='cash' }}>Physical Cash</option>
+              <option value="venmo" {{ 'selected' if t.pay_method=='venmo' }}>Venmo (Digital)</option>
+              <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
+              <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
+              <option value="check" {{ 'selected' if t.pay_method=='check' }}>Check</option>
+            </select>
+            <button class="btn sm">Save</button>
+          </form>
+          <small class="muted">Linked live from Homestead (zero double-booking in Tax Books)</small>
+        </div>
+        {% elif t.status != 'voided' %}
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
           <form method="post" action="/sales/{{ t.id }}/payment-type" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <input type="hidden" name="next_url" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
@@ -139,6 +172,7 @@
               <option value="venmo" {{ 'selected' if t.pay_method=='venmo' }}>Venmo (Digital)</option>
               <option value="paypal" {{ 'selected' if t.pay_method=='paypal' }}>PayPal (Digital)</option>
               <option value="card" {{ 'selected' if t.pay_method=='card' }}>Card</option>
+              <option value="check" {{ 'selected' if t.pay_method=='check' }}>Check</option>
             </select>
             <button class="btn sm">Save</button>
           </form>
@@ -202,7 +236,7 @@
   </div>
 
   <div class="foot">
-    <span>Showing {{ txns|length }} of {{ total_count }}. Zettle sales appear automatically. Cash sales come from Quick sale.</span>
+    <span>Showing {{ txns|length }} of {{ total_count }}. Zettle sales sync automatically, Quick sales record booth sales, and Homestead sales link live without double-booking.</span>
     {% if has_more %}<a href="/sales?period={{ period }}&source={{ source }}{% if period == 'custom' %}&from={{ date_from }}&to={{ date_to }}{% elif period == 'day' %}&date={{ market_date }}{% endif %}&limit={{ next_limit }}">Load more</a>{% endif %}
   </div>
 </div>

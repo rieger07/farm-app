@@ -263,6 +263,8 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
             "customer_pref": cust["preferred_contact"] if cust else "sms",
             "deposit_paid": dep,
             "payment_status": pay_stat,
+            "payment_method": h.get("payment_method") or "",
+            "paid_at": h.get("paid_at") or "",
             "pickup_status": pick_stat,
             "est_price": est_price,
             "actual_sale_price": actual_p,

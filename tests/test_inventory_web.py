@@ -1629,6 +1629,176 @@ class WebTest(unittest.TestCase):
         self.assertIn("Removed+stock+ledger+entry", r_ok.headers["location"])
         self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 1)
 
+    def test_homestead_sales_appear_in_iron_ledger_with_payment_crud_and_zero_double_booking(self):
+        import csv
+        import io
+        from homestead.db.batches import (
+            add_batch_harvest,
+            add_batch_sale,
+            list_batch_harvests,
+            save_batch,
+        )
+        from homestead.db.customers import (
+            save_customer,
+            settle_customer_batch_pickup,
+            update_harvest_assignment,
+        )
+        from homestead.tax_books import build_unified_tax_books
+        from inventory.marketplaces import save_marketplace, save_market_day
+        from inventory.sales import sales_summary
+        from inventory.stock import list_stock
+
+        owner = self.client("zach")
+        conn = get_connection()
+        try:
+            zach_id = conn.execute("SELECT id FROM users WHERE username = 'zach'").fetchone()["id"]
+        finally:
+            conn.close()
+
+        # Seed Homestead livestock batch with:
+        # 1) Pickup-settled Venmo sale ($68.50)
+        # 2) Older untagged paid sale ($55.00, no payment_method)
+        # 3) Manual bulk Customer Sale paid by Check ($42.00)
+        # 4) Home Freezer allocation ($0, must NOT show in Iron Ledger or Tax income)
+        bid = save_batch(
+            {
+                "name": "Thanksgiving 2026",
+                "species": "turkey chicks",
+                "quantity": 10,
+                "start_date": "2026-07-01",
+                "days_to_birth": 0,
+                "weeks_to_proc": 18,
+                "feed_total": 50.0,
+                "sale_price_per_lb": 4.0,
+            },
+            user_id=zach_id,
+        )
+        c1 = save_customer(zach_id, "Sarah Venmo")
+        c2 = save_customer(zach_id, "Tom Untagged")
+        h_venmo = add_batch_harvest(bid, "2026-11-20", 1, 15.0, 0.0, for_sale=True)
+        h_untagged = add_batch_harvest(bid, "2026-11-18", 1, 12.0, 0.0, for_sale=True)
+        update_harvest_assignment(bid, h_venmo, customer_id=c1, for_sale=True, actual_sale_price=68.50)
+        settle_customer_batch_pickup(
+            zach_id, bid, c1, collected_today=68.50, mark_paid=True, mark_picked_up=True,
+            bird_ids=[h_venmo], payment_method="venmo",
+        )
+        update_harvest_assignment(
+            bid, h_untagged, customer_id=c2, for_sale=True, actual_sale_price=55.00,
+            payment_status="paid", pickup_status="picked_up", payment_method="",
+        )
+        add_batch_sale(bid, "2026-11-21", "Customer Sale", 10.0, 42.00, notes="Halves", payment_method="check")
+        add_batch_sale(bid, "2026-11-21", "Home Freezer", 14.0, 0.0, notes="Family freezer")
+
+        # Also add one Iron Ledger Quick sale (POS)
+        sku = next(s for s in list_stock(1) if s["sell_mode"] == "unit" and s["item_type"] == "product")
+        owner.post(
+            "/api/cash-sale",
+            json={"client_uuid": "tx-bridge-pos-1", "items": [{"sku_id": sku["id"], "quantity": 1}]},
+        )
+        conn = get_connection()
+        try:
+            pos_id = conn.execute(
+                "SELECT id FROM sales WHERE merchant_id = 1 AND external_id = 'tx-bridge-pos-1'"
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+
+        # Verify /sales?period=all includes Homestead + POS, hides Home Freezer
+        all_html = owner.get("/sales?period=all").text
+        all_list = all_html.split('id="sales-list"', 1)[1]
+        self.assertIn("Sarah Venmo", all_list)
+        self.assertIn("Tom Untagged", all_list)
+        self.assertIn("Halves", all_list)
+        self.assertNotIn("Family freezer", all_list)
+        self.assertIn("Needs payment tag", all_html)
+
+        # Verify filters: source=homestead, source=unset, source=check, and marketplace filter exclusion
+        hs_list = owner.get("/sales?period=all&source=homestead").text.split('id="sales-list"', 1)[1]
+        self.assertIn("Sarah Venmo", hs_list)
+        self.assertNotIn(f"#{pos_id}", hs_list)
+
+        unset_list = owner.get("/sales?period=all&source=unset").text.split('id="sales-list"', 1)[1]
+        self.assertIn("Tom Untagged", unset_list)
+        self.assertNotIn("Sarah Venmo", unset_list)
+
+        chk_list = owner.get("/sales?period=all&source=check").text.split('id="sales-list"', 1)[1]
+        self.assertIn("Halves", chk_list)
+        self.assertNotIn("Sarah Venmo", chk_list)
+
+        mp_id = save_marketplace(1, name="Saturday Market")
+        save_market_day(1, "2026-11-21", mp_id)
+        mp_list = owner.get(f"/sales?period=all&marketplace={mp_id}").text.split('id="sales-list"', 1)[1]
+        self.assertNotIn("Sarah Venmo", mp_list)
+        self.assertNotIn("Halves", mp_list)
+
+        # Re-tag the older untagged Homestead sale right inside Iron Ledger -> persists in Homestead!
+        r_tag = owner.post(
+            "/sales/homestead/payment-type",
+            data={
+                "record_type": "harvest",
+                "record_ids": str(h_untagged),
+                "payment_type": "check",
+                "next_url": "/sales?period=all&source=unset",
+            },
+        )
+        self.assertEqual(r_tag.status_code, 303)
+        self.assertIn("Tagged+Homestead+transaction+payment+as+Check", r_tag.headers["location"])
+        hv_rows = {int(h["id"]): h for h in list_batch_harvests(bid)}
+        self.assertEqual(hv_rows[h_untagged]["payment_method"], "check")
+
+        unset_after = owner.get("/sales?period=all&source=unset").text
+        self.assertNotIn("Tom Untagged", unset_after.split('id="sales-list"', 1)[1])
+
+        # Tenant isolation: another workspace owner cannot modify merchant 1's Homestead records
+        owner.post(
+            "/admin/merchants/create",
+            data={
+                "merchant_name": "Second Farm",
+                "owner_username": "otherfarm",
+                "owner_display_name": "Other Farm",
+                "owner_password": "honey1234",
+            },
+        )
+        other = self.client("otherfarm")
+        r_iso = other.post(
+            "/sales/homestead/payment-type",
+            data={
+                "record_type": "harvest",
+                "record_ids": str(h_untagged),
+                "payment_type": "cash",
+                "next_url": "/sales?period=all",
+            },
+        )
+        self.assertIn("Error%3A", r_iso.headers["location"])
+        self.assertEqual(
+            next(h["payment_method"] for h in list_batch_harvests(bid) if h["id"] == h_untagged),
+            "check",
+        )
+
+        # Re-tag POS sale as Check too and confirm filter + CSV export work
+        r_pos_chk = owner.post(
+            f"/sales/{pos_id}/payment-type",
+            data={"payment_type": "check", "next_url": "/sales?period=all"},
+        )
+        self.assertEqual(r_pos_chk.status_code, 303)
+        csv_resp = owner.get("/sales/export.csv?period=all")
+        self.assertEqual(csv_resp.status_code, 200)
+        csv_rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+        hs_csv = [r for r in csv_rows if r["source"] == "homestead"]
+        self.assertEqual(len(hs_csv), 3)
+        self.assertTrue(any(r["payment_type"] == "venmo" and r["sale_total"] == "68.50" for r in hs_csv))
+        self.assertTrue(any(r["payment_type"] == "check" and r["sale_total"] == "55.00" for r in hs_csv))
+
+        # Zero double-booking check:
+        # 1) Market Day / POS sales_summary stays strictly POS-only (no Homestead income leaked into drawer)
+        pos_summ = sales_summary(1, "2000-01-01T00:00:00", "2099-01-01T00:00:00")
+        pos_only_dollars = round(pos_summ["total_cents"] / 100.0, 2)
+        # 2) Schedule F Tax Books computes Homestead + POS with ZERO double-booking!
+        books = build_unified_tax_books(user_id=zach_id, merchant_id=1)
+        self.assertAlmostEqual(books["totals"]["homestead_income"], 165.50, places=2)
+        self.assertAlmostEqual(books["totals"]["ledger_income"], pos_only_dollars, places=2)
+        self.assertAlmostEqual(books["totals"]["gross_income"], round(165.50 + pos_only_dollars, 2), places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

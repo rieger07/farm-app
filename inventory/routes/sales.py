@@ -1,7 +1,7 @@
 """Sales ledger, Insights analytics, marketplace day tags, void/retag, and CSV export."""
 
 import csv
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import io
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
@@ -35,6 +35,10 @@ from inventory.sales import (
     void_quick_sale,
 )
 from inventory.web import local_input_to_utc_iso
+from shared.bridge import (
+    list_homestead_paid_transactions,
+    update_homestead_transaction_payment_method,
+)
 from inventory.stock import fmt_qty
 from inventory.web import (
     Ctx,
@@ -51,6 +55,58 @@ from inventory.web import (
 )
 
 router = APIRouter()
+
+
+def _filter_homestead_txns(hs_txns: list[dict], source: str) -> list[dict]:
+    if source in ("all", "homestead"):
+        return list(hs_txns)
+    if source in ("cash", "venmo", "paypal", "card", "check"):
+        return [t for t in hs_txns if t["pay_method"] == source]
+    if source == "digital":
+        return [t for t in hs_txns if t["pay_method"] in ("venmo", "paypal")]
+    if source == "unset":
+        return [t for t in hs_txns if not t["pay_method"]]
+    return []
+
+
+def _merge_homestead_into_summary(summary: dict, hs_txns: list[dict]) -> None:
+    if not hs_txns:
+        return
+    hs_cents = sum(int(t["total_cents"] or 0) for t in hs_txns)
+    hs_count = len(hs_txns)
+    hs_units = sum(int(t["units"] or 0) for t in hs_txns)
+    summary["homestead_count"] = summary.get("homestead_count", 0) + hs_count
+    summary["homestead_cents"] = summary.get("homestead_cents", 0) + hs_cents
+    summary["count"] += hs_count
+    summary["total_cents"] += hs_cents
+    summary["units"] = fmt_qty(float(summary["units"] or 0) + hs_units)
+    summary["avg_cents"] = round(summary["total_cents"] / summary["count"]) if summary["count"] else 0
+
+    for t in hs_txns:
+        c = int(t["total_cents"] or 0)
+        pm = t["pay_method"]
+        if pm == "card":
+            summary["card_count"] += 1
+            summary["card_cents"] += c
+        elif pm == "venmo":
+            summary["venmo_count"] += 1
+            summary["venmo_cents"] += c
+            summary["digital_count"] += 1
+            summary["digital_cents"] += c
+        elif pm == "paypal":
+            summary["paypal_count"] += 1
+            summary["paypal_cents"] += c
+            summary["digital_count"] += 1
+            summary["digital_cents"] += c
+        elif pm == "cash":
+            summary["cash_count"] += 1
+            summary["cash_cents"] += c
+        elif pm == "check":
+            summary["check_count"] += 1
+            summary["check_cents"] += c
+        else:
+            summary["unset_count"] += 1
+            summary["unset_cents"] += c
 
 
 @router.get("/sales")
@@ -72,31 +128,55 @@ def sales_page(
     mp_id, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
     summary = sales_summary(ctx.merchant_id, rng["since"], rng["until"], utc_windows=utc_windows)
 
+    tz = local_tz()
+    hs_all = [] if mp_id else list_homestead_paid_transactions(ctx.merchant_id, tz=tz)
+    hs_in_range = [t for t in hs_all if rng["date_from"] <= t["date_str"] <= rng["date_to"]]
+    _merge_homestead_into_summary(summary, hs_in_range)
+
     days = []
     for b in chart_buckets(rng["chart_start"], rng["chart_end"]):
         s0, s1 = utc_bounds(b["d0"], b["d1"])
         d = sales_summary(ctx.merchant_id, s0, s1, utc_windows=utc_windows)
+        card_c = int(d["card_cents"])
+        dig_c = int(d["digital_cents"])
+        cash_c = int(d["cash_cents"])
+        other_c = int(d["check_cents"])
+        if hs_all:
+            b0, b1 = b["d0"].isoformat(), b["d1"].isoformat()
+            for ht in hs_all:
+                if b0 <= ht["date_str"] < b1:
+                    amt = int(ht["total_cents"] or 0)
+                    pm = ht["pay_method"]
+                    if pm == "card":
+                        card_c += amt
+                    elif pm in ("venmo", "paypal"):
+                        dig_c += amt
+                    elif pm == "cash":
+                        cash_c += amt
+                    else:
+                        other_c += amt
         days.append({
             "label": b["label"],
             "title": b["title"],
-            "card_cents": d["card_cents"],
-            "digital_cents": d["digital_cents"],
-            "cash_cents": d["cash_cents"],
+            "card_cents": card_c,
+            "digital_cents": dig_c,
+            "cash_cents": cash_c,
+            "other_cents": other_c,
             "zettle_card_cents": d["zettle_card_cents"],
             "zettle_cash_cents": d["zettle_cash_cents"],
             "quick_cash_cents": d["quick_cash_cents"],
         })
-    peak = max((d["card_cents"] + d["digital_cents"] + d["cash_cents"] for d in days), default=0) or 1
-    best = max(days, key=lambda d: d["card_cents"] + d["digital_cents"] + d["cash_cents"])
+    peak = max((d["card_cents"] + d["digital_cents"] + d["cash_cents"] + d["other_cents"] for d in days), default=0) or 1
+    best = max(days, key=lambda d: d["card_cents"] + d["digital_cents"] + d["cash_cents"] + d["other_cents"])
 
-    txns = recent_sales(
+    pos_txns = recent_sales(
         ctx.merchant_id, rng["since"], rng["until"], src, limit=limit, utc_windows=utc_windows
     )
-    total_count = count_sales(
+    pos_total_count = count_sales(
         ctx.merchant_id, rng["since"], rng["until"], src, utc_windows=utc_windows
     )
-    today = datetime.now(local_tz()).date()
-    for t in txns:
+    today = datetime.now(tz).date()
+    for t in pos_txns:
         local = to_local(t["occurred_at"])
         t["date_label"] = (
             "Today" if local.date() == today
@@ -106,6 +186,33 @@ def sales_page(
         t["time_label"] = local.strftime("%-I:%M %p").lower()
         t["full_label"] = local.strftime("%a %b %-d, %Y · %-I:%M %p").replace("AM", "am").replace("PM", "pm")
         t["local_dt_input"] = local.strftime("%Y-%m-%dT%H:%M")
+        t["sort_ts"] = local.strftime("%Y-%m-%dT%H:%M:%S")
+        t["sort_id"] = int(t["id"])
+
+    hs_filtered = _filter_homestead_txns(hs_in_range, source)
+    hs_page = hs_filtered[:limit]
+    for ht in hs_page:
+        try:
+            d_obj = date.fromisoformat(ht["date_str"])
+            ht["date_label"] = (
+                "Today" if d_obj == today
+                else "Yesterday" if d_obj == today - timedelta(days=1)
+                else d_obj.strftime("%b %-d")
+            )
+            ht["full_label"] = f"{d_obj.strftime('%a %b %-d, %Y')} · {ht['time_label']}"
+        except ValueError:
+            ht["date_label"] = ht["date_str"]
+            ht["full_label"] = ht["date_str"]
+        ht["sort_id"] = int(ht["record_ids"][0])
+
+    txns = sorted([*pos_txns, *hs_page], key=lambda x: (x["sort_ts"], x["sort_id"]), reverse=True)[:limit]
+    total_count = pos_total_count + len(hs_filtered)
+
+    sale_dates = list_sale_dates(ctx.merchant_id, tz)
+    for ht in hs_all:
+        cur = sale_dates.setdefault(ht["date_str"], {"cents": 0, "txns": 0, "marketplace": ""})
+        cur["cents"] += int(ht["total_cents"] or 0)
+        cur["txns"] += 1
 
     active_day_str = rng["date_from"] if rng["period"] in ("today", "yesterday", "day") else ""
     active_market_day = get_market_day(ctx.merchant_id, active_day_str) if active_day_str else None
@@ -124,13 +231,13 @@ def sales_page(
         period=rng["period"], period_label=rng["label"], source=source,
         date_from=rng["date_from"], date_to=rng["date_to"],
         market_date=rng["market_date"] or today.isoformat(),
-        sale_dates=list_sale_dates(ctx.merchant_id, local_tz()),
+        sale_dates=sale_dates,
         marketplaces=marketplaces,
         selected_marketplace=str(mp_id or ""),
         active_day_str=active_day_str,
         active_market_day=active_market_day,
         weather_options=WEATHER_OPTIONS,
-        today_label=datetime.now(local_tz()).strftime("%-d %b %Y"),
+        today_label=datetime.now(tz).strftime("%-d %b %Y"),
         total_count=total_count, has_more=len(txns) < total_count, next_limit=limit + 25,
         export_qs=export_qs, weekly=(rng["chart_end"] - rng["chart_start"]).days > 31,
         msg=msg,
@@ -239,6 +346,37 @@ def market_day_delete(
     )
 
 
+def _redirect_sales_msg(next_url: str, msg: str, fallback: str = "/sales") -> RedirectResponse:
+    clean = (next_url or "").strip()
+    if not clean.startswith("/") or clean.startswith("//"):
+        clean = fallback
+    parts = urlsplit(clean)
+    params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "msg"]
+    params.append(("msg", msg))
+    target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
+    return RedirectResponse(target, status_code=303)
+
+
+@router.post("/sales/homestead/payment-type")
+def sales_retag_homestead_payment_type(
+    record_type: str = Form(...),
+    record_ids: str = Form(...),
+    payment_type: str = Form(""),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        ids = [int(x) for x in record_ids.split(",") if x.strip().isdigit()]
+        cnt = update_homestead_transaction_payment_method(
+            ctx.merchant_id, record_type, ids, payment_type
+        )
+        lbl = payment_type.strip().capitalize() if payment_type.strip() else "Untagged"
+        msg = f"Tagged Homestead transaction payment as {lbl} ({cnt} record{'s' if cnt != 1 else ''})."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return _redirect_sales_msg(next_url, msg)
+
+
 @router.post("/sales/{sale_id}/payment-type")
 def sales_retag_payment_type(
     sale_id: int,
@@ -251,20 +389,7 @@ def sales_retag_payment_type(
         msg = f"Updated sale #{sale_id} to {payment_type.capitalize()}."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    target = next_url if next_url.startswith("/") else "/sales"
-    sep = "&" if "?" in target else "?"
-    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
-
-
-def _redirect_sales_msg(next_url: str, msg: str, fallback: str = "/sales") -> RedirectResponse:
-    clean = (next_url or "").strip()
-    if not clean.startswith("/") or clean.startswith("//"):
-        clean = fallback
-    parts = urlsplit(clean)
-    params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "msg"]
-    params.append(("msg", msg))
-    target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
-    return RedirectResponse(target, status_code=303)
+    return _redirect_sales_msg(next_url, msg)
 
 
 @router.post("/sales/{sale_id}/edit")
@@ -410,7 +535,7 @@ def sales_export(
     ctx: Ctx = Depends(require("sales")),
 ):
     rng = _sales_query(period, date_from, date_to, market_date)
-    _, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
+    mp_id, utc_windows = _resolve_marketplace_windows(ctx.merchant_id, marketplace, rng)
     rows = export_rows(
         ctx.merchant_id,
         rng["since"],
@@ -435,6 +560,30 @@ def sales_export(
             "" if unit is None else dollars(unit),
             "" if qty is None else dollars(round(sign * qty * unit)), dollars(r["total_cents"]),
         ])
+    if not mp_id:
+        hs_all = list_homestead_paid_transactions(
+            ctx.merchant_id,
+            date_from=rng["date_from"],
+            date_to=rng["date_to"],
+            tz=local_tz(),
+        )
+        for ht in _filter_homestead_txns(hs_all, source):
+            time_str = ht["sort_ts"][11:19] if len(ht["sort_ts"]) >= 19 else "12:00:00"
+            for it in ht["items"]:
+                w.writerow([
+                    ht["id"],
+                    ht["date_str"],
+                    time_str,
+                    "homestead",
+                    ht["payment_type"] or "",
+                    "completed",
+                    "Homestead",
+                    _csv_safe(it["name_snapshot"]),
+                    it["quantity"],
+                    dollars(it["unit_price_cents"]),
+                    dollars(it["subtotal_cents"]),
+                    dollars(ht["total_cents"]),
+                ])
     name = f"ironledger-sales-{rng['date_from']}_to_{rng['date_to']}.csv"
     return Response(
         buf.getvalue(), media_type="text/csv",
