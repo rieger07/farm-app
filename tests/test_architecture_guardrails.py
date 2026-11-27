@@ -111,6 +111,22 @@ class ArchitectureGuardrailsTest(unittest.TestCase):
         self.assertIn("unittest discover -s tests -t .", rel_yml)
         self.assertIn("needs: test", rel_yml)
 
+    def test_entrypoint_files_stay_modular(self):
+        """Prevent top-level entrypoints and compatibility barrels from regressing into monoliths."""
+        line_caps = {
+            "app.py": 150,
+            "inventory/app.py": 150,
+            "homestead/database.py": 220,
+            "inventory/markets.py": 120,
+        }
+        for rel, cap in line_caps.items():
+            line_count = len((REPO_ROOT / rel).read_text(encoding="utf-8").splitlines())
+            self.assertLessEqual(
+                line_count,
+                cap,
+                f"{rel} has {line_count} lines (max {cap}); put new code in homestead/{{db,routes}}/ or inventory/{{marketplaces,insights,market_day,routes}}/",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

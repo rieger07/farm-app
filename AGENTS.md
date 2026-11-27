@@ -9,6 +9,19 @@ This repository houses two FastAPI SaaS applications backed by a **single shared
 
 ---
 
+## Module Map (Add New Code Here, Not Into Barrels)
+
+Top-level entrypoints and compatibility barrels are kept slim (enforced by `test_entrypoint_files_stay_modular` in `tests/test_architecture_guardrails.py`):
+
+- **Homestead Planner (`app.py`, `homestead/web.py`)**:
+  - **Persistence (`homestead/db/`):** `core.py` (users, presets, settings), `batches.py` (batches, losses, harvests, sales, feed, milestones), `backup.py` (JSON import/export), `expenses.py` (farm expenses, Google Drive tokens), `customers.py` (CRM, `/pick/<slug>`, pre-orders, pickup day), `eggs.py` (multi-species eggs, flock, layer feed), `workspaces.py` (workspace roles & members). `homestead/database.py` is a compatibility re-export barrel only.
+  - **Routes (`homestead/routes/`):** `auth.py`, `radar.py`, `batches.py`, `harvest_picking.py`, `preorders_pickup.py`, `customers.py`, `eggs.py`, `farm_ops.py`, `settings.py`.
+- **Iron Ledger (`inventory/app.py`, `inventory/web.py`)**:
+  - **Domains (`inventory/`):** `db.py`, `stock.py`, `sales.py`, `marketplaces.py` (venues & windows), `insights.py` (analytics, cash drawer, pack list), `market_day.py` (Active Market Day mode), `merchants.py`, `sync.py`, `zettle.py`, `billing.py`. `inventory/markets.py` is a compatibility re-export barrel only.
+  - **Routes (`inventory/routes/`):** `auth.py`, `inventory.py`, `sales.py`, `market_day.py`, `quick_sale.py`, `settings.py`, `admin.py`, `billing.py`.
+
+---
+
 ## Architecture & Import Boundaries (Strict)
 
 1. **No cross-app imports (`tests/test_architecture_guardrails.py`):**

@@ -503,7 +503,7 @@ class WebTest(unittest.TestCase):
 
         anon = TestClient(app)
         # Honeypot silently succeeds without calling Resend
-        with patch("inventory.app._send_resend_email") as mock_send:
+        with patch("inventory.routes.auth._send_resend_email") as mock_send:
             r_bot = anon.post("/api/contact", json={
                 "name": "Bot", "email": "bot@example.com", "message": "spam", "website": "http://spam",
             })
@@ -515,7 +515,7 @@ class WebTest(unittest.TestCase):
         self.assertEqual(r_bad.status_code, 400)
 
         # Valid submission calls Resend helper
-        with patch("inventory.app._send_resend_email") as mock_send:
+        with patch("inventory.routes.auth._send_resend_email") as mock_send:
             r_ok = anon.post("/api/contact", json={
                 "name": "Alice", "email": "alice@example.com",
                 "engagement": "C2C / B2B Contracting", "message": "Need backend help.",
