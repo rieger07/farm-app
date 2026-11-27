@@ -5,12 +5,17 @@ from __future__ import annotations
 import base64
 from datetime import date
 import json
+import logging
 import os
 from typing import Any
 
 import httpx
 
-DEFAULT_GEMINI_OCR_MODEL = "gemini-2.5-flash"
+logger = logging.getLogger(__name__)
+
+DEFAULT_GEMINI_OCR_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_OCR_THINKING_LEVEL = "LOW"
+VALID_GEMINI_THINKING_LEVELS = ("MINIMAL", "LOW", "MEDIUM", "HIGH")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 OCR_TIMEOUT_SECONDS = 25.0
 MAX_OCR_FILE_BYTES = 12 * 1024 * 1024
@@ -119,18 +124,59 @@ RECEIPT_RESPONSE_SCHEMA = {
 class ReceiptOCRError(Exception):
     """Typed error raised when Gemini Vision OCR fails or is unavailable."""
 
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(self, message: str, status_code: int = 422):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
 
 
 def get_gemini_api_key() -> str:
-    return os.environ.get("GEMINI_API_KEY", "").strip()
+    return os.environ.get("GEMINI_API_KEY", "").strip().strip('"').strip("'")
 
 
 def is_receipt_ocr_enabled() -> bool:
     return bool(get_gemini_api_key())
+
+
+def get_gemini_thinking_level(override: str | None = None) -> str | None:
+    raw = (
+        override
+        if override is not None
+        else os.environ.get("GEMINI_OCR_THINKING_LEVEL", DEFAULT_GEMINI_OCR_THINKING_LEVEL)
+    )
+    clean = str(raw or "").strip().strip('"').strip("'").upper()
+    if clean in ("OFF", "NONE", "DEFAULT"):
+        return None
+    if not clean:
+        return DEFAULT_GEMINI_OCR_THINKING_LEVEL
+    if clean in VALID_GEMINI_THINKING_LEVELS:
+        return clean
+    logger.warning(
+        "Invalid GEMINI_OCR_THINKING_LEVEL=%r; falling back to %s",
+        clean,
+        DEFAULT_GEMINI_OCR_THINKING_LEVEL,
+    )
+    return DEFAULT_GEMINI_OCR_THINKING_LEVEL
+
+
+def _extract_gemini_error_detail(resp: httpx.Response, secret_key: str) -> str:
+    """Safely extract and sanitize error.message from an upstream Gemini response."""
+    try:
+        body = resp.json()
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    err = body.get("error")
+    if not isinstance(err, dict):
+        return ""
+    msg = err.get("message")
+    if not isinstance(msg, str):
+        return ""
+    clean = " ".join(msg.split())
+    if secret_key:
+        clean = clean.replace(secret_key, "[redacted]")
+    return clean[:180]
 
 
 def detect_receipt_mime_type(
@@ -271,6 +317,7 @@ async def parse_receipt_with_gemini(
     *,
     api_key: str | None = None,
     model: str | None = None,
+    thinking_level: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     """Call Gemini Vision API with Structured Outputs and return normalized receipt JSON."""
@@ -284,9 +331,22 @@ async def parse_receipt_with_gemini(
 
     resolved_mime = detect_receipt_mime_type(mime_type)
     model_name = (
-        model or os.environ.get("GEMINI_OCR_MODEL", DEFAULT_GEMINI_OCR_MODEL)
-    ).strip() or DEFAULT_GEMINI_OCR_MODEL
+        (model or os.environ.get("GEMINI_OCR_MODEL", DEFAULT_GEMINI_OCR_MODEL))
+        .strip()
+        .strip('"')
+        .strip("'")
+        or DEFAULT_GEMINI_OCR_MODEL
+    )
     url = f"{GEMINI_API_BASE}/{model_name}:generateContent"
+
+    generation_config: dict[str, Any] = {
+        "temperature": 0.1,
+        "responseMimeType": "application/json",
+        "responseSchema": RECEIPT_RESPONSE_SCHEMA,
+    }
+    resolved_thinking = get_gemini_thinking_level(thinking_level)
+    if resolved_thinking:
+        generation_config["thinkingConfig"] = {"thinkingLevel": resolved_thinking}
 
     payload = {
         "systemInstruction": {"parts": [{"text": RECEIPT_OCR_SYSTEM_PROMPT}]},
@@ -306,11 +366,7 @@ async def parse_receipt_with_gemini(
                 ],
             }
         ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-            "responseSchema": RECEIPT_RESPONSE_SCHEMA,
-        },
+        "generationConfig": generation_config,
     }
 
     owns_client = client is None
@@ -330,36 +386,64 @@ async def parse_receipt_with_gemini(
             timeout=OCR_TIMEOUT_SECONDS,
         )
     except httpx.TimeoutException as exc:
+        logger.warning(
+            "Gemini receipt OCR timed out after %.1fs (model=%s)",
+            OCR_TIMEOUT_SECONDS,
+            model_name,
+        )
         raise ReceiptOCRError(
             "Receipt scan timed out after 25s — please enter details manually.",
-            status_code=504,
+            status_code=422,
         ) from exc
     except httpx.HTTPError as exc:
+        logger.warning(
+            "Gemini receipt OCR network error (model=%s): %s",
+            model_name,
+            type(exc).__name__,
+        )
         raise ReceiptOCRError(
             "Could not reach Gemini Vision API — please enter details manually.",
-            status_code=502,
+            status_code=422,
         ) from exc
     finally:
         if owns_client:
             await http_client.aclose()
 
     if resp.status_code >= 400:
-        raise ReceiptOCRError(
-            f"Receipt scan failed (HTTP {resp.status_code}) — please enter details manually.",
-            status_code=502,
+        detail = _extract_gemini_error_detail(resp, key)
+        logger.warning(
+            "Gemini receipt OCR HTTP %s (model=%s): %s",
+            resp.status_code,
+            model_name,
+            detail or "<no detail>",
         )
+        out_status = 429 if resp.status_code == 429 else 422
+        if detail:
+            msg = f"Receipt scan failed (Gemini HTTP {resp.status_code}: {detail}) — please enter details manually."
+        else:
+            msg = f"Receipt scan failed (Gemini HTTP {resp.status_code}) — please enter details manually."
+        raise ReceiptOCRError(msg, status_code=out_status)
 
     try:
         body = resp.json()
         parts = body["candidates"][0]["content"]["parts"]
         text = next(
-            (str(p.get("text") or "") for p in parts if isinstance(p, dict) and p.get("text")),
+            (
+                str(p.get("text") or "")
+                for p in parts
+                if isinstance(p, dict) and p.get("text") and not p.get("thought")
+            ),
             "",
         )
         parsed = json.loads(_strip_json_fences(text))
         return normalize_parsed_receipt(parsed)
     except (ValueError, KeyError, IndexError, TypeError) as exc:
+        logger.warning(
+            "Gemini receipt OCR parse error (model=%s): %s",
+            model_name,
+            type(exc).__name__,
+        )
         raise ReceiptOCRError(
             "Could not parse receipt OCR response — please enter details manually.",
-            status_code=502,
+            status_code=422,
         ) from exc

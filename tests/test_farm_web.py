@@ -1412,6 +1412,8 @@ class FarmWebTest(unittest.TestCase):
 
         # 2. When GEMINI_API_KEY is unset, scan trigger is hidden and OCR endpoint returns 503
         prev_key = os.environ.pop("GEMINI_API_KEY", None)
+        prev_model = os.environ.pop("GEMINI_OCR_MODEL", None)
+        prev_thinking = os.environ.pop("GEMINI_OCR_THINKING_LEVEL", None)
         try:
             fin_no_key = self.c.get("/financials?tab=taxes").text
             self.assertNotIn('id="rcpt-scan-btn"', fin_no_key)
@@ -1421,8 +1423,8 @@ class FarmWebTest(unittest.TestCase):
             )
             self.assertEqual(r_no_key.status_code, 503)
 
-            # 3. With GEMINI_API_KEY set, scan trigger renders & structured outputs work for JPEG and PDF
-            os.environ["GEMINI_API_KEY"] = "secret-gemini-test-key"
+            # 3. With GEMINI_API_KEY set (including accidental quotes), scan trigger renders & structured outputs work
+            os.environ["GEMINI_API_KEY"] = '"secret-gemini-test-key"'
             fin_with_key = self.c.get("/financials?tab=taxes").text
             self.assertIn('id="rcpt-scan-btn"', fin_with_key)
             self.assertIn("compressReceiptImage", fin_with_key)
@@ -1477,7 +1479,18 @@ class FarmWebTest(unittest.TestCase):
                 captured_calls.append({"url": url, "kwargs": kwargs})
                 return _FakeResp(
                     200,
-                    {"candidates": [{"content": {"parts": [{"text": json.dumps(mock_ocr_payload)}]}}]},
+                    {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [
+                                        {"thought": True, "text": "internal reasoning"},
+                                        {"text": json.dumps(mock_ocr_payload)},
+                                    ]
+                                }
+                            }
+                        ]
+                    },
                 )
 
             with patch.object(httpx.AsyncClient, "post", _fake_post):
@@ -1505,19 +1518,52 @@ class FarmWebTest(unittest.TestCase):
 
             self.assertEqual(len(captured_calls), 2)
             req0 = captured_calls[0]
+            self.assertIn("gemini-3.8-flash:generateContent", req0["url"])
             self.assertNotIn("secret-gemini-test-key", req0["url"])
             self.assertEqual(req0["kwargs"]["headers"]["x-goog-api-key"], "secret-gemini-test-key")
             self.assertEqual(req0["kwargs"]["timeout"], 25.0)
             req_json = req0["kwargs"]["json"]
             self.assertEqual(req_json["generationConfig"]["responseMimeType"], "application/json")
             self.assertIn("responseSchema", req_json["generationConfig"])
+            self.assertEqual(
+                req_json["generationConfig"]["thinkingConfig"],
+                {"thinkingLevel": "LOW"},
+            )
             self.assertIn("NJ Farm Exemption", req_json["systemInstruction"]["parts"][0]["text"])
             self.assertEqual(
                 captured_calls[1]["kwargs"]["json"]["contents"][0]["parts"][1]["inlineData"]["mimeType"],
                 "application/pdf",
             )
 
-            # 4. File validation, timeout & upstream error handling (no API key leak)
+            # GEMINI_OCR_THINKING_LEVEL overrides default LOW and supports off/none
+            captured_calls.clear()
+            os.environ["GEMINI_OCR_THINKING_LEVEL"] = "minimal"
+            with patch.object(httpx.AsyncClient, "post", _fake_post):
+                r_min = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_min.status_code, 200)
+            self.assertEqual(
+                captured_calls[0]["kwargs"]["json"]["generationConfig"]["thinkingConfig"],
+                {"thinkingLevel": "MINIMAL"},
+            )
+
+            captured_calls.clear()
+            os.environ["GEMINI_OCR_THINKING_LEVEL"] = "off"
+            with patch.object(httpx.AsyncClient, "post", _fake_post):
+                r_off = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_off.status_code, 200)
+            self.assertNotIn(
+                "thinkingConfig",
+                captured_calls[0]["kwargs"]["json"]["generationConfig"],
+            )
+            os.environ.pop("GEMINI_OCR_THINKING_LEVEL", None)
+
+            # 4. File validation, timeout & upstream error handling (Cloudflare-safe 4xx, no API key leak)
             r_bad = self.c.post(
                 "/api/receipts/parse",
                 files={"file": ("notes.txt", b"hello", "text/plain")},
@@ -1537,19 +1583,35 @@ class FarmWebTest(unittest.TestCase):
                     "/api/receipts/parse",
                     files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
                 )
-                self.assertEqual(r_to.status_code, 504)
+                self.assertEqual(r_to.status_code, 422)
                 self.assertNotIn("secret-gemini-test-key", r_to.text)
 
-            async def _err_post(self_client, url, **kwargs):
-                return _FakeResp(500, {"error": {"message": "backend error"}})
+            async def _err_404_post(self_client, url, **kwargs):
+                return _FakeResp(
+                    404,
+                    {"error": {"message": "models/gemini-2.5-flash is not found (key secret-gemini-test-key)"}},
+                )
 
-            with patch.object(httpx.AsyncClient, "post", _err_post):
+            with patch.object(httpx.AsyncClient, "post", _err_404_post):
                 r_err = self.c.post(
                     "/api/receipts/parse",
                     files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
                 )
-                self.assertEqual(r_err.status_code, 502)
+                self.assertEqual(r_err.status_code, 422)
+                self.assertIn("Gemini HTTP 404", r_err.text)
+                self.assertIn("is not found", r_err.text)
                 self.assertNotIn("secret-gemini-test-key", r_err.text)
+
+            async def _err_429_post(self_client, url, **kwargs):
+                return _FakeResp(429, {"error": {"message": "Quota exceeded"}})
+
+            with patch.object(httpx.AsyncClient, "post", _err_429_post):
+                r_429 = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_429.status_code, 429)
+                self.assertIn("Quota exceeded", r_429.text)
 
             # 5. Staff user is blocked with 403
             self.c.post(
@@ -1569,6 +1631,14 @@ class FarmWebTest(unittest.TestCase):
                 os.environ.pop("GEMINI_API_KEY", None)
             else:
                 os.environ["GEMINI_API_KEY"] = prev_key
+            if prev_model is None:
+                os.environ.pop("GEMINI_OCR_MODEL", None)
+            else:
+                os.environ["GEMINI_OCR_MODEL"] = prev_model
+            if prev_thinking is None:
+                os.environ.pop("GEMINI_OCR_THINKING_LEVEL", None)
+            else:
+                os.environ["GEMINI_OCR_THINKING_LEVEL"] = prev_thinking
 
 
 if __name__ == "__main__":
