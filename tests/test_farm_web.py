@@ -1932,6 +1932,317 @@ class FarmWebTest(unittest.TestCase):
         csv_amounts = sorted(float(r["Amount ($)"]) for r in csv_rows)
         self.assertEqual(csv_amounts, [-45.0, -25.0, -22.0, -6.0, 44.0, 88.0, 100.0])
 
+    def test_multibatch_allocation_timeframe_filter_and_edit_receipt(self):
+        from homestead.db.batches import list_batch_feed_logs, list_batches
+        from homestead.db.expenses import list_farm_expenses
+        from homestead.receipt_allocation import allocate_signed_total
+
+        # 1. Exact largest-remainder math for positive charges & negative refunds
+        pos_shares = allocate_signed_total(100.00, [1, 1, 1], decimals=2)
+        self.assertEqual(pos_shares, [33.34, 33.33, 33.33])
+        self.assertAlmostEqual(sum(pos_shares), 100.00, places=2)
+
+        neg_shares = allocate_signed_total(-100.00, [1, 1, 1], decimals=2)
+        self.assertEqual(neg_shares, [-33.34, -33.33, -33.33])
+        self.assertAlmostEqual(sum(neg_shares), -100.00, places=2)
+
+        self.assertEqual(allocate_signed_total(132.00, [60, 40], decimals=2), [79.20, 52.80])
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # Create overlapping + future batches
+        for b_payload in (
+            {
+                "name": "Turkeys 2026",
+                "species": "turkey chicks",
+                "start_date": "2026-06-01",
+                "initial_quantity": "15",
+                "unit_cost": "12.00",
+                "avg_dressed_weight": "16.0",
+                "sale_price_per_lb": "7.50",
+                "processing_cost": "15.00",
+                "lifecycle_type": "direct_arrival",
+                "next_url": "/batches",
+            },
+            {
+                "name": "Cornish Cross Aug",
+                "species": "cornish cross",
+                "start_date": "2026-07-20",
+                "initial_quantity": "50",
+                "unit_cost": "4.00",
+                "avg_dressed_weight": "4.5",
+                "sale_price_per_lb": "6.50",
+                "processing_cost": "5.00",
+                "lifecycle_type": "direct_arrival",
+                "next_url": "/batches",
+            },
+            {
+                "name": "Future 2027",
+                "species": "cornish cross",
+                "start_date": "2027-04-01",
+                "initial_quantity": "40",
+                "unit_cost": "4.00",
+                "avg_dressed_weight": "4.5",
+                "sale_price_per_lb": "6.50",
+                "processing_cost": "5.00",
+                "lifecycle_type": "direct_arrival",
+                "next_url": "/batches",
+            },
+        ):
+            r_b = self.c.post("/batches/save", data=b_payload, follow_redirects=False)
+            self.assertEqual(r_b.status_code, 303)
+
+        batches_by_name = {b["name"]: b["id"] for b in list_batches(user_id=1)}
+        turkey_id = batches_by_name["Turkeys 2026"]
+        cx_id = batches_by_name["Cornish Cross Aug"]
+        future_id = batches_by_name["Future 2027"]
+
+        # 2. Verify UI embeds timeframe-aware batch options, show-all toggle & edit triggers
+        fin_html = self.c.get("/financials?tab=taxes&year=2026").text
+        self.assertIn("FIN_RECEIPT_BATCHES", fin_html)
+        self.assertIn('id="rcpt-show-all-batches"', fin_html)
+        self.assertIn("openEditReceiptModal", fin_html)
+        self.assertIn("grower_weekly_feed", fin_html)
+        self.assertIn("2026-07-20", fin_html)
+        self.assertIn("2027-04-01", fin_html)
+
+        # 3. Log multi-batch receipt on 2026-08-15 (6 bags grower feed split 60/40 + $50 bedding split 50/50)
+        r_multi = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-08-15",
+                "vendor": "Tractor Supply",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "batch_feed",
+                            "feed_type": "grower",
+                            "bags": 6,
+                            "feed_lbs": 300,
+                            "amount": 132.00,
+                            "notes": "Grower shared run",
+                            "alloc_mode": "custom",
+                            "allocations": [
+                                {"batch_id": turkey_id, "weight": 60},
+                                {"batch_id": cx_id, "weight": 40},
+                            ],
+                        },
+                        {
+                            "kind": "general",
+                            "category": "Supplies & Equipment",
+                            "amount": 50.00,
+                            "notes": "Pine shavings bales",
+                            "alloc_mode": "even",
+                            "allocations": [
+                                {"batch_id": turkey_id, "weight": 1},
+                                {"batch_id": cx_id, "weight": 1},
+                            ],
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_multi.status_code, 303)
+        self.assertIn("Saved+split+receipt+%284+items%2C+%24182.00%29.", r_multi.headers["location"])
+
+        t_feeds = list_batch_feed_logs(turkey_id)
+        cx_feeds = list_batch_feed_logs(cx_id)
+        self.assertEqual(len(t_feeds), 1)
+        self.assertEqual(len(cx_feeds), 1)
+        self.assertAlmostEqual(t_feeds[0]["bags"], 3.6, places=2)
+        self.assertAlmostEqual(t_feeds[0]["feed_lbs"], 180.0, places=1)
+        self.assertAlmostEqual(t_feeds[0]["cost_total"], 79.20, places=2)
+        self.assertAlmostEqual(cx_feeds[0]["bags"], 2.4, places=2)
+        self.assertAlmostEqual(cx_feeds[0]["feed_lbs"], 120.0, places=1)
+        self.assertAlmostEqual(cx_feeds[0]["cost_total"], 52.80, places=2)
+        shared_gid = t_feeds[0]["receipt_group_id"]
+        self.assertTrue(shared_gid)
+        self.assertEqual(cx_feeds[0]["receipt_group_id"], shared_gid)
+
+        gen_rows = list_farm_expenses(user_id=1)
+        self.assertEqual(len(gen_rows), 2)
+        self.assertEqual({r["receipt_group_id"] for r in gen_rows}, {shared_gid})
+        self.assertEqual(sorted(r["amount"] for r in gen_rows), [25.0, 25.0])
+
+        fin_after = self.c.get("/financials?tab=taxes&year=2026").text
+        self.assertIn("$182.00", fin_after)
+        self.assertIn("Edit receipt (4)", fin_after)
+
+        # 4. Create a single entry with an existing Drive receipt URL, then edit/re-allocate into 2 batches
+        r_single = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-08-20",
+                "vendor": "Runnings",
+                "receipt_url": "https://drive.google.com/file/d/orig123/view",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "general",
+                            "category": "Feed",
+                            "amount": 90.00,
+                            "notes": "Mislogged feed",
+                        }
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_single.status_code, 303)
+        single_exp = next(r for r in list_farm_expenses(user_id=1) if r["vendor"] == "Runnings")
+
+        api_single = self.c.get(
+            f"/api/receipts/entry?source_key=general&entry_id={single_exp['id']}"
+        )
+        self.assertEqual(api_single.status_code, 200)
+        single_data = api_single.json()
+        self.assertEqual(single_data["edit_mode"], "single")
+        self.assertEqual(single_data["receipt_url"], "https://drive.google.com/file/d/orig123/view")
+
+        # Re-allocate that old single general expense into 2 batch feed rows (including future batch), preserving URL
+        r_edit_single = self.c.post(
+            "/expenses/receipt",
+            data={
+                "edit_mode": "single",
+                "orig_source_key": "general",
+                "orig_entry_id": str(single_exp["id"]),
+                "receipt_date": "2026-08-20",
+                "vendor": "Runnings",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "batch_feed",
+                            "feed_type": "grower",
+                            "bags": 4,
+                            "feed_lbs": 200,
+                            "amount": 90.00,
+                            "notes": "Reallocated feed",
+                            "alloc_mode": "custom",
+                            "allocations": [
+                                {"batch_id": cx_id, "weight": 3},
+                                {"batch_id": future_id, "weight": 1},
+                            ],
+                        }
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_edit_single.status_code, 303)
+        self.assertIn("Updated+split+receipt+%282+items%2C+%2490.00%29.", r_edit_single.headers["location"])
+
+        # Old general row gone; 2 new batch feed rows preserve existing receipt URL cleanly
+        self.assertFalse(any(r["id"] == single_exp["id"] for r in list_farm_expenses(user_id=1)))
+        fut_feeds = list_batch_feed_logs(future_id)
+        cx_realloc = next(r for r in list_batch_feed_logs(cx_id) if r["vendor"] == "Runnings")
+        self.assertEqual(len(fut_feeds), 1)
+        self.assertAlmostEqual(cx_realloc["cost_total"], 67.50, places=2)
+        self.assertAlmostEqual(fut_feeds[0]["cost_total"], 22.50, places=2)
+        self.assertEqual(cx_realloc["receipt_url"], "https://drive.google.com/file/d/orig123/view")
+        self.assertEqual(fut_feeds[0]["receipt_url"], "https://drive.google.com/file/d/orig123/view")
+        self.assertTrue(cx_realloc["receipt_group_id"])
+        self.assertEqual(cx_realloc["receipt_group_id"], fut_feeds[0]["receipt_group_id"])
+
+        # 5. Edit existing 4-line split group cleanly (adjust amount & include a refund line)
+        api_group = self.c.get(f"/api/receipts/entry?receipt_group_id={shared_gid}")
+        self.assertEqual(api_group.status_code, 200)
+        grp_data = api_group.json()
+        self.assertEqual(grp_data["edit_mode"], "group")
+        self.assertEqual(len(grp_data["lines"]), 4)
+
+        r_edit_grp = self.c.post(
+            "/expenses/receipt",
+            data={
+                "edit_mode": "group",
+                "orig_group_id": shared_gid,
+                "receipt_date": "2026-08-15",
+                "vendor": "Tractor Supply",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "batch_feed",
+                            "batch_id": str(turkey_id),
+                            "feed_type": "grower",
+                            "bags": 4,
+                            "feed_lbs": 200,
+                            "amount": 88.00,
+                            "notes": "Updated Turkey share",
+                        },
+                        {
+                            "kind": "general",
+                            "batch_id": str(cx_id),
+                            "category": "Supplies & Equipment",
+                            "amount": -10.00,
+                            "notes": "Refund: Damaged feeder",
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_edit_grp.status_code, 303)
+        self.assertIn("Updated+split+receipt+%282+items%2C+%2478.00%29.", r_edit_grp.headers["location"])
+        t_after = list_batch_feed_logs(turkey_id)
+        self.assertEqual(len(t_after), 1)
+        self.assertAlmostEqual(t_after[0]["cost_total"], 88.00, places=2)
+        gen_after = list_farm_expenses(user_id=1)
+        self.assertEqual(len(gen_after), 1)
+        self.assertAlmostEqual(gen_after[0]["amount"], -10.00, places=2)
+
+        # 6. Staff (403) and other user's batch/entry (404) are rejected
+        self.c.post(
+            "/settings/members",
+            data={"username": "helper", "display_name": "Helper", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "helper", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(
+            c_staff.get(f"/api/receipts/entry?receipt_group_id={shared_gid}").status_code,
+            403,
+        )
+        self.c.post(
+            "/settings/admin/users",
+            data={"username": "other", "display_name": "Other Farm", "password": "secret"},
+            follow_redirects=False,
+        )
+        c_other = TestClient(app)
+        c_other.post(
+            "/login",
+            data={"username": "other", "password": "secret"},
+            follow_redirects=False,
+        )
+        self.assertEqual(
+            c_other.get(f"/api/receipts/entry?receipt_group_id={shared_gid}").status_code,
+            404,
+        )
+        self.assertEqual(
+            c_other.post(
+                "/expenses/receipt",
+                data={
+                    "receipt_date": "2026-08-15",
+                    "vendor": "Intruder",
+                    "lines_json": json.dumps(
+                        [
+                            {
+                                "kind": "general",
+                                "category": "Supplies & Equipment",
+                                "amount": 10.0,
+                                "batch_id": str(turkey_id),
+                            }
+                        ]
+                    ),
+                },
+                follow_redirects=False,
+            ).status_code,
+            404,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

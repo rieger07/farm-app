@@ -39,13 +39,20 @@ from homestead.db.expenses import (
     delete_farm_expense,
     delete_receipt_group,
     get_google_drive_connection,
+    get_receipt_for_edit,
     list_recent_vendors,
+    replace_receipt_entries,
 )
 from homestead.db.workspaces import can_access_homestead_page
 from homestead.financials import (
     compute_purchasing_schedule,
     compute_roi_summary_table,
     compute_unified_financials_table,
+)
+from homestead.receipt_allocation import (
+    BatchOwnershipError,
+    build_receipt_batch_options,
+    expand_receipt_lines,
 )
 from homestead.receipt_ocr import (
     MAX_OCR_FILE_BYTES,
@@ -155,7 +162,13 @@ def financials_page(
         active_tab = "taxes"
     include_planned_flag = False if str(include_planned).strip() == "0" else True
 
-    all_schedules = _schedules_for_user(user["id"], include_archived=False)
+    all_user_schedules = _schedules_for_user(user["id"], include_archived=True)
+    all_schedules = [s for s in all_user_schedules if s["batch"].get("active", 1)]
+    receipt_batches = build_receipt_batch_options(
+        all_user_schedules
+        if include_planned_flag
+        else [s for s in all_user_schedules if not s["is_planned"]]
+    )
     planned_count = sum(1 for s in all_schedules if s["is_planned"])
     schedules = (
         all_schedules
@@ -224,6 +237,7 @@ def financials_page(
             if include_planned_flag
             else [s["batch"] for s in schedules]
         ),
+        receipt_batches=receipt_batches,
         bag_weight=get_bag_weight(user_id=user["id"]),
         layer_cfg=get_layer_settings(user["id"]),
         recent_vendors=list_recent_vendors(user["id"]),
@@ -278,6 +292,26 @@ async def api_receipt_parse(
         return JSONResponse({"error": exc.message}, status_code=exc.status_code)
 
 
+@router.get("/api/receipts/entry")
+def api_receipt_entry_get(
+    source_key: str = "",
+    entry_id: str = "",
+    receipt_group_id: str = "",
+    user: dict = Depends(current_user),
+):
+    _require_financials(user)
+    parsed_eid = int(entry_id) if str(entry_id).strip().isdigit() else None
+    payload = get_receipt_for_edit(
+        user["id"],
+        receipt_group_id=receipt_group_id,
+        source_key=source_key,
+        entry_id=parsed_eid,
+    )
+    if not payload:
+        return JSONResponse({"error": "Receipt entry not found."}, status_code=404)
+    return JSONResponse(payload, status_code=200)
+
+
 @router.post("/expenses/receipt")
 async def expense_receipt_submit(
     receipt_date: str = Form(""),
@@ -285,6 +319,11 @@ async def expense_receipt_submit(
     receipt_url: str = Form(""),
     receipt_file: UploadFile | None = File(None),
     lines_json: str = Form("[]"),
+    edit_mode: str = Form(""),
+    orig_group_id: str = Form(""),
+    orig_source_key: str = Form(""),
+    orig_entry_id: str = Form(""),
+    keep_existing_receipt: str = Form("1"),
     user: dict = Depends(current_user),
 ):
     _require_financials(user)
@@ -294,119 +333,128 @@ async def expense_receipt_submit(
         raw_lines = json.loads(lines_json or "[]")
     except (ValueError, TypeError):
         return _tax_redirect(yr, "Error: Invalid receipt line data.")
-    if not isinstance(raw_lines, list):
-        return _tax_redirect(yr, "Error: Invalid receipt line data.")
 
-    valid_lines: list[dict] = []
-    for item in raw_lines:
-        if not isinstance(item, dict):
-            continue
-        try:
-            amt = round(float(item.get("amount") or 0.0), 2)
-        except (TypeError, ValueError):
-            amt = 0.0
-        if amt == 0:
-            continue
-        kind = str(item.get("kind") or "general").strip()
-        if kind not in ("batch_feed", "layer_feed", "general"):
-            kind = "general"
-        line = dict(item)
-        line["kind"] = kind
-        line["amount"] = amt
-        if kind == "batch_feed":
-            raw_bid = str(line.get("batch_id") or "").strip()
-            if not raw_bid.isdigit():
-                return _tax_redirect(
-                    yr, "Error: Choose a batch for each Meat Batch Feed line."
-                )
-            _get_owned_batch(int(raw_bid), user)
-            line["batch_id"] = int(raw_bid)
-        elif kind == "general":
-            raw_bid = str(line.get("batch_id") or "").strip()
-            if raw_bid.isdigit():
-                _get_owned_batch(int(raw_bid), user)
-                line["batch_id"] = int(raw_bid)
-            else:
-                line["batch_id"] = None
-        valid_lines.append(line)
-
-    if not valid_lines:
-        return _tax_redirect(
-            yr, "Error: Add at least one line item with a non-zero amount."
+    owned_batch_ids = {int(b["id"]) for b in list_batches(user_id=user["id"])}
+    try:
+        expanded_lines = expand_receipt_lines(
+            raw_lines, owned_batch_ids=owned_batch_ids
         )
+    except BatchOwnershipError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        return _tax_redirect(yr, f"Error: {exc}")
 
     clean_vendor = vendor.strip()
-    r_url, drive_id, warn = await _resolve_receipt_attachment(
-        user["id"],
-        receipt_file,
-        receipt_url,
-        rdate,
-        clean_vendor or "Receipt",
+    clean_edit_mode = edit_mode.strip()
+    parsed_orig_eid = int(orig_entry_id) if str(orig_entry_id).strip().isdigit() else None
+    orig_payload = (
+        get_receipt_for_edit(
+            user["id"],
+            receipt_group_id=orig_group_id,
+            source_key=orig_source_key,
+            entry_id=parsed_orig_eid,
+        )
+        if clean_edit_mode in ("single", "group")
+        else None
     )
-    group_id = secrets.token_hex(6) if len(valid_lines) > 1 else ""
 
-    for line in valid_lines:
-        kind = line["kind"]
-        notes = str(line.get("notes") or "").strip()
-        if kind in ("batch_feed", "layer_feed"):
-            raw_bags = float(line.get("bags") or 0.0)
-            raw_lbs = float(line.get("feed_lbs") or 0.0)
-            if line["amount"] < 0:
-                signed_bags = -abs(raw_bags) if raw_bags else 0.0
-                signed_lbs = -abs(raw_lbs) if raw_lbs else 0.0
-            else:
-                signed_bags = abs(raw_bags)
-                signed_lbs = abs(raw_lbs)
-        if kind == "batch_feed":
-            add_batch_feed_log(
-                line["batch_id"],
-                rdate,
-                str(line.get("feed_type") or "grower"),
-                signed_bags,
-                signed_lbs,
-                line["amount"],
-                notes=notes,
-                receipt_url=r_url,
-                drive_file_id=drive_id,
-                vendor=clean_vendor,
-                receipt_group_id=group_id,
-            )
-        elif kind == "layer_feed":
-            tags = line.get("species_tags") or "all"
-            add_layer_feed_log(
-                user["id"],
-                feed_date=rdate,
-                bags=signed_bags,
-                feed_lbs=signed_lbs,
-                cost_total=line["amount"],
-                notes=notes,
-                receipt_url=r_url,
-                drive_file_id=drive_id,
-                feed_type=str(line.get("feed_type") or "layer"),
-                species_tags=tags,
-                vendor=clean_vendor,
-                receipt_group_id=group_id,
-            )
-        else:
-            add_farm_expense(
-                user["id"],
-                rdate,
-                clean_vendor,
-                str(line.get("category") or "Other"),
-                line["amount"],
-                batch_id=line["batch_id"],
-                notes=notes,
-                receipt_url=r_url,
-                drive_file_id=drive_id,
-                receipt_group_id=group_id,
-            )
-
-    total_amt = round(sum(item["amount"] for item in valid_lines), 2)
-    total_lbl = f"-${abs(total_amt):,.2f}" if total_amt < 0 else f"${total_amt:,.2f}"
-    if len(valid_lines) == 1:
-        msg = f"Saved receipt ({total_lbl})."
+    if (receipt_file and receipt_file.filename) or receipt_url.strip():
+        r_url, drive_id, warn = await _resolve_receipt_attachment(
+            user["id"],
+            receipt_file,
+            receipt_url,
+            rdate,
+            clean_vendor or "Receipt",
+        )
+        if (
+            not r_url
+            and orig_payload
+            and str(keep_existing_receipt).strip() != "0"
+        ):
+            r_url = orig_payload["receipt_url"]
+            drive_id = orig_payload["drive_file_id"]
+    elif orig_payload and str(keep_existing_receipt).strip() != "0":
+        r_url = orig_payload["receipt_url"]
+        drive_id = orig_payload["drive_file_id"]
+        warn = None
     else:
-        msg = f"Saved split receipt ({len(valid_lines)} items, {total_lbl})."
+        r_url, drive_id, warn = "", "", None
+
+    if clean_edit_mode in ("single", "group"):
+        if not orig_payload:
+            return _tax_redirect(yr, "Error: Original receipt entry not found.")
+        try:
+            saved_count, total_amt = replace_receipt_entries(
+                user["id"],
+                edit_mode=clean_edit_mode,
+                orig_group_id=orig_group_id,
+                orig_source_key=orig_source_key,
+                orig_entry_id=parsed_orig_eid,
+                receipt_date=rdate,
+                vendor=clean_vendor,
+                receipt_url=r_url,
+                drive_file_id=drive_id,
+                expanded_lines=expanded_lines,
+            )
+        except ValueError as exc:
+            return _tax_redirect(yr, f"Error: {exc}")
+        action_verb = "Updated"
+    else:
+        group_id = secrets.token_hex(6) if len(expanded_lines) > 1 else ""
+        for line in expanded_lines:
+            kind = line["kind"]
+            notes = str(line.get("notes") or "").strip()
+            if kind == "batch_feed":
+                add_batch_feed_log(
+                    line["batch_id"],
+                    rdate,
+                    str(line.get("feed_type") or "grower"),
+                    line["bags"],
+                    line["feed_lbs"],
+                    line["amount"],
+                    notes=notes,
+                    receipt_url=r_url,
+                    drive_file_id=drive_id,
+                    vendor=clean_vendor,
+                    receipt_group_id=group_id,
+                )
+            elif kind == "layer_feed":
+                add_layer_feed_log(
+                    user["id"],
+                    feed_date=rdate,
+                    bags=line["bags"],
+                    feed_lbs=line["feed_lbs"],
+                    cost_total=line["amount"],
+                    notes=notes,
+                    receipt_url=r_url,
+                    drive_file_id=drive_id,
+                    feed_type=str(line.get("feed_type") or "layer"),
+                    species_tags=line.get("species_tags") or "all",
+                    vendor=clean_vendor,
+                    receipt_group_id=group_id,
+                )
+            else:
+                add_farm_expense(
+                    user["id"],
+                    rdate,
+                    clean_vendor,
+                    str(line.get("category") or "Other"),
+                    line["amount"],
+                    batch_id=line["batch_id"],
+                    notes=notes,
+                    receipt_url=r_url,
+                    drive_file_id=drive_id,
+                    receipt_group_id=group_id,
+                )
+        saved_count = len(expanded_lines)
+        total_amt = round(sum(item["amount"] for item in expanded_lines), 2)
+        action_verb = "Saved"
+
+    total_lbl = f"-${abs(total_amt):,.2f}" if total_amt < 0 else f"${total_amt:,.2f}"
+    if saved_count == 1:
+        msg = f"{action_verb} receipt ({total_lbl})."
+    else:
+        msg = f"{action_verb} split receipt ({saved_count} items, {total_lbl})."
     if warn:
         msg += f" (Receipt not uploaded: {warn})"
     return _tax_redirect(yr, msg)
