@@ -67,3 +67,9 @@
 .ocr-tax-note{font-size:12px;color:var(--amberink);margin-top:4px;font-weight:500}
 .ocr-spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--green);border-radius:50%;animation:rcpt-spin .7s linear infinite;flex-shrink:0}
 @keyframes rcpt-spin{to{transform:rotate(360deg)}}
+
+/* Receipt refund split highlight */
+.split-line.is-refund{background:var(--bluebg);border-color:var(--blue)}
+.refund-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:12px;font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;user-select:none}
+.refund-toggle input{margin:0;width:auto}
+.split-line.is-refund .refund-toggle{border-color:var(--blue);color:var(--blueink)}

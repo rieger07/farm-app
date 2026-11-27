@@ -182,7 +182,7 @@ def add_farm_expense(
                 str(expense_date),
                 str(vendor or "").strip(),
                 cat,
-                max(0.0, float(amount)),
+                round(float(amount), 2),
                 str(notes or "").strip(),
                 str(receipt_url or "").strip(),
                 str(drive_file_id or "").strip(),

@@ -1640,6 +1640,298 @@ class FarmWebTest(unittest.TestCase):
             else:
                 os.environ["GEMINI_OCR_THINKING_LEVEL"] = prev_thinking
 
+    def test_receipt_refund_lines_all_split_types_and_ocr(self):
+        import csv
+        import io
+        from unittest.mock import patch
+        import httpx
+        from homestead.db.batches import list_batch_feed_logs, list_batches
+        from homestead.db.eggs import list_layer_feed_logs
+        from homestead.db.expenses import list_farm_expenses
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        r_b = self.c.post(
+            "/batches/save",
+            data={
+                "name": "Broilers 2026",
+                "species": "cornish cross",
+                "start_date": "2026-10-01",
+                "initial_quantity": "25",
+                "unit_cost": "3.50",
+                "avg_dressed_weight": "4.5",
+                "sale_price_per_lb": "5.50",
+                "processing_cost": "5.00",
+                "lifecycle_type": "live_arrival",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_b.status_code, 303)
+        batch_id = list_batches(user_id=1)[0]["id"]
+
+        # 1. Verify Gemini OCR handles mixed purchase+refund receipts, sign normalization, and standalone returns
+        prev_key = os.environ.pop("GEMINI_API_KEY", None)
+        try:
+            os.environ["GEMINI_API_KEY"] = "secret-gemini-test-key"
+
+            mixed_ocr = {
+                "date": "2026-11-27",
+                "vendor": "Tractor Supply",
+                "receipt_total": 47.00,
+                "tax_charged": 0.0,
+                "mixed_use_warning": False,
+                "splits": [
+                    {
+                        "split_type": "general_farm_expense",
+                        "amount": 100.00,
+                        "notes": "Fencing wire & clips",
+                        "schedule_f_category": "supplies",
+                        "feed_type": None,
+                        "bags": None,
+                        "total_weight_lb": None,
+                    },
+                    {
+                        "split_type": "general_farm_expense",
+                        "amount": -25.00,
+                        "notes": "Refund: Damaged bucket",
+                        "schedule_f_category": "supplies",
+                        "feed_type": None,
+                        "bags": None,
+                        "total_weight_lb": None,
+                    },
+                    {
+                        "split_type": "meat_batch_feed",
+                        "amount": -22.00,
+                        "notes": "Refund: Returned 1x 50lb grower",
+                        "schedule_f_category": None,
+                        "feed_type": "grower",
+                        "bags": 1,  # intentionally positive in raw OCR to verify sign normalization
+                        "total_weight_lb": 50,
+                    },
+                    {
+                        "split_type": "laying_flock_feed",
+                        "amount": -6.00,
+                        "notes": "Refund: Layer feed price adjustment",
+                        "schedule_f_category": None,
+                        "feed_type": "layer",
+                        "bags": None,
+                        "total_weight_lb": None,
+                    },
+                ],
+            }
+            standalone_return_ocr = {
+                "date": "2026-11-27",
+                "vendor": "Runnings",
+                "receipt_total": -45.00,
+                "tax_charged": 0.0,
+                "mixed_use_warning": False,
+                "splits": [],
+            }
+            captured_prompts: list[str] = []
+            responses = iter([mixed_ocr, standalone_return_ocr])
+
+            class _FakeResp:
+                def __init__(self, status_code=200, body=None):
+                    self.status_code = status_code
+                    self._body = body or {}
+
+                def json(self):
+                    return self._body
+
+            async def _fake_post(self_client, url, **kwargs):
+                captured_prompts.append(kwargs["json"]["systemInstruction"]["parts"][0]["text"])
+                payload = next(responses)
+                return _FakeResp(
+                    200,
+                    {"candidates": [{"content": {"parts": [{"text": json.dumps(payload)}]}}]},
+                )
+
+            with patch.object(httpx.AsyncClient, "post", _fake_post):
+                r_mix = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("mixed.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_mix.status_code, 200)
+                parsed_mix = r_mix.json()
+                self.assertAlmostEqual(parsed_mix["receipt_total"], 47.00, places=2)
+                self.assertEqual(len(parsed_mix["splits"]), 4)
+                self.assertAlmostEqual(parsed_mix["splits"][1]["amount"], -25.00, places=2)
+                self.assertAlmostEqual(parsed_mix["splits"][2]["amount"], -22.00, places=2)
+                self.assertAlmostEqual(parsed_mix["splits"][2]["bags"], -1.0, places=2)
+                self.assertAlmostEqual(parsed_mix["splits"][2]["total_weight_lb"], -50.0, places=2)
+                self.assertAlmostEqual(parsed_mix["splits"][3]["amount"], -6.00, places=2)
+                self.assertIsNone(parsed_mix["splits"][3]["bags"])
+
+                r_ret = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("return.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_ret.status_code, 200)
+                parsed_ret = r_ret.json()
+                self.assertAlmostEqual(parsed_ret["receipt_total"], -45.00, places=2)
+                self.assertEqual(len(parsed_ret["splits"]), 1)
+                self.assertAlmostEqual(parsed_ret["splits"][0]["amount"], -45.00, places=2)
+                self.assertTrue(parsed_ret["splits"][0]["notes"].startswith("Refund: Runnings"))
+
+            self.assertIn("Neighbor's Club Rewards", captured_prompts[0])
+            self.assertIn("Refund: ", captured_prompts[0])
+        finally:
+            if prev_key is None:
+                os.environ.pop("GEMINI_API_KEY", None)
+            else:
+                os.environ["GEMINI_API_KEY"] = prev_key
+
+        # 2. Submit baseline purchases + mixed refund splits across all 3 split types + standalone return
+        r_base = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-11-10",
+                "vendor": "Tractor Supply",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "batch_feed",
+                            "batch_id": str(batch_id),
+                            "feed_type": "grower",
+                            "bags": 4,
+                            "feed_lbs": 200,
+                            "amount": 88.00,
+                            "notes": "4x 50lb grower",
+                        },
+                        {
+                            "kind": "layer_feed",
+                            "feed_type": "layer",
+                            "species_tags": ["all"],
+                            "bags": 2,
+                            "feed_lbs": 100,
+                            "amount": 44.00,
+                            "notes": "2x 50lb layer",
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_base.status_code, 303)
+
+        r_mixed_save = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-11-27",
+                "vendor": "Tractor Supply",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "general",
+                            "category": "Supplies & Equipment",
+                            "amount": 100.00,
+                            "notes": "Fencing wire & clips",
+                        },
+                        {
+                            "kind": "general",
+                            "category": "Supplies & Equipment",
+                            "amount": -25.00,
+                            "notes": "Refund: Damaged bucket",
+                        },
+                        {
+                            "kind": "batch_feed",
+                            "batch_id": str(batch_id),
+                            "feed_type": "grower",
+                            "bags": 1,  # route enforces negative sign when amount < 0
+                            "feed_lbs": 50,
+                            "amount": -22.00,
+                            "notes": "Refund: Returned 1x 50lb grower",
+                        },
+                        {
+                            "kind": "layer_feed",
+                            "feed_type": "layer",
+                            "species_tags": ["all"],
+                            "bags": 0,
+                            "feed_lbs": 0,
+                            "amount": -6.00,
+                            "notes": "Refund: Layer price adjustment",
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_mixed_save.status_code, 303)
+
+        r_ret_save = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-11-28",
+                "vendor": "Runnings",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "general",
+                            "category": "Supplies & Equipment",
+                            "amount": -45.00,
+                            "notes": "Refund: Extra waterer returned",
+                        }
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_ret_save.status_code, 303)
+        self.assertIn("Saved+receipt+%28-%2445.00%29.", r_ret_save.headers["location"])
+
+        # 3. Verify DB rows store signed negative amounts & feed bags/lbs without clamping
+        gen_rows = list_farm_expenses(user_id=1)
+        self.assertEqual(len(gen_rows), 3)
+        self.assertIn(-45.00, [round(r["amount"], 2) for r in gen_rows])
+        self.assertIn(-25.00, [round(r["amount"], 2) for r in gen_rows])
+
+        batch_rows = list_batch_feed_logs(batch_id)
+        ret_batch_row = next(r for r in batch_rows if r["cost_total"] < 0)
+        self.assertAlmostEqual(ret_batch_row["cost_total"], -22.00, places=2)
+        self.assertAlmostEqual(ret_batch_row["bags"], -1.0, places=2)
+        self.assertAlmostEqual(ret_batch_row["feed_lbs"], -50.0, places=2)
+
+        layer_rows = list_layer_feed_logs(user_id=1, limit=50)
+        ret_layer_row = next(r for r in layer_rows if r["cost_total"] < 0)
+        self.assertAlmostEqual(ret_layer_row["cost_total"], -6.00, places=2)
+        self.assertAlmostEqual(ret_layer_row["bags"], 0.0, places=2)
+        self.assertAlmostEqual(ret_layer_row["feed_lbs"], 0.0, places=2)
+
+        # 4. Verify Schedule F Tax Books, negative formatting (-$ vs $-), Refund pill, Batch/Eggs pages & CSV
+        fin_html = self.c.get("/financials?tab=taxes&year=2026").text
+        self.assertNotIn("$-", fin_html)
+        self.assertIn("-$45.00", fin_html)
+        self.assertIn("-$25.00", fin_html)
+        self.assertIn("-$22.00", fin_html)
+        self.assertIn("-$6.00", fin_html)
+        self.assertIn('<span class="pill blue">Refund</span>', fin_html)
+        # Net Line 28 Supplies = 100 - 25 - 45 = $30.00; Net Line 16 Feed = 88 - 22 + 44 - 6 = $104.00; Net total = $134.00
+        self.assertIn("$30.00", fin_html)
+        self.assertIn("$104.00", fin_html)
+        self.assertIn("$134.00", fin_html)
+
+        batch_html = self.c.get(f"/batches/{batch_id}").text
+        self.assertNotIn("$-", batch_html)
+        self.assertIn("-$22.00", batch_html)
+        self.assertIn('<span class="pill blue">Refund</span>', batch_html)
+        self.assertIn("150.0 lb ($66.00)", batch_html)
+
+        eggs_html = self.c.get("/eggs?tab=flock").text
+        self.assertNotIn("$-", eggs_html)
+        self.assertIn("-$6.00", eggs_html)
+        self.assertIn('<span class="pill blue">Refund</span>', eggs_html)
+        self.assertIn("$38.00 (100.0 lb)", eggs_html)
+
+        csv_resp = self.c.get("/financials/expenses.csv?year=2026")
+        self.assertEqual(csv_resp.status_code, 200)
+        csv_rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+        csv_amounts = sorted(float(r["Amount ($)"]) for r in csv_rows)
+        self.assertEqual(csv_amounts, [-45.0, -25.0, -22.0, -6.0, 44.0, 88.0, 100.0])
+
 
 if __name__ == "__main__":
     unittest.main()

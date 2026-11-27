@@ -6,6 +6,7 @@ import base64
 from datetime import date
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -71,7 +72,13 @@ RECEIPT_OCR_SYSTEM_PROMPT = (
     "$2,500 or more (e.g. mowers, tractors, trailers). Otherwise use 'supplies' (<$2,500 supplies/tools/bedding), "
     "'livestock' (chicks/poults/livestock), 'processing' (butcher/custom hire), 'market' (booth/selling fees), "
     "or 'general' (repairs/utilities/fuel/other). Use null for feed splits.\n"
-    "7. Set 'mixed_use_warning' to true if any line items look like personal or non-farm purchases."
+    "7. Set 'mixed_use_warning' to true if any line items look like personal or non-farm purchases.\n"
+    "8. Discounts vs. Refunds/Returns: Store promos, coupons, and loyalty rewards (e.g. Neighbor's Club Rewards) on a normal purchase "
+    "receipt must be folded into the net cost of the purchased items — do NOT create separate negative split lines for normal purchase discounts. "
+    "For actual item returns, refunds, or store credits (either a standalone return receipt or partial refunds shown on an order screenshot alongside purchased items), "
+    "emit a split line with a negative 'amount' and prefix 'notes' with 'Refund: '. "
+    "For returned feed bags, emit negative 'bags' and negative 'total_weight_lb' (or null for a price-adjustment credit where no physical bags were returned). "
+    "For standalone return receipts, 'receipt_total' should be negative; on mixed purchase + return receipts, the sum of splits[].amount must reconcile with the net 'receipt_total'."
 )
 
 RECEIPT_RESPONSE_SCHEMA = {
@@ -197,14 +204,21 @@ def detect_receipt_mime_type(
     )
 
 
-def _safe_nonneg_float(val: Any) -> float | None:
+def _safe_signed_float(val: Any) -> float | None:
     if val is None or val == "":
         return None
     try:
         num = float(val)
     except (TypeError, ValueError):
         return None
-    if num < 0 or num != num:  # guard NaN/negative
+    if not math.isfinite(num):
+        return None
+    return num
+
+
+def _safe_nonneg_float(val: Any) -> float | None:
+    num = _safe_signed_float(val)
+    if num is None or num < 0:
         return None
     return num
 
@@ -227,7 +241,7 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
 
     rdate = _normalize_date(raw.get("date"))
     vendor = str(raw.get("vendor") or "").strip()[:120]
-    receipt_total = round(_safe_nonneg_float(raw.get("receipt_total")) or 0.0, 2)
+    receipt_total = round(_safe_signed_float(raw.get("receipt_total")) or 0.0, 2)
     tax_charged = round(_safe_nonneg_float(raw.get("tax_charged")) or 0.0, 2)
     mixed_warn = bool(raw.get("mixed_use_warning"))
 
@@ -237,8 +251,8 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
         for item in raw_splits:
             if not isinstance(item, dict):
                 continue
-            amt = _safe_nonneg_float(item.get("amount"))
-            if amt is None or round(amt, 2) <= 0:
+            amt = _safe_signed_float(item.get("amount"))
+            if amt is None or round(amt, 2) == 0.0:
                 continue
             amt_round = round(amt, 2)
             stype = str(item.get("split_type") or "general_farm_expense").strip().lower()
@@ -252,7 +266,7 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
                 c_str = str(raw_cat or "").strip().lower()
                 if c_str in VALID_SCHEDULE_F_CATEGORIES:
                     cat = c_str
-                elif amt_round >= 2500.0 and any(
+                elif abs(amt_round) >= 2500.0 and any(
                     kw in notes.lower()
                     for kw in ("tractor", "mower", "trailer", "equipment", "utility vehicle")
                 ):
@@ -264,8 +278,14 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
 
             feed_type_raw = item.get("feed_type")
             feed_type = str(feed_type_raw).strip().lower()[:40] if feed_type_raw else None
-            bags = _safe_nonneg_float(item.get("bags"))
-            lbs = _safe_nonneg_float(item.get("total_weight_lb"))
+            bags = _safe_signed_float(item.get("bags"))
+            lbs = _safe_signed_float(item.get("total_weight_lb"))
+            if amt_round < 0:
+                bags = (-abs(bags) if bags else 0.0) if bags is not None else None
+                lbs = (-abs(lbs) if lbs else 0.0) if lbs is not None else None
+            else:
+                bags = abs(bags) if bags is not None else None
+                lbs = abs(lbs) if lbs is not None else None
 
             clean_splits.append(
                 {
@@ -279,12 +299,15 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    if not clean_splits and receipt_total > 0:
+    if not clean_splits and receipt_total != 0:
+        fallback_notes = (
+            f"Refund: {vendor}" if vendor else "Refund"
+        ) if receipt_total < 0 else (vendor or "Scanned receipt")
         clean_splits.append(
             {
                 "split_type": "general_farm_expense",
                 "amount": receipt_total,
-                "notes": vendor or "Scanned receipt",
+                "notes": fallback_notes,
                 "schedule_f_category": "supplies",
                 "feed_type": None,
                 "bags": None,
