@@ -4,8 +4,15 @@
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>{{ b.name }} · Harvest Tally</h1>
-    <p class="sub">{{ b.species|title }} · Tap any weighed bird to assign a customer or update pickup</p>
+    <h1>{{ b.name }} · {{ 'Carcasses & Shares' if tally.is_share_mode else 'Harvest Tally' }}</h1>
+    <p class="sub">
+      {{ b.species|title }} ·
+      {% if tally.is_share_mode %}
+        Tap any share (Half A / Half B / Whole) to assign a buyer, enter butcher hanging weights, or release for pickup
+      {% else %}
+        Tap any weighed bird to assign a customer or update pickup
+      {% endif %}
+    </p>
   </div>
   <div class="row">
     <a href="/customers" class="btn sm">Customers</a>
@@ -15,28 +22,44 @@
 </div>
 {% include "_batch_stage_bar.html" %}
 
+{% if not tally.is_share_mode %}
+  {% set sp_low = (b.species or '')|lower %}
+  {% if 'pig' in sp_low or 'hog' in sp_low or 'beef' in sp_low or 'cattle' in sp_low or 'cow' in sp_low or 'sheep' in sp_low or 'lamb' in sp_low or 'goat' in sp_low %}
+  <div class="notice mb-md flex-between" style="flex-wrap:wrap;gap:8px">
+    <span>Raising <b>{{ b.species|title }}</b> in halves &amp; wholes priced by butcher hanging weight?</span>
+    <button type="button" class="btn sm primary" onclick="switchShareMode('shares', true)">Switch to ½ &amp; Whole Share Mode →</button>
+  </div>
+  {% endif %}
+{% endif %}
+
 <!-- Pinned live running tally bar -->
 <div class="card" style="position:sticky;top:10px;z-index:10;box-shadow:0 8px 24px rgba(31,58,45,.08)">
   <div class="cards four" style="margin-bottom:10px">
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-      <small>Harvested</small>
+      <small>{{ 'Carcasses Harvested' if tally.is_share_mode else 'Harvested' }}</small>
       <div style="font:600 22px Georgia,serif" id="t-head">{{ tally.harvested_head }} / {{ tally.surviving_quantity }}</div>
       <small id="t-rem">{{ tally.remaining_head }} remaining</small>
     </div>
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-      <small>Total dressed</small>
+      <small>{{ 'Total Hanging Wt' if tally.is_share_mode else 'Total dressed' }}</small>
       <div style="font:600 22px Georgia,serif;color:var(--green)" id="t-lbs">{{ '%.1f'|format(tally.total_lbs) }} lb</div>
       <small id="t-avg">Avg {{ '%.2f'|format(tally.avg_lbs) }} lb</small>
     </div>
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-      <small>Available (for sale)</small>
+      <small>{{ 'Shares Available' if tally.is_share_mode else 'Available (for sale)' }}</small>
       <div style="font:600 22px Georgia,serif" id="t-avail">{{ tally.available_count }}</div>
-      <small id="t-counts">{{ tally.assigned_count }} assigned · {{ tally.not_for_sale_count }} not for sale</small>
+      <small id="t-counts">
+        {% if tally.is_share_mode %}
+          {{ tally.assigned_count }} assigned · {{ tally.released_count }} released · {{ tally.not_for_sale_count }} freezer
+        {% else %}
+          {{ tally.assigned_count }} assigned · {{ tally.not_for_sale_count }} not for sale
+        {% endif %}
+      </small>
     </div>
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
       <small>Est. value (for sale)</small>
       <div style="font:600 22px Georgia,serif" id="t-val">${{ '{:,.0f}'.format(tally.est_value) }}</div>
-      <small>@ ${{ '%.2f'|format(tally.sale_price_per_lb) }}/lb</small>
+      <small>@ ${{ '%.2f'|format(tally.sale_price_per_lb) }}/lb{{ ' hanging' if tally.is_share_mode else '' }}</small>
     </div>
   </div>
   <div style="height:8px;background:#eeece1;border-radius:999px;overflow:hidden">
@@ -44,6 +67,55 @@
   </div>
 </div>
 
+{% if tally.is_share_mode %}
+<!-- Log next carcass (drop-off / hanging weight) -->
+<div class="card">
+  <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+    <div>
+      <h2 class="mb-0">Log Next Carcass</h2>
+      <small>Leave hanging weight blank or 0 on butcher drop-off day — fill in actual hanging weight later when the butcher calls.</small>
+    </div>
+    <button type="button" class="btn sm" onclick="switchShareMode('whole', false)">Use Whole-Animal Mode</button>
+  </div>
+  <form id="carcass-form" class="fgrid" onsubmit="submitCarcass(event)">
+    <label>Carcass / Animal Label
+      <input id="c-label" placeholder="e.g. Pig #{{ tally.harvested_head + 1 }} (Spot)">
+    </label>
+    <label>Hanging weight (lb, 0 if pending)
+      <input id="c-hanging" type="number" step="0.1" min="0" inputmode="decimal" placeholder="0 (pending butcher scale)">
+    </label>
+    <label>Live weight (lb optional)
+      <input id="c-live" type="number" step="0.1" min="0" inputmode="decimal" placeholder="e.g. 245">
+    </label>
+    <label>Split carcass into
+      <select id="c-split">
+        <option value="halves">Two Halves (Half A + Half B)</option>
+        <option value="whole">One Whole Share</option>
+      </select>
+    </label>
+    <label>Farm processing fee ($)
+      <input id="c-proc" type="number" step="0.01" min="0" value="0">
+      {% if tally.customer_pays_butcher %}
+      <small class="muted">Customer pays butcher directly — leave $0 unless farm paid (e.g. freezer hog)</small>
+      {% endif %}
+    </label>
+    <label>Drop-off / harvest date
+      <input id="w-date" type="date" value="{{ today_iso }}" required>
+    </label>
+    <label class="full">Notes (butcher ticket #, pen notes…)
+      <input id="c-notes" placeholder="Optional butcher ticket or carcass note...">
+    </label>
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
+      <input type="checkbox" id="c-nfs"> Keep whole carcass for Home Freezer (exclude from Est. value &amp; public picking)
+    </label>
+    <div class="full row" style="justify-content:space-between;align-items:center;margin-top:4px">
+      <button type="button" class="btn sm" id="undo-btn" onclick="undoLast()" {{ 'disabled' if not tally.entries }} style="color:var(--redink)">↩ Undo last carcass</button>
+      <button type="submit" class="btn primary" id="add-carcass-btn" style="padding:11px 22px;font-size:15px">+ Log carcass</button>
+    </div>
+  </form>
+  <small id="t-err" style="color:var(--redink);margin-top:8px" hidden></small>
+</div>
+{% else %}
 <!-- Fast bird-by-bird scale entry -->
 <div class="card">
   <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -77,13 +149,14 @@
   </form>
   <small id="t-err" style="color:var(--redink);margin-top:8px" hidden></small>
 </div>
+{% endif %}
 
 <!-- Public Picking Controls -->
 <div class="card">
   <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="margin:0">Public Customer Picking</h2>
-      <small>Share a live link so customers can claim available for-sale birds in real time (no login required, buyer names stay private).</small>
+      <small>Share a live link so customers can claim available {{ 'shares' if tally.is_share_mode else 'for-sale birds' }} in real time (no login required, buyer names stay private).</small>
     </div>
     <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
       <input type="checkbox" id="pk-enabled" {{ 'checked' if tally.picking_enabled }} onchange="savePickingSettings()"> Enable public link
@@ -97,7 +170,7 @@
     </div>
     <div class="row" style="gap:16px;flex-wrap:wrap">
       <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-        <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 bird per customer
+        <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 {{ 'whole-animal eq.' if tally.is_share_mode else 'bird' }} per customer
       </label>
       <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
         <input type="checkbox" id="pk-po-only" {{ 'checked' if tally.picking_preorder_only }} onchange="savePickingSettings()"> Pre-order customers only (early access &amp; reserved qty limit)
@@ -106,6 +179,25 @@
   </div>
 </div>
 
+{% if tally.is_share_mode %}
+<!-- Carcass & Share List -->
+<div class="card">
+  <div class="flex-between mb-md" style="flex-wrap:wrap;gap:8px">
+    <b>Carcasses &amp; Allocated Shares</b>
+    <div class="row" style="gap:6px;flex-wrap:wrap" id="share-filter-pills">
+      <button type="button" class="btn sm primary" data-flt="all" onclick="setFilter('all')">All</button>
+      <button type="button" class="btn sm" data-flt="available" onclick="setFilter('available')">Available</button>
+      <button type="button" class="btn sm" data-flt="assigned" onclick="setFilter('assigned')">Assigned</button>
+      <button type="button" class="btn sm" data-flt="paid_unnotified" onclick="setFilter('paid_unnotified')">Paid · Notify Butcher</button>
+      <button type="button" class="btn sm" data-flt="released" onclick="setFilter('released')">Released</button>
+      <button type="button" class="btn sm" data-flt="picked_up" onclick="setFilter('picked_up')">Picked up</button>
+      <button type="button" class="btn sm" data-flt="not_for_sale" onclick="setFilter('not_for_sale')">Freezer</button>
+    </div>
+  </div>
+  <small id="share-err" class="notice err mb-sm" hidden></small>
+  <div id="share-carcass-list" class="stack"></div>
+</div>
+{% else %}
 <!-- Live bird list with filter pills -->
 <div class="card table-card">
   <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -123,6 +215,7 @@
     <tbody id="t-rows"></tbody>
   </table>
 </div>
+{% endif %}
 
 <!-- Tap-to-assign bird drawer/modal -->
 <dialog id="assignm">
@@ -201,6 +294,110 @@
   </form>
 </dialog>
 
+<!-- Edit carcass weight / fee modal (Share Mode) -->
+<dialog id="carcassm">
+  <h2 id="cm-title" style="margin-bottom:4px">Update Carcass Weight &amp; Fee</h2>
+  <small class="muted mb-sm" style="display:block">Enter hanging weight once the butcher weighs it to recalculate share prices automatically.</small>
+  <form id="carcass-edit-form" class="fgrid" onsubmit="saveCarcassEdit(event)">
+    <input type="hidden" id="cm-id">
+    <label>Animal / Carcass Label<input id="cm-label" required></label>
+    <label>Harvest / Drop-off Date<input id="cm-date" type="date" required></label>
+    <label>Hanging Weight (lb)<input id="cm-hanging" type="number" step="0.1" min="0" inputmode="decimal"></label>
+    <label>Live Weight (lb optional)<input id="cm-live" type="number" step="0.1" min="0" inputmode="decimal" placeholder="Optional"></label>
+    <label class="full">Farm Processing Fee ($) <small class="inline muted">(flows to Schedule F Processing)</small>
+      <input id="cm-proc" type="number" step="0.01" min="0" value="0">
+    </label>
+    <label class="full">Notes<input id="cm-notes" placeholder="Butcher ticket #, live weight note…"></label>
+    <div class="row full" style="justify-content:space-between;margin-top:6px">
+      <button type="button" class="btn danger sm" onclick="deleteCarcassFromModal()">Delete carcass</button>
+      <div class="row">
+        <button type="button" class="btn" onclick="document.getElementById('carcassm').close()">Cancel</button>
+        <button type="submit" class="btn primary">Save changes</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<!-- Assign share modal (Share Mode) -->
+<dialog id="sharem">
+  <h2 id="sm-title" style="margin-bottom:4px">Assign Share</h2>
+  <small id="sm-sub" style="margin-bottom:12px;display:block"></small>
+  <form id="share-form" class="fgrid" onsubmit="saveShareAssignment(event)">
+    <input type="hidden" id="sm-id">
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="sm-nfs" onchange="syncShareUI()"> Not for sale (home freezer / keep)
+    </label>
+    <div id="sm-sale-fields" class="full fgrid">
+      <label class="full">Customer
+        <div class="row" style="gap:6px">
+          <select id="sm-cust" style="flex:1" onchange="syncShareUI()"></select>
+          <button type="button" class="btn sm" onclick="toggleQuickCustShare()">+ New</button>
+        </div>
+      </label>
+      <div id="sm-new-cust" class="full" hidden style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px">
+        <div class="fgrid">
+          <label>Name<input id="snc-name" placeholder="Customer name"></label>
+          <label>Phone<input id="snc-phone" type="tel" placeholder="(555) 123-4567"></label>
+          <label class="full">Email<input id="snc-email" type="email" placeholder="email@example.com"></label>
+          <div class="full row" style="justify-content:flex-end">
+            <button type="button" class="btn sm" onclick="toggleQuickCustShare(false)">Cancel</button>
+            <button type="button" class="btn sm primary" onclick="createQuickCustomerShare()">Add customer</button>
+          </div>
+        </div>
+      </div>
+      <label>Override Share Wt (lb optional)<input id="sm-weight" type="number" step="0.1" min="0" placeholder="Auto 50% / 100%" oninput="syncShareUI()"></label>
+      <label>Actual Meat Price ($)<input id="sm-actual" type="number" step="0.01" min="0" placeholder="Leave blank for calc" oninput="syncShareUI()"></label>
+      <label>Deposit Paid ($)<input id="sm-dep" type="number" step="0.01" min="0" value="0" oninput="syncShareUI()"></label>
+      <label>Customer Butcher Fee ($ memo)<input id="sm-bfee" type="number" step="0.01" min="0" value="0" oninput="syncShareUI()"><small class="muted">Direct to butcher — not farm Schedule F</small></label>
+      <label>Payment Status
+        <select id="sm-pay">
+          <option value="unpaid">Unpaid</option>
+          <option value="deposit">Deposit</option>
+          <option value="paid">Paid to Farm</option>
+        </select>
+      </label>
+      <label>Payment Method
+        <select id="sm-pm">
+          <option value="">— Untagged —</option>
+          <option value="cash">Cash</option>
+          <option value="venmo">Venmo</option>
+          <option value="paypal">PayPal</option>
+          <option value="card">Card</option>
+          <option value="check">Check</option>
+        </select>
+      </label>
+      <label>Pickup Status
+        <select id="sm-pickup">
+          <option value="unassigned">Unassigned</option>
+          <option value="assigned">Assigned</option>
+          <option value="picked_up">Picked up</option>
+        </select>
+      </label>
+      <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
+        <input type="checkbox" id="sm-bnot" style="width:auto">
+        <span><b>Butcher notified / released</b> (confirmed with butcher that farm balance is paid)</span>
+      </label>
+      <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <span style="font-size:13px">Farm balance due</span>
+          <small id="sm-tip-hint" class="muted"></small>
+        </div>
+        <b id="sm-bal" style="font:600 18px Georgia,serif;color:var(--green)">$0.00</b>
+      </div>
+      <div id="sm-contact-row" class="full row" style="gap:6px;flex-wrap:wrap" hidden>
+        <a id="sm-sms" class="btn sm" href="#">Text customer</a>
+        <a id="sm-mail" class="btn sm" href="#">Email customer</a>
+        <button type="button" class="btn sm" id="sm-copy-msg" onclick="copyShareMsg()">Copy message</button>
+      </div>
+    </div>
+    <label class="full">Cut Sheet / Notes<input id="sm-notes" placeholder="Standard cuts, no jowl, smoke hams…"></label>
+    <div class="row full" style="justify-content:flex-end;margin-top:6px">
+      <button type="button" class="btn" onclick="document.getElementById('sharem').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save share</button>
+    </div>
+  </form>
+</dialog>
+
 <script id="tally-init" type="application/json">{{ tally|tojson }}</script>
 <script id="custs-init" type="application/json">{{ customers|tojson }}</script>
 <script>
@@ -209,7 +406,18 @@ let CUSTOMERS = JSON.parse(document.getElementById('custs-init').textContent);
 let MODE = 'dec';
 let FILTER = 'all';
 let ACTIVE_BIRD = null;
+let ACTIVE_SHARE = null;
+let ACTIVE_CARCASS = null;
 const BATCH_ID = {{ b.id }};
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function setWeightMode(m) {
   MODE = m;
@@ -223,7 +431,7 @@ function setWeightMode(m) {
 
 function setFilter(f) {
   FILTER = f;
-  document.querySelectorAll('#filter-pills [data-flt]').forEach(btn => {
+  document.querySelectorAll('#filter-pills [data-flt], #share-filter-pills [data-flt]').forEach(btn => {
     btn.classList.toggle('primary', btn.dataset.flt === f);
   });
   renderTally(TALLY);
@@ -236,6 +444,8 @@ function matchesFilter(e) {
   if (FILTER === 'available') return !e.customer_id;
   if (FILTER === 'picked_up') return e.pickup_status === 'picked_up';
   if (FILTER === 'assigned') return !!e.customer_id && e.pickup_status !== 'picked_up';
+  if (FILTER === 'paid_unnotified') return !!e.customer_id && e.payment_status === 'paid' && !e.butcher_notified;
+  if (FILTER === 'released') return !!e.customer_id && !!e.butcher_notified && e.pickup_status !== 'picked_up';
   return true;
 }
 
@@ -244,14 +454,24 @@ function renderTally(t) {
   document.getElementById('t-head').textContent = `${t.harvested_head} / ${t.surviving_quantity}`;
   document.getElementById('t-rem').textContent = `${t.remaining_head} remaining`;
   document.getElementById('t-lbs').textContent = `${Number(t.total_lbs).toFixed(1)} lb`;
-  document.getElementById('t-avg').textContent = `Avg ${Number(t.avg_lbs).toFixed(2)} lb` + (t.entries.length ? ` (${Number(t.min_lbs).toFixed(1)}–${Number(t.max_lbs).toFixed(1)})` : '');
+  const pendNote = t.is_share_mode && t.pending_weight_count ? ` · ${t.pending_weight_count} pending wt` : '';
+  document.getElementById('t-avg').textContent = `Avg ${Number(t.avg_lbs).toFixed(2)} lb` + (t.entries.length ? ` (${Number(t.min_lbs).toFixed(1)}–${Number(t.max_lbs).toFixed(1)})` : '') + pendNote;
   document.getElementById('t-avail').textContent = String(t.available_count);
-  document.getElementById('t-counts').textContent = `${t.assigned_count} assigned · ${t.not_for_sale_count} not for sale`;
+  document.getElementById('t-counts').textContent = t.is_share_mode
+    ? `${t.assigned_count} assigned · ${t.released_count} released · ${t.not_for_sale_count} freezer`
+    : `${t.assigned_count} assigned · ${t.not_for_sale_count} not for sale`;
   document.getElementById('t-val').textContent = '$' + Math.round(t.est_value).toLocaleString();
   document.getElementById('t-bar').style.width = `${t.progress_pct}%`;
-  document.getElementById('undo-btn').disabled = !t.entries.length;
+  const undoBtn = document.getElementById('undo-btn');
+  if (undoBtn) undoBtn.disabled = !t.entries.length;
+
+  if (t.is_share_mode) {
+    renderShareCarcasses(t);
+    return;
+  }
 
   const tb = document.getElementById('t-rows');
+  if (!tb) return;
   tb.innerHTML = '';
   const visible = t.entries.filter(matchesFilter);
   if (!visible.length) {
@@ -284,8 +504,107 @@ function renderTally(t) {
   });
 }
 
-function populateCustSelect(selectedId) {
-  const sel = document.getElementById('am-cust');
+function renderShareCarcasses(t) {
+  const list = document.getElementById('share-carcass-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!t.entries.length) {
+    list.innerHTML = '<div class="empty">No carcasses logged yet. Use <b>+ Log carcass</b> above on butcher drop-off day.</div>';
+    return;
+  }
+  let shownCount = 0;
+  t.entries.forEach(carcass => {
+    const shares = (carcass.shares || []).filter(matchesFilter);
+    if (FILTER !== 'all' && !shares.length) return;
+    shownCount++;
+
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card)';
+
+    const hangBadge = carcass.dressed_lbs > 0
+      ? `<span class="pill green">${Number(carcass.dressed_lbs).toFixed(1)} lb ${escapeHtml(carcass.weight_basis)}</span>`
+      : '<span class="pill amber">Pending hanging wt</span>';
+    const liveBadge = carcass.live_weight_lbs
+      ? `<span class="pill gray">Live ${Number(carcass.live_weight_lbs).toFixed(0)} lb</span>`
+      : '';
+    const procBadge = carcass.processing_cost_total > 0
+      ? `<span class="pill gray">Farm Proc $${Number(carcass.processing_cost_total).toFixed(2)}</span>`
+      : '';
+    const toggleTarget = carcass.split_mode === 'halves' ? 'whole' : 'halves';
+    const toggleLabel = carcass.split_mode === 'halves' ? 'Merge to Whole' : 'Split into Halves';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'flex-between mb-sm';
+    hdr.style.flexWrap = 'wrap';
+    hdr.style.gap = '8px';
+    hdr.innerHTML = `
+      <div>
+        <b>${escapeHtml(carcass.animal_label || ('Carcass #' + carcass.num))}</b>
+        <small class="inline muted">· ${escapeHtml(carcass.harvest_date)}</small>
+        <div class="row mt-sm" style="gap:6px;flex-wrap:wrap">${hangBadge}${liveBadge}${procBadge}</div>
+        ${carcass.notes ? `<small class="muted">${escapeHtml(carcass.notes)}</small>` : ''}
+      </div>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn sm js-edit-carcass">Edit weight / fee</button>
+        <button type="button" class="btn sm js-split-carcass">${toggleLabel}</button>
+      </div>
+    `;
+    hdr.querySelector('.js-edit-carcass').onclick = () => openCarcassEditModal(carcass);
+    hdr.querySelector('.js-split-carcass').onclick = () => toggleCarcassSplit(carcass.id, toggleTarget);
+    card.appendChild(hdr);
+
+    const rowsWrap = document.createElement('div');
+    rowsWrap.className = 'stack';
+    rowsWrap.style.gap = '6px';
+    shares.forEach(sh => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;background:var(--surface-soft);border:1px solid var(--line);border-radius:8px;cursor:pointer';
+      row.onclick = () => openShareModal(carcass, sh);
+
+      let statusHtml = '';
+      if (!sh.for_sale) {
+        statusHtml = '<span class="pill gray">Not for sale · Freezer</span>';
+      } else if (!sh.customer_id) {
+        statusHtml = '<span class="pill green">Available</span>';
+      } else {
+        const who = `<b>${escapeHtml(sh.customer_name)}</b>`;
+        if (sh.pickup_status === 'picked_up') {
+          statusHtml = `${who} <span class="pill green">Picked up</span>`;
+        } else if (sh.butcher_notified) {
+          statusHtml = `${who} <span class="pill green">Butcher Released ✓</span>`;
+        } else if (sh.payment_status === 'paid') {
+          statusHtml = `${who} <span class="pill amber">Paid · Notify Butcher</span>`;
+        } else if (sh.payment_status === 'deposit') {
+          statusHtml = `${who} <span class="pill amber">Deposit $${Number(sh.deposit_paid).toFixed(2)}</span>`;
+        } else {
+          statusHtml = `${who} <span class="pill amber">Assigned</span>`;
+        }
+      }
+      const wtTxt = sh.effective_lbs > 0
+        ? `${Number(sh.effective_lbs).toFixed(1)} lb · $${Number(sh.effective_price).toFixed(2)}`
+        : 'Pending hanging wt';
+      const cutTxt = sh.cut_sheet_notes ? ` · <small class="inline muted">${escapeHtml(sh.cut_sheet_notes)}</small>` : '';
+      const bfeeTxt = sh.customer_butcher_fee > 0 ? ` · <small class="inline muted">Butcher fee $${Number(sh.customer_butcher_fee).toFixed(2)}</small>` : '';
+      row.innerHTML = `
+        <div>
+          <span class="pill blue">${escapeHtml(sh.slot_label)}</span>
+          ${statusHtml}
+          <small class="muted" style="display:block;margin-top:2px">${wtTxt}${bfeeTxt}${cutTxt}</small>
+        </div>
+        <span class="link">Assign / Edit</span>
+      `;
+      rowsWrap.appendChild(row);
+    });
+    card.appendChild(rowsWrap);
+    list.appendChild(card);
+  });
+
+  if (!shownCount) {
+    list.innerHTML = '<div class="empty">No shares match this filter.</div>';
+  }
+}
+
+function populateCustSelectEl(sel, selectedId) {
   sel.innerHTML = '<option value="">— Unassigned (Available) —</option>';
   CUSTOMERS.forEach(c => {
     const opt = document.createElement('option');
@@ -349,7 +668,7 @@ function openAssignModal(bird) {
   const calc = (bird.dressed_lbs * TALLY.sale_price_per_lb).toFixed(2);
   document.getElementById('am-sub').textContent = `${bird.lb_oz} · Calculated $${calc} @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb`;
   document.getElementById('am-nfs').checked = !bird.for_sale;
-  populateCustSelect(bird.customer_id);
+  populateCustSelectEl(document.getElementById('am-cust'), bird.customer_id);
   document.getElementById('am-actual').value = bird.actual_sale_price !== null && bird.actual_sale_price !== undefined ? Number(bird.actual_sale_price).toFixed(2) : '';
   document.getElementById('am-actual').placeholder = `Calc: $${calc}`;
   document.getElementById('am-dep').value = Number(bird.deposit_paid || 0).toFixed(2);
@@ -368,28 +687,51 @@ function toggleQuickCust(force) {
   if (!el.hidden) document.getElementById('nc-name').focus();
 }
 
-async function createQuickCustomer() {
-  const name = document.getElementById('nc-name').value.trim();
+async function createCustomerHelper(nameId, phoneId, emailId, selEl, pickupSelEl, onDone) {
+  const name = document.getElementById(nameId).value.trim();
   if (!name) return;
   const resp = await fetch('/api/customers', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       name,
-      phone: document.getElementById('nc-phone').value.trim(),
-      email: document.getElementById('nc-email').value.trim(),
+      phone: document.getElementById(phoneId).value.trim(),
+      email: document.getElementById(emailId).value.trim(),
     }),
   });
   if (!resp.ok) return;
   const c = await resp.json();
   CUSTOMERS.push(c);
-  populateCustSelect(c.id);
-  document.getElementById('am-pickup').value = 'assigned';
-  document.getElementById('nc-name').value = '';
-  document.getElementById('nc-phone').value = '';
-  document.getElementById('nc-email').value = '';
-  toggleQuickCust(false);
-  syncAssignUI();
+  populateCustSelectEl(selEl, c.id);
+  if (pickupSelEl) pickupSelEl.value = 'assigned';
+  document.getElementById(nameId).value = '';
+  document.getElementById(phoneId).value = '';
+  document.getElementById(emailId).value = '';
+  onDone();
+}
+
+function createQuickCustomer() {
+  createCustomerHelper(
+    'nc-name', 'nc-phone', 'nc-email',
+    document.getElementById('am-cust'),
+    document.getElementById('am-pickup'),
+    () => { toggleQuickCust(false); syncAssignUI(); }
+  );
+}
+
+function toggleQuickCustShare(force) {
+  const el = document.getElementById('sm-new-cust');
+  el.hidden = force !== undefined ? !force : !el.hidden;
+  if (!el.hidden) document.getElementById('snc-name').focus();
+}
+
+function createQuickCustomerShare() {
+  createCustomerHelper(
+    'snc-name', 'snc-phone', 'snc-email',
+    document.getElementById('sm-cust'),
+    document.getElementById('sm-pickup'),
+    () => { toggleQuickCustShare(false); syncShareUI(); }
+  );
 }
 
 async function saveAssignment(ev) {
@@ -417,8 +759,159 @@ async function saveAssignment(ev) {
   }
 }
 
+function openCarcassEditModal(carcass) {
+  ACTIVE_CARCASS = carcass;
+  document.getElementById('cm-id').value = carcass.id;
+  document.getElementById('cm-title').textContent = `Edit ${carcass.animal_label || ('Carcass #' + carcass.num)}`;
+  document.getElementById('cm-label').value = carcass.animal_label || '';
+  document.getElementById('cm-date').value = carcass.harvest_date || '';
+  document.getElementById('cm-hanging').value = Number(carcass.dressed_lbs || 0);
+  document.getElementById('cm-live').value = carcass.live_weight_lbs !== null && carcass.live_weight_lbs !== undefined ? Number(carcass.live_weight_lbs) : '';
+  document.getElementById('cm-proc').value = Number(carcass.processing_cost_total || 0).toFixed(2);
+  document.getElementById('cm-notes').value = carcass.notes || '';
+  document.getElementById('carcassm').showModal();
+}
+
+async function saveCarcassEdit(ev) {
+  ev.preventDefault();
+  const hid = document.getElementById('cm-id').value;
+  const rawLive = document.getElementById('cm-live').value.trim();
+  const resp = await fetch(`/api/batches/${BATCH_ID}/harvest/${hid}/update`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      animal_label: document.getElementById('cm-label').value.trim(),
+      harvest_date: document.getElementById('cm-date').value,
+      dressed_lbs: parseFloat(document.getElementById('cm-hanging').value || '0') || 0,
+      live_weight_lbs: rawLive !== '' ? (parseFloat(rawLive) || 0) : null,
+      processing_cost_total: parseFloat(document.getElementById('cm-proc').value || '0') || 0,
+      notes: document.getElementById('cm-notes').value.trim(),
+    }),
+  });
+  if (resp.ok) {
+    renderTally(await resp.json());
+    document.getElementById('carcassm').close();
+  }
+}
+
+async function deleteCarcassFromModal() {
+  if (!ACTIVE_CARCASS || !confirm('Remove this carcass and all its shares?')) return;
+  await removeBird(ACTIVE_CARCASS.id);
+  document.getElementById('carcassm').close();
+}
+
+async function toggleCarcassSplit(hid, targetMode) {
+  const errEl = document.getElementById('share-err');
+  if (errEl) errEl.hidden = true;
+  const resp = await fetch(`/api/batches/${BATCH_ID}/harvest/${hid}/split-mode`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ split_mode: targetMode }),
+  });
+  if (resp.ok) {
+    renderTally(await resp.json());
+  } else if (errEl) {
+    const data = await resp.json().catch(() => ({}));
+    errEl.textContent = data.detail || 'Could not change split mode.';
+    errEl.hidden = false;
+  }
+}
+
+function openShareModal(carcass, sh) {
+  ACTIVE_CARCASS = carcass;
+  ACTIVE_SHARE = sh;
+  document.getElementById('sm-id').value = sh.id;
+  document.getElementById('sm-title').textContent = `${carcass.animal_label || ('Carcass #' + carcass.num)} · ${sh.slot_label}`;
+  const autoWt = Number((carcass.dressed_lbs || 0) * (sh.share_fraction || 1)).toFixed(1);
+  document.getElementById('sm-sub').textContent = sh.effective_lbs > 0
+    ? `${Number(sh.effective_lbs).toFixed(1)} lb ${carcass.weight_basis} · Calc $${Number(sh.est_price).toFixed(2)} @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb`
+    : 'Hanging weight pending butcher scale';
+  document.getElementById('sm-nfs').checked = !sh.for_sale;
+  populateCustSelectEl(document.getElementById('sm-cust'), sh.customer_id);
+  document.getElementById('sm-weight').value = sh.share_weight_lbs !== null && sh.share_weight_lbs !== undefined ? Number(sh.share_weight_lbs).toFixed(1) : '';
+  document.getElementById('sm-weight').placeholder = carcass.dressed_lbs > 0 ? `Auto: ${autoWt} lb` : 'Optional override lb';
+  document.getElementById('sm-actual').value = sh.actual_sale_price !== null && sh.actual_sale_price !== undefined ? Number(sh.actual_sale_price).toFixed(2) : '';
+  document.getElementById('sm-dep').value = Number(sh.deposit_paid || 0).toFixed(2);
+  document.getElementById('sm-bfee').value = Number(sh.customer_butcher_fee || 0).toFixed(2);
+  document.getElementById('sm-pay').value = sh.payment_status || 'unpaid';
+  document.getElementById('sm-pm').value = sh.payment_method || '';
+  document.getElementById('sm-pickup').value = sh.pickup_status || 'unassigned';
+  document.getElementById('sm-bnot').checked = !!sh.butcher_notified;
+  document.getElementById('sm-notes').value = sh.cut_sheet_notes || '';
+  document.getElementById('sm-new-cust').hidden = true;
+  syncShareUI();
+  document.getElementById('sharem').showModal();
+}
+
+function syncShareUI() {
+  if (!ACTIVE_SHARE || !ACTIVE_CARCASS) return;
+  const nfs = document.getElementById('sm-nfs').checked;
+  document.getElementById('sm-sale-fields').hidden = nfs;
+  if (nfs) return;
+  const rawWt = document.getElementById('sm-weight').value.trim();
+  const wtLbs = rawWt !== '' ? (parseFloat(rawWt) || 0) : ((ACTIVE_CARCASS.dressed_lbs || 0) * (ACTIVE_SHARE.share_fraction || 1));
+  const calcTotal = Math.round(wtLbs * TALLY.sale_price_per_lb * 100) / 100;
+  const rawAct = document.getElementById('sm-actual').value.trim();
+  const effTotal = rawAct !== '' ? (parseFloat(rawAct) || 0) : calcTotal;
+  const dep = parseFloat(document.getElementById('sm-dep').value || '0') || 0;
+  const bal = Math.max(0, effTotal - dep);
+  document.getElementById('sm-bal').textContent = '$' + bal.toFixed(2);
+  document.getElementById('sm-tip-hint').textContent = wtLbs > 0
+    ? `Calculated $${calcTotal.toFixed(2)} (${wtLbs.toFixed(1)} lb @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb)`
+    : 'Hanging weight pending butcher';
+
+  const cid = document.getElementById('sm-cust').value;
+  const cust = CUSTOMERS.find(c => String(c.id) === String(cid));
+  const row = document.getElementById('sm-contact-row');
+  if (cust) {
+    row.hidden = false;
+    const label = `${ACTIVE_CARCASS.animal_label || ('Carcass #' + ACTIVE_CARCASS.num)} (${ACTIVE_SHARE.slot_label})`;
+    const msg = wtLbs > 0
+      ? `Hi ${cust.name}! Your ${TALLY.batch_name} share (${label}) weighed ${wtLbs.toFixed(1)} lb hanging ($${effTotal.toFixed(2)} total). Farm balance due: $${bal.toFixed(2)}. Once settled, we will release your order with the butcher!`
+      : `Hi ${cust.name}! You are assigned to ${label} in ${TALLY.batch_name}. We'll send your final hanging weight and balance as soon as the butcher weighs it.`;
+    const smsBtn = document.getElementById('sm-sms');
+    const mailBtn = document.getElementById('sm-mail');
+    smsBtn.hidden = !cust.phone;
+    if (cust.phone) smsBtn.href = `sms:${cust.phone}?body=${encodeURIComponent(msg)}`;
+    mailBtn.hidden = !cust.email;
+    if (cust.email) mailBtn.href = `mailto:${cust.email}?subject=${encodeURIComponent(TALLY.batch_name + ' share details')}&body=${encodeURIComponent(msg)}`;
+    row.dataset.msg = msg;
+  } else {
+    row.hidden = true;
+  }
+}
+
+async function saveShareAssignment(ev) {
+  ev.preventDefault();
+  const id = document.getElementById('sm-id').value;
+  const for_sale = !document.getElementById('sm-nfs').checked;
+  const rawWt = document.getElementById('sm-weight').value.trim();
+  const rawAct = document.getElementById('sm-actual').value.trim();
+  const resp = await fetch(`/api/batches/${BATCH_ID}/shares/${id}/assign`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      for_sale,
+      customer_id: for_sale ? (document.getElementById('sm-cust').value || null) : null,
+      share_weight_lbs: rawWt !== '' ? (parseFloat(rawWt) || null) : null,
+      actual_sale_price: for_sale && rawAct !== '' ? (parseFloat(rawAct) || 0) : null,
+      deposit_paid: parseFloat(document.getElementById('sm-dep').value || '0') || 0,
+      customer_butcher_fee: parseFloat(document.getElementById('sm-bfee').value || '0') || 0,
+      payment_status: document.getElementById('sm-pay').value,
+      payment_method: document.getElementById('sm-pm').value,
+      pickup_status: document.getElementById('sm-pickup').value,
+      butcher_notified: document.getElementById('sm-bnot').checked,
+      cut_sheet_notes: document.getElementById('sm-notes').value.trim(),
+    }),
+  });
+  if (resp.ok) {
+    renderTally(await resp.json());
+    document.getElementById('sharem').close();
+  }
+}
+
 async function deleteFromModal() {
-  if (!ACTIVE_BIRD || !confirm(`Delete Bird #${ACTIVE_BIRD.num}?`)) return;
+  if (!ACTIVE_BIRD || !confirm('Delete this bird?')) return;
   await removeBird(ACTIVE_BIRD.id);
   document.getElementById('assignm').close();
 }
@@ -429,6 +922,23 @@ function copyPickupMsg() {
   const b = document.getElementById('am-copy-msg');
   b.textContent = 'Copied!';
   setTimeout(() => { b.textContent = 'Copy message'; }, 1500);
+}
+
+function copyShareMsg() {
+  const msg = document.getElementById('sm-contact-row').dataset.msg || '';
+  if (msg && navigator.clipboard) navigator.clipboard.writeText(msg);
+  const b = document.getElementById('sm-copy-msg');
+  b.textContent = 'Copied!';
+  setTimeout(() => { b.textContent = 'Copy message'; }, 1500);
+}
+
+async function switchShareMode(unit, custPaysButcher) {
+  const resp = await fetch(`/api/batches/${BATCH_ID}/share-mode`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ sale_unit: unit, customer_pays_butcher: custPaysButcher }),
+  });
+  if (resp.ok) location.reload();
 }
 
 async function savePickingSettings() {
@@ -460,6 +970,51 @@ function copyPickUrl() {
   const b = document.getElementById('pk-copy');
   b.textContent = 'Copied!';
   setTimeout(() => { b.textContent = 'Copy link'; }, 1500);
+}
+
+async function submitCarcass(ev) {
+  ev.preventDefault();
+  const errEl = document.getElementById('t-err');
+  errEl.hidden = true;
+  const lbs = parseFloat(document.getElementById('c-hanging').value || '0') || 0;
+  if (lbs < 0) {
+    errEl.textContent = 'Weight cannot be negative.';
+    errEl.hidden = false;
+    return;
+  }
+  const btn = document.getElementById('add-carcass-btn');
+  btn.disabled = true;
+  try {
+    const rawLive = document.getElementById('c-live').value.trim();
+    const resp = await fetch(`/api/batches/${BATCH_ID}/harvest`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        harvest_date: document.getElementById('w-date').value,
+        animal_label: document.getElementById('c-label').value.trim(),
+        dressed_lbs: Math.round(lbs * 100) / 100,
+        live_weight_lbs: rawLive !== '' ? (parseFloat(rawLive) || null) : null,
+        split_mode: document.getElementById('c-split').value,
+        processing_cost_total: parseFloat(document.getElementById('c-proc').value || '0') || 0,
+        notes: document.getElementById('c-notes').value.trim(),
+        for_sale: !document.getElementById('c-nfs').checked,
+        weight_basis: 'hanging',
+      }),
+    });
+    if (!resp.ok) throw new Error('Failed to save carcass.');
+    renderTally(await resp.json());
+    document.getElementById('c-label').value = '';
+    document.getElementById('c-hanging').value = '';
+    document.getElementById('c-live').value = '';
+    document.getElementById('c-proc').value = '0';
+    document.getElementById('c-notes').value = '';
+    document.getElementById('c-nfs').checked = false;
+  } catch (e) {
+    errEl.textContent = e.message || 'Error saving carcass.';
+    errEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function submitBird(ev) {
@@ -520,11 +1075,20 @@ async function undoLast() {
 }
 
 function copyHarvestList() {
-  const header = `${TALLY.batch_name} — ${TALLY.harvested_head}/${TALLY.surviving_quantity} harvested · ${Number(TALLY.total_lbs).toFixed(1)} lb total (avg ${Number(TALLY.avg_lbs).toFixed(2)} lb)`;
-  const rows = [...TALLY.entries].reverse().map(e => {
-    const tag = !e.for_sale ? ' [Not for sale]' : (e.customer_name ? ` [${e.customer_name}]` : ' [Available]');
-    return `#${e.num}: ${Number(e.dressed_lbs).toFixed(2)} lb (${e.lb_oz})${tag}${e.notes ? ' — ' + e.notes : ''}`;
-  });
+  const header = `${TALLY.batch_name} — ${TALLY.harvested_head}/${TALLY.surviving_quantity} harvested · ${Number(TALLY.total_lbs).toFixed(1)} lb total`;
+  let rows = [];
+  if (TALLY.is_share_mode) {
+    rows = [...TALLY.entries].reverse().map(c => {
+      const shSummary = (c.shares || []).map(sh => `${sh.slot_label}: ${!sh.for_sale ? 'Freezer' : (sh.customer_name || 'Available')}`).join(' | ');
+      const wt = c.dressed_lbs > 0 ? `${Number(c.dressed_lbs).toFixed(1)} lb hanging` : 'Pending wt';
+      return `${c.animal_label || ('Carcass #' + c.num)}: ${wt} [${shSummary}]`;
+    });
+  } else {
+    rows = [...TALLY.entries].reverse().map(e => {
+      const tag = !e.for_sale ? ' [Not for sale]' : (e.customer_name ? ` [${e.customer_name}]` : ' [Available]');
+      return `#${e.num}: ${Number(e.dressed_lbs).toFixed(2)} lb (${e.lb_oz})${tag}${e.notes ? ' — ' + e.notes : ''}`;
+    });
+  }
   navigator.clipboard && navigator.clipboard.writeText([header, ...rows].join('\n'));
   const b = document.getElementById('copy-weights-btn');
   if (b) { b.textContent = 'Copied!'; setTimeout(() => { b.textContent = 'Copy list'; }, 1500); }

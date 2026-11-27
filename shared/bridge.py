@@ -351,12 +351,42 @@ def list_homestead_paid_transactions(
             LEFT JOIN customers c ON c.id = bh.customer_id
             WHERE b.user_id = ?
               AND COALESCE(bh.for_sale, 1) = 1
+              AND NOT EXISTS (SELECT 1 FROM harvest_shares hs0 WHERE hs0.harvest_id = bh.id)
               AND (
                 LOWER(COALESCE(bh.payment_status, '')) = 'paid'
                 OR LOWER(COALESCE(bh.pickup_status, '')) = 'picked_up'
                 OR bh.actual_sale_price IS NOT NULL
               )
             ORDER BY bh.id ASC
+            """,
+            (owner_uid,),
+        ).fetchall()
+
+        share_rows = conn.execute(
+            """
+            SELECT hs.id, hs.harvest_id, hs.batch_id, hs.customer_id,
+                   hs.share_slot, hs.share_fraction, hs.share_weight_lbs,
+                   hs.actual_sale_price, hs.payment_status, hs.pickup_status,
+                   COALESCE(hs.payment_method, '') AS payment_method,
+                   COALESCE(hs.paid_at, '') AS paid_at,
+                   COALESCE(hs.cut_sheet_notes, '') AS notes,
+                   bh.harvest_date, bh.dressed_lbs AS carcass_lbs,
+                   COALESCE(bh.animal_label, '') AS animal_label,
+                   COALESCE(bh.weight_basis, 'hanging') AS weight_basis,
+                   b.name AS batch_name, b.sale_price_per_lb,
+                   COALESCE(b.pickup_date, '') AS pickup_date,
+                   COALESCE(c.name, '') AS customer_name
+            FROM harvest_shares hs
+            JOIN batch_harvests bh ON bh.id = hs.harvest_id
+            JOIN batches b ON b.id = hs.batch_id
+            LEFT JOIN customers c ON c.id = hs.customer_id
+            WHERE b.user_id = ?
+              AND COALESCE(hs.for_sale, 1) = 1
+              AND (
+                LOWER(COALESCE(hs.payment_status, '')) = 'paid'
+                OR LOWER(COALESCE(hs.pickup_status, '')) = 'picked_up'
+              )
+            ORDER BY hs.id ASC
             """,
             (owner_uid,),
         ).fetchall()
@@ -374,6 +404,73 @@ def list_homestead_paid_transactions(
             """,
             (owner_uid,),
         ).fetchall()
+
+    def _accumulate_group(
+        buckets: dict[tuple, dict],
+        key: tuple,
+        *,
+        record_type: str,
+        rec_id: int,
+        batch_id: int,
+        bname: str,
+        customer_name: str,
+        local_date: str,
+        occurred_at: str,
+        sort_ts: str,
+        time_label: str,
+        pm: str,
+        price_cents: int,
+        qty: int,
+        lbs: float,
+        item_name: str,
+        source_id: str | None = None,
+    ) -> None:
+        grp = buckets.get(key)
+        if grp is None:
+            grp = {
+                "source": "homestead",
+                "record_type": record_type,
+                "record_ids": [],
+                "batch_id": batch_id,
+                "batch_name": bname,
+                "customer_name": customer_name or "Walk-in / Unassigned",
+                "date_str": local_date,
+                "occurred_at": occurred_at,
+                "sort_ts": sort_ts,
+                "time_label": time_label,
+                "total_cents": 0,
+                "units": 0,
+                "total_lbs": 0.0,
+                "pay_method": pm,
+                "pay_label": pm.capitalize() if pm else "Untagged",
+                "payment_type": pm,
+                "status": "completed",
+                "cash_received_cents": None,
+                "change_cents": None,
+                "items": [],
+            }
+            if source_id:
+                grp["source_id"] = source_id
+            buckets[key] = grp
+
+        grp["record_ids"].append(rec_id)
+        grp["total_cents"] += price_cents
+        grp["units"] += qty
+        grp["total_lbs"] = round(grp["total_lbs"] + lbs, 2)
+        if sort_ts > grp["sort_ts"]:
+            grp["sort_ts"] = sort_ts
+            grp["occurred_at"] = occurred_at
+            grp["time_label"] = time_label
+        grp["items"].append(
+            {
+                "id": rec_id,
+                "name_snapshot": item_name,
+                "quantity": qty,
+                "unit_price_cents": price_cents,
+                "subtotal_cents": price_cents,
+                "is_fee": False,
+            }
+        )
 
     grouped_harvests: dict[tuple, dict] = {}
     for r in harvest_rows:
@@ -398,59 +495,85 @@ def list_homestead_paid_transactions(
         item_name = f"{bname} · {lbs:.2f} lb" + (f" ({note})" if note else "")
 
         cid = int(r["customer_id"]) if r["customer_id"] else None
-        if cid is not None:
-            key = ("harvest", int(r["batch_id"]), cid, local_date, pm)
+        key = ("harvest", int(r["batch_id"]), cid, local_date, pm) if cid is not None else ("harvest_single", int(r["id"]))
+        _accumulate_group(
+            grouped_harvests,
+            key,
+            record_type="harvest",
+            rec_id=int(r["id"]),
+            batch_id=int(r["batch_id"]),
+            bname=bname,
+            customer_name=str(r["customer_name"] or "").strip(),
+            local_date=local_date,
+            occurred_at=occurred_at,
+            sort_ts=sort_ts,
+            time_label=time_label,
+            pm=pm,
+            price_cents=price_cents,
+            qty=qty,
+            lbs=lbs,
+            item_name=item_name,
+        )
+
+    grouped_shares: dict[tuple, dict] = {}
+    for r in share_rows:
+        local_date, sort_ts, occurred_at, time_label = _resolve_harvest_timestamp(
+            r["paid_at"], r["pickup_date"], r["harvest_date"], tz
+        )
+        if date_from and local_date < date_from:
+            continue
+        if date_to and local_date > date_to:
+            continue
+
+        pm = _safe_pm(r["payment_method"])
+        if r["share_weight_lbs"] is not None:
+            lbs = round(max(0.0, float(r["share_weight_lbs"])), 2)
         else:
-            key = ("harvest_single", int(r["id"]))
+            lbs = round(max(0.0, float(r["carcass_lbs"] or 0.0)) * float(r["share_fraction"] or 1.0), 2)
+        if r["actual_sale_price"] is not None:
+            amt_dollars = float(r["actual_sale_price"] or 0.0)
+        else:
+            amt_dollars = round(lbs * float(r["sale_price_per_lb"] or 0.0), 2)
+        price_cents = int(round(max(0.0, amt_dollars) * 100))
 
-        grp = grouped_harvests.get(key)
-        if grp is None:
-            grp = {
-                "source": "homestead",
-                "record_type": "harvest",
-                "record_ids": [],
-                "batch_id": int(r["batch_id"]),
-                "batch_name": bname,
-                "customer_name": str(r["customer_name"] or "").strip() or "Walk-in / Unassigned",
-                "date_str": local_date,
-                "occurred_at": occurred_at,
-                "sort_ts": sort_ts,
-                "time_label": time_label,
-                "total_cents": 0,
-                "units": 0,
-                "total_lbs": 0.0,
-                "pay_method": pm,
-                "pay_label": pm.capitalize() if pm else "Untagged",
-                "payment_type": pm,
-                "status": "completed",
-                "cash_received_cents": None,
-                "change_cents": None,
-                "items": [],
-            }
-            grouped_harvests[key] = grp
+        slot_raw = str(r["share_slot"] or "").strip().lower()
+        slot_lbl = "Half A" if slot_raw == "half_a" else ("Half B" if slot_raw == "half_b" else "Whole")
+        carcass_lbl = str(r["animal_label"] or "").strip() or f"Carcass #{int(r['harvest_id'])}"
+        basis = str(r["weight_basis"] or "hanging").strip().lower()
+        note = str(r["notes"] or "").strip()
+        bname = str(r["batch_name"] or "Batch")
+        item_name = f"{bname} · {carcass_lbl} {slot_lbl} · {lbs:.1f} lb {basis}" + (f" ({note})" if note else "")
 
-        grp["record_ids"].append(int(r["id"]))
-        grp["total_cents"] += price_cents
-        grp["units"] += qty
-        grp["total_lbs"] = round(grp["total_lbs"] + lbs, 2)
-        if sort_ts > grp["sort_ts"]:
-            grp["sort_ts"] = sort_ts
-            grp["occurred_at"] = occurred_at
-            grp["time_label"] = time_label
-        grp["items"].append(
-            {
-                "id": int(r["id"]),
-                "name_snapshot": item_name,
-                "quantity": qty,
-                "unit_price_cents": price_cents,
-                "subtotal_cents": price_cents,
-                "is_fee": False,
-            }
+        cid = int(r["customer_id"]) if r["customer_id"] else None
+        key = ("share", int(r["batch_id"]), cid, local_date, pm) if cid is not None else ("share_single", int(r["id"]))
+        cid_key = cid if cid is not None else f"unassigned_{int(r['id'])}"
+        _accumulate_group(
+            grouped_shares,
+            key,
+            record_type="share",
+            rec_id=int(r["id"]),
+            batch_id=int(r["batch_id"]),
+            bname=bname,
+            customer_name=str(r["customer_name"] or "").strip(),
+            local_date=local_date,
+            occurred_at=occurred_at,
+            sort_ts=sort_ts,
+            time_label=time_label,
+            pm=pm,
+            price_cents=price_cents,
+            qty=1,
+            lbs=lbs,
+            item_name=item_name,
+            source_id=f"homestead:share:{int(r['batch_id'])}:{cid_key}:{local_date}:{pm}",
         )
 
     out: list[dict] = []
     for grp in grouped_harvests.values():
         grp["id"] = f"H-{grp['record_ids'][0]}"
+        grp["record_ids_csv"] = ",".join(str(x) for x in grp["record_ids"])
+        out.append(grp)
+    for grp in grouped_shares.values():
+        grp["id"] = f"HS-{grp['record_ids'][0]}"
         grp["record_ids_csv"] = ",".join(str(x) for x in grp["record_ids"])
         out.append(grp)
 
@@ -537,6 +660,16 @@ def update_homestead_transaction_payment_method(
             cur = conn.execute(
                 f"""
                 UPDATE batch_sales
+                SET payment_method = ?
+                WHERE id IN ({marks})
+                  AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+                """,
+                [pm, *ids, owner_uid],
+            )
+        elif record_type == "share":
+            cur = conn.execute(
+                f"""
+                UPDATE harvest_shares
                 SET payment_method = ?
                 WHERE id IN ({marks})
                   AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)

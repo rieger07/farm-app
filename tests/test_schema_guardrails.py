@@ -229,9 +229,23 @@ class SchemaGuardrailsTest(unittest.TestCase):
             bh_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_harvests)").fetchall()}
             self.assertIn("payment_method", bh_cols)
             self.assertIn("paid_at", bh_cols)
+            self.assertIn("animal_label", bh_cols)
+            self.assertIn("weight_basis", bh_cols)
 
             bs_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_sales)").fetchall()}
             self.assertIn("payment_method", bs_cols)
+
+            b_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batches)").fetchall()}
+            self.assertIn("sale_unit", b_cols)
+            self.assertIn("customer_pays_butcher", b_cols)
+            self.assertIn("butcher_name", b_cols)
+
+            po_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_preorders)").fetchall()}
+            self.assertIn("share_fraction", po_cols)
+            self.assertIn("share_label", po_cols)
+
+            hs_cols = {r["name"] for r in c2.execute("PRAGMA table_info(harvest_shares)").fetchall()}
+            self.assertTrue({"harvest_id", "batch_id", "share_slot", "share_fraction", "butcher_notified_at", "customer_butcher_fee"}.issubset(hs_cols))
 
             b1 = c2.execute("SELECT picking_slug, starter_weeks, lifecycle_type FROM batches WHERE id = 1").fetchone()
             self.assertEqual(b1["picking_slug"], "live-turkey-2026")

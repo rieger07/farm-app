@@ -2615,6 +2615,373 @@ class FarmWebTest(unittest.TestCase):
             404,
         )
 
+    def test_pig_shares_preorders_hanging_weight_butcher_release_and_iron_ledger(self):
+        from datetime import date
+
+        from homestead.db.batches import list_batches
+        from homestead.db.customers import list_batch_preorders, list_customers
+        from homestead.db.shares import list_batch_harvest_shares
+        from homestead.tax_books import build_unified_tax_books
+        from shared.bridge import list_homestead_paid_transactions
+
+        today_iso = date.today().isoformat()
+        yr = date.today().year
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # 1. Create a 3-pig batch in Share Mode with Customer Pays Butcher
+        r_b = self.c.post(
+            "/batches/save",
+            data={
+                "name": "Fall Kunekune Pigs",
+                "species": "kunekune pigs",
+                "start_date": f"{yr}-03-01",
+                "initial_quantity": "3",
+                "unit_cost": "150.00",
+                "avg_dressed_weight": "140.0",
+                "sale_price_per_lb": "6.50",
+                "processing_cost": "175.00",
+                "lifecycle_type": "mammal_breeding",
+                "sale_unit": "shares",
+                "customer_pays_butcher": "1",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_b.status_code, 303)
+        pig_batch = next(b for b in list_batches(user_id=1) if b["name"] == "Fall Kunekune Pigs")
+        bid = int(pig_batch["id"])
+        self.assertEqual(pig_batch["sale_unit"], "shares")
+        self.assertEqual(int(pig_batch["customer_pays_butcher"]), 1)
+
+        # 2. Configure Pre-Orders & Butcher Contact Info
+        r_po_cfg = self.c.post(
+            f"/batches/{bid}/preorders/settings",
+            data={
+                "preorder_enabled": "1",
+                "preorder_cap": "3",
+                "deposit_per_bird": "200.00",
+                "sale_unit": "shares",
+                "customer_pays_butcher": "1",
+                "butcher_name": "Country Butcher",
+                "butcher_phone": "555-999-0000",
+                "butcher_email": "butcher@example.com",
+                "pickup_date": today_iso,
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_po_cfg.status_code, 303)
+        pig_batch = next(b for b in list_batches(user_id=1) if int(b["id"]) == bid)
+        slug = pig_batch["picking_slug"]
+
+        res_html = self.c.get(f"/reserve/{slug}")
+        self.assertEqual(res_html.status_code, 200)
+        self.assertIn("hanging weight", res_html.text)
+        self.assertIn("3 animals (6 halves) left", res_html.text)
+
+        # 3. Public reservations fill 3.0 cap (Half + Half + Whole + Whole) and overflow to waitlist
+        c_pub = TestClient(app)
+        r_alice = c_pub.post(
+            f"/api/reserve/{slug}",
+            json={"name": "Alice", "contact": "555-100-0001", "quantity": 1, "share_size": "half"},
+        )
+        self.assertEqual(r_alice.status_code, 200)
+        d_alice = r_alice.json()
+        self.assertEqual(d_alice["status"], "reserved")
+        self.assertAlmostEqual(d_alice["deposit_total"], 100.00, places=2)
+        self.assertAlmostEqual(d_alice["share_fraction"], 0.5, places=2)
+
+        r_bob = c_pub.post(
+            f"/api/reserve/{slug}",
+            json={"name": "Bob", "contact": "555-100-0002", "quantity": 1, "share_size": "half"},
+        )
+        self.assertEqual(r_bob.json()["status"], "reserved")
+
+        r_charlie = c_pub.post(
+            f"/api/reserve/{slug}",
+            json={"name": "Charlie", "contact": "555-100-0003", "quantity": 1, "share_size": "whole"},
+        )
+        self.assertEqual(r_charlie.json()["status"], "reserved")
+        self.assertAlmostEqual(r_charlie.json()["deposit_total"], 200.00, places=2)
+
+        r_dana = c_pub.post(
+            f"/api/reserve/{slug}",
+            json={"name": "Dana", "contact": "555-100-0004", "quantity": 1, "share_size": "whole"},
+        )
+        self.assertEqual(r_dana.json()["status"], "reserved")
+
+        r_eve = c_pub.post(
+            f"/api/reserve/{slug}",
+            json={"name": "Eve", "contact": "555-100-0005", "quantity": 1, "share_size": "half"},
+        )
+        self.assertEqual(r_eve.status_code, 200)
+        self.assertEqual(r_eve.json()["status"], "waitlist")
+
+        preorders = {p["customer_name"]: p for p in list_batch_preorders(bid)}
+        for buyer in ("Alice", "Bob", "Charlie"):
+            po_id = preorders[buyer]["id"]
+            self.assertEqual(
+                self.c.post(f"/batches/{bid}/preorders/{po_id}/mark-paid", data={}, follow_redirects=False).status_code,
+                303,
+            )
+
+        custs = {c["name"]: int(c["id"]) for c in list_customers(1)}
+        alice_id = custs["Alice"]
+        bob_id = custs["Bob"]
+        charlie_id = custs["Charlie"]
+
+        # 4. Drop-off day logging with dressed_lbs=0 allowed in Share Mode
+        r_h1 = self.c.post(
+            f"/api/batches/{bid}/harvest",
+            json={
+                "harvest_date": today_iso,
+                "animal_label": "Pig #1 (Spot)",
+                "dressed_lbs": 0,
+                "live_weight_lbs": 235,
+                "split_mode": "halves",
+                "weight_basis": "hanging",
+                "for_sale": True,
+            },
+        )
+        self.assertEqual(r_h1.status_code, 200)
+        t1 = r_h1.json()
+        self.assertEqual(t1["harvested_head"], 1)
+        pig1 = t1["entries"][0]
+        pig1_id = pig1["id"]
+        half_a_id = pig1["shares"][0]["id"]
+        half_b_id = pig1["shares"][1]["id"]
+
+        # Assigning Alice & Bob auto-credits $100 pre-order deposits proportionally
+        self.assertEqual(
+            self.c.post(
+                f"/api/batches/{bid}/shares/{half_a_id}/assign",
+                json={"customer_id": alice_id, "for_sale": True},
+            ).status_code,
+            200,
+        )
+        r_bob_assign = self.c.post(
+            f"/api/batches/{bid}/shares/{half_b_id}/assign",
+            json={"customer_id": bob_id, "for_sale": True},
+        )
+        self.assertEqual(r_bob_assign.status_code, 200)
+
+        shares_after_p1 = list_batch_harvest_shares(bid)
+        sh_a = next(s for s in shares_after_p1 if int(s["id"]) == half_a_id)
+        sh_b = next(s for s in shares_after_p1 if int(s["id"]) == half_b_id)
+        self.assertAlmostEqual(sh_a["deposit_paid"], 100.00, places=2)
+        self.assertAlmostEqual(sh_b["deposit_paid"], 100.00, places=2)
+        self.assertEqual(sh_a["payment_status"], "deposit")
+
+        # Merging 2 halves with two distinct customers is rejected (400)
+        r_merge_err = self.c.post(
+            f"/api/batches/{bid}/harvest/{pig1_id}/split-mode",
+            json={"split_mode": "whole"},
+        )
+        self.assertEqual(r_merge_err.status_code, 400)
+
+        # Pig #2 Whole carcass (0 lb pending) -> Charlie ($200 auto-deposit)
+        r_h2 = self.c.post(
+            f"/api/batches/{bid}/harvest",
+            json={
+                "harvest_date": today_iso,
+                "animal_label": "Pig #2 (Ginger)",
+                "dressed_lbs": 0,
+                "split_mode": "whole",
+                "weight_basis": "hanging",
+            },
+        )
+        self.assertEqual(r_h2.status_code, 200)
+        pig2 = next(e for e in r_h2.json()["entries"] if e["animal_label"] == "Pig #2 (Ginger)")
+        pig2_id = pig2["id"]
+        pig2_sh_id = pig2["shares"][0]["id"]
+        self.c.post(
+            f"/api/batches/{bid}/shares/{pig2_sh_id}/assign",
+            json={"customer_id": charlie_id, "for_sale": True},
+        )
+
+        # Pig #3 Halves (130 lb hanging, farm-paid processing $175): Half A = Home Freezer, Half B = Available
+        r_h3 = self.c.post(
+            f"/api/batches/{bid}/harvest",
+            json={
+                "harvest_date": today_iso,
+                "animal_label": "Pig #3 (Home)",
+                "dressed_lbs": 130.0,
+                "processing_cost_total": 175.00,
+                "split_mode": "halves",
+                "weight_basis": "hanging",
+            },
+        )
+        self.assertEqual(r_h3.status_code, 200)
+        pig3 = next(e for e in r_h3.json()["entries"] if e["animal_label"] == "Pig #3 (Home)")
+        pig3_ha_id = pig3["shares"][0]["id"]
+        r_freezer = self.c.post(
+            f"/api/batches/{bid}/shares/{pig3_ha_id}/assign",
+            json={"for_sale": False},
+        )
+        self.assertEqual(r_freezer.status_code, 200)
+        tally_now = r_freezer.json()
+        self.assertEqual(tally_now["harvested_head"], 3)
+        self.assertEqual(len(tally_now["shares"]), 5)
+
+        # 5. Butcher hanging weight callback updates prices & balances dynamically
+        self.assertEqual(
+            self.c.post(f"/api/batches/{bid}/harvest/{pig1_id}/update", json={"dressed_lbs": 144.0}).status_code,
+            200,
+        )
+        r_upd2 = self.c.post(f"/api/batches/{bid}/harvest/{pig2_id}/update", json={"dressed_lbs": 150.0})
+        self.assertEqual(r_upd2.status_code, 200)
+        upd_shares = {int(s["id"]): s for s in r_upd2.json()["shares"]}
+        self.assertAlmostEqual(upd_shares[half_a_id]["effective_lbs"], 72.0, places=2)
+        self.assertAlmostEqual(upd_shares[half_a_id]["est_price"], 468.00, places=2)
+        self.assertAlmostEqual(upd_shares[half_a_id]["balance_due"], 368.00, places=2)
+        self.assertAlmostEqual(upd_shares[pig2_sh_id]["est_price"], 975.00, places=2)
+        self.assertAlmostEqual(upd_shares[pig2_sh_id]["balance_due"], 775.00, places=2)
+
+        # 6. Informational customer butcher fee ($185) excluded from Schedule F Processing; freezer half included
+        r_bfee = self.c.post(
+            f"/api/batches/{bid}/shares/{half_a_id}/assign",
+            json={
+                "customer_id": alice_id,
+                "for_sale": True,
+                "deposit_paid": 100.00,
+                "payment_status": "deposit",
+                "customer_butcher_fee": 185.00,
+                "cut_sheet_notes": "No jowl, double smoked bacon",
+            },
+        )
+        self.assertEqual(r_bfee.status_code, 200)
+        books_before = build_unified_tax_books(1, merchant_id=1, tax_year=yr)
+        proc_entries = [e for e in books_before["entries"] if e["source_key"] == "processing"]
+        self.assertAlmostEqual(sum(e["amount"] for e in proc_entries), 175.00, places=2)
+        self.assertAlmostEqual(books_before["totals"]["homestead_income"], 0.0, places=2)
+        frz = next(f for f in books_before["freezer_notes"] if f["batch_name"] == "Fall Kunekune Pigs")
+        self.assertAlmostEqual(frz["freezer_lbs"], 65.0, places=2)
+
+        # 7. Pickup Day & Butcher Release + Iron Ledger verification (zero double-booking)
+        pu_html = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn("Pickup Day &amp; Butcher Release", pu_html)
+        self.assertIn("Country Butcher", pu_html)
+        self.assertIn("$368.00", pu_html)
+
+        r_settle = self.c.post(
+            f"/batches/{bid}/pickup/{alice_id}/settle-shares",
+            data={
+                "collected_today": "368.00",
+                "payment_method": "venmo",
+                "action": "pay_only",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_settle.status_code, 303)
+        pu_after_pay = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn("Paid · Notify Butcher", pu_after_pay)
+        self.assertIn("Copy All Paid Releases", pu_after_pay)
+
+        ledger_txns = list_homestead_paid_transactions(merchant_id=1)
+        self.assertEqual(len(ledger_txns), 1)
+        self.assertEqual(ledger_txns[0]["record_type"], "share")
+        self.assertEqual(ledger_txns[0]["total_cents"], 46800)
+        self.assertEqual(ledger_txns[0]["pay_method"], "venmo")
+        self.assertAlmostEqual(
+            build_unified_tax_books(1, merchant_id=1, tax_year=yr)["totals"]["homestead_income"],
+            468.00,
+            places=2,
+        )
+
+        # Release All Paid releases ONLY Alice; Bob & Charlie remain un-released
+        self.assertEqual(
+            self.c.post(f"/batches/{bid}/pickup/butcher-release-all", follow_redirects=False).status_code,
+            303,
+        )
+        shares_rel = {int(s["id"]): s for s in list_batch_harvest_shares(bid)}
+        self.assertTrue(shares_rel[half_a_id]["butcher_notified_at"])
+        self.assertFalse(shares_rel[half_b_id]["butcher_notified_at"])
+        self.assertFalse(shares_rel[pig2_sh_id]["butcher_notified_at"])
+
+        # Mark picked up, edit payment method -> check, check CRM & CSV
+        self.assertEqual(
+            self.c.post(
+                f"/batches/{bid}/pickup/{alice_id}/settle-shares",
+                data={"action": "mark_picked_up"},
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+        self.assertEqual(
+            self.c.post(
+                f"/batches/{bid}/pickup/{alice_id}/payment-method",
+                data={"payment_method": "check"},
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+        ledger_after_pm = list_homestead_paid_transactions(merchant_id=1)
+        self.assertEqual(len(ledger_after_pm), 1)
+        self.assertEqual(ledger_after_pm[0]["pay_method"], "check")
+
+        crm_html = self.c.get(f"/customers?selected={alice_id}")
+        self.assertEqual(crm_html.status_code, 200)
+        self.assertIn("Pig #1 (Spot) · Half A", crm_html.text)
+        self.assertIn("Butcher Released", crm_html.text)
+
+        csv_resp = self.c.get(f"/batches/{bid}/harvest.csv")
+        self.assertEqual(csv_resp.status_code, 200)
+        self.assertIn("Pig #1 (Spot)", csv_resp.text)
+        self.assertIn("Freezer / Keep", csv_resp.text)
+
+        # Public /pick/<slug> shows Share Mode safely when enabled (zero buyer PII) & supports atomic claim
+        self.c.post(f"/api/batches/{bid}/picking", json={"picking_enabled": True})
+        pick_pub = c_pub.get(f"/pick/{slug}")
+        self.assertEqual(pick_pub.status_code, 200)
+        self.assertIn("Pig #3 (Home)", pick_pub.text)
+        self.assertIn("Half B", pick_pub.text)
+        self.assertNotIn("Alice", pick_pub.text)
+
+        pig3_hb_id = pig3["shares"][1]["id"]
+        id_resp = c_pub.post(
+            f"/api/pick/{slug}/identify",
+            json={"name": "Dana", "contact": "555-100-0004"},
+        )
+        self.assertEqual(id_resp.status_code, 200)
+        claim_resp = c_pub.post(
+            f"/api/pick/{slug}/claim/{pig3_hb_id}",
+            json={"customer_id": id_resp.json()["customer_id"]},
+        )
+        self.assertEqual(claim_resp.status_code, 200)
+        self.assertEqual(claim_resp.json()["bird"]["label"], "Pig #3 (Home) · Half B")
+
+        # 8. Backward compatibility: Whole-bird poultry batch still rejects 0 lb
+        self.c.post(
+            "/batches/save",
+            data={
+                "name": "Spring Broilers",
+                "species": "chicken chicks",
+                "start_date": f"{yr}-04-01",
+                "initial_quantity": "10",
+                "sale_price_per_lb": "6.50",
+            },
+            follow_redirects=False,
+        )
+        poultry_id = next(int(b["id"]) for b in list_batches(user_id=1) if b["name"] == "Spring Broilers")
+        self.assertEqual(
+            self.c.post(
+                f"/api/batches/{poultry_id}/harvest",
+                json={"harvest_date": today_iso, "head_count": 1, "dressed_lbs": 0},
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.c.post(
+                f"/api/batches/{poultry_id}/harvest",
+                json={"harvest_date": today_iso, "head_count": 1, "dressed_lbs": 4.8},
+            ).status_code,
+            200,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

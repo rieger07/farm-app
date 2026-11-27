@@ -5,7 +5,7 @@
 <div class="pagehead">
   <div>
     <h1>{{ b.name }} · Pre-Orders</h1>
-    <p class="sub">{{ b.species|title }} · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb · Target process {{ s.proc_date }}</p>
+    <p class="sub">{{ b.species|title }} · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb{{ ' hanging wt' if is_share_mode else '' }} · Target process {{ s.proc_date }}</p>
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
@@ -14,18 +14,24 @@
 <div class="cards four">
   <div class="card">
     <small>Reserved / Cap</small>
-    <div class="big">{{ reserved_qty }} / {{ cap }}</div>
-    <small>{% if spots_left > 0 %}{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left{% else %}Full — Waitlist active{% endif %}</small>
+    <div class="big">{% if is_share_mode %}{{ '%g'|format(reserved_equiv) }}{% else %}{{ reserved_qty }}{% endif %} / {{ cap }}</div>
+    <small>
+      {% if is_share_mode %}
+        {% if spots_left_equiv > 0 %}{{ '%g'|format(spots_left_equiv) }} animal{{ '' if spots_left_equiv == 1 else 's' }} ({{ '%g'|format(spots_left_equiv * 2) }} halves) left{% else %}Full — Waitlist active{% endif %}
+      {% else %}
+        {% if spots_left > 0 %}{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left{% else %}Full — Waitlist active{% endif %}
+      {% endif %}
+    </small>
   </div>
   <div class="card">
     <small>Waitlist</small>
-    <div class="big">{{ waitlist_qty }}</div>
+    <div class="big">{% if is_share_mode %}{{ '%g'|format(waitlist_equiv) }}{% else %}{{ waitlist_qty }}{% endif %}</div>
     <small>{{ waitlist|length }} customer{{ '' if waitlist|length == 1 else 's' }} waiting</small>
   </div>
   <div class="card">
     <small>Deposits Collected</small>
     <div class="big">${{ '%.2f'|format(dep_collected) }}</div>
-    <small>${{ '%.2f'|format(b.deposit_per_bird or 0) }} / bird</small>
+    <small>${{ '%.2f'|format(b.deposit_per_bird or 0) }} / {{ 'whole' if is_share_mode else 'bird' }}{% if is_share_mode %} · ${{ '%.2f'|format((b.deposit_per_bird or 0) * 0.5) }} / half{% endif %}</small>
   </div>
   <div class="card">
     <small>Deposits Pending</small>
@@ -56,10 +62,31 @@
         <input type="checkbox" name="preorder_enabled" value="1" {{ 'checked' if b.preorder_enabled }} style="width:auto">
         <span><b>Enable public pre-order link</b> (auto-switches to Waitlist when full)</span>
       </label>
-      <label>Reservation Cap (birds)
+      <label class="full">Sale Mode
+        <select name="sale_unit" id="po-sale-unit" onchange="togglePoShareSettings()">
+          <option value="whole" {{ 'selected' if not is_share_mode }}>Whole animals (birds)</option>
+          <option value="shares" {{ 'selected' if is_share_mode }}>Shares — ½ &amp; Whole (pigs, beef · hanging wt)</option>
+        </select>
+      </label>
+      <div id="po-butcher-box" class="full fgrid" style="background:var(--surface-soft);border:1px solid var(--line);border-radius:10px;padding:10px" {{ 'hidden' if not is_share_mode }}>
+        <label class="full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="customer_pays_butcher" value="1" {{ 'checked' if b.customer_pays_butcher }} style="width:auto">
+          <span><b>Customers pay butcher directly</b> (hanging weight pricing + Butcher Release checklist)</span>
+        </label>
+        <label>Butcher / Processor Name
+          <input name="butcher_name" value="{{ b.butcher_name or '' }}" placeholder="e.g. Country Smokehouse">
+        </label>
+        <label>Butcher Phone (for SMS release)
+          <input name="butcher_phone" type="tel" value="{{ b.butcher_phone or '' }}" placeholder="555-123-4567">
+        </label>
+        <label class="full">Butcher Email (for release email)
+          <input name="butcher_email" type="email" value="{{ b.butcher_email or '' }}" placeholder="butcher@example.com">
+        </label>
+      </div>
+      <label>Reservation Cap ({{ 'animals' if is_share_mode else 'birds' }})
         <input type="number" name="preorder_cap" min="1" value="{{ b.preorder_cap or '' }}" placeholder="Default: {{ s.surviving_quantity }}">
       </label>
-      <label>Deposit per bird ($)
+      <label>Deposit per Whole {{ 'Animal' if is_share_mode else 'Bird' }} ($)
         <input type="number" name="deposit_per_bird" step="0.01" min="0" value="{{ '%.2f'|format(b.deposit_per_bird or 0) }}">
       </label>
       <label>Pickup Date
@@ -108,6 +135,14 @@
       <label>Quantity
         <input type="number" name="quantity" min="1" value="1" required>
       </label>
+      {% if is_share_mode %}
+      <label>Share Size
+        <select name="share_size">
+          <option value="half">Half Share (½ animal)</option>
+          <option value="whole">Whole Share (1 animal)</option>
+        </select>
+      </label>
+      {% endif %}
       <label>Status
         <select name="status">
           <option value="reserved">Reserved</option>
@@ -144,13 +179,19 @@
     <thead><tr><th>Customer</th><th class="num">Qty</th><th>Deposit</th><th>Notes</th><th>Notify / Actions</th></tr></thead>
     <tbody>
     {% for p in reserved %}
-      {% set exp_dep = (p.quantity * (p.deposit_per_bird or 0)) %}
+      {% set p_frac = p.share_fraction if p.share_fraction is not none else 1.0 %}
+      {% set exp_dep = (p.quantity * p_frac * (p.deposit_per_bird or 0)) %}
       <tr>
         <td>
           <a href="/customers?selected={{ p.customer_id }}" style="text-decoration:none"><b>{{ p.customer_name }}</b></a>
           <small class="muted" style="display:block">{{ p.customer_phone or p.customer_email or 'No contact' }}</small>
         </td>
-        <td class="num"><b>{{ p.quantity }}</b></td>
+        <td class="num">
+          <b>{{ p.quantity }}</b>
+          {% if is_share_mode or p.share_label %}
+          <span class="pill blue">{{ '½ Share' if p_frac <= 0.6 else 'Whole' }}</span>
+          {% endif %}
+        </td>
         <td>
           {% if p.deposit_status == 'paid' or (exp_dep > 0 and p.deposit_paid >= exp_dep) %}
             <span class="pill green">Paid ${{ '%.2f'|format(p.deposit_paid) }}</span>
@@ -202,7 +243,12 @@
           <a href="/customers?selected={{ p.customer_id }}" style="text-decoration:none"><b>{{ p.customer_name }}</b></a>
           <small class="muted" style="display:block">{{ p.customer_phone or p.customer_email or 'No contact' }}</small>
         </td>
-        <td class="num"><b>{{ p.quantity }}</b></td>
+        <td class="num">
+          <b>{{ p.quantity }}</b>
+          {% if is_share_mode or p.share_label %}
+          <span class="pill blue">{{ '½ Share' if (p.share_fraction or 1.0) <= 0.6 else 'Whole' }}</span>
+          {% endif %}
+        </td>
         <td><small>{{ p.notes or '—' }}</small></td>
         <td><small class="muted">{{ p.created_at[:10] }}</small></td>
         <td class="num">
@@ -251,6 +297,11 @@
 {% endif %}
 
 <script>
+function togglePoShareSettings() {
+  const su = document.getElementById('po-sale-unit');
+  const box = document.getElementById('po-butcher-box');
+  if (su && box) box.hidden = su.value !== 'shares';
+}
 function copyText(id, btn) {
   const el = document.getElementById(id);
   if (!el) return;

@@ -4,18 +4,66 @@
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
-    <h1>{{ b.name }} · Pickup Day</h1>
+    <h1>{{ b.name }} · {{ 'Pickup Day & Butcher Release' if is_share_mode else 'Pickup Day' }}</h1>
     <p class="sub">
       {{ b.species|title }}
       {% if b.pickup_date %} · Pickup {{ b.pickup_date }}{% endif %}
       {% if b.pickup_window %} ({{ b.pickup_window }}){% endif %}
       {% if pickup_location %} · {{ pickup_location }}{% endif %}
+      {% if is_share_mode and b.butcher_name %} · Butcher: {{ b.butcher_name }}{% endif %}
     </p>
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 {% include "_batch_stage_bar.html" %}
 
+{% if is_share_mode %}
+<div class="cards four">
+  <div class="card">
+    <small>Awaiting Payment</small>
+    <div class="big">{{ awaiting_payment_count }}</div>
+    <small>${{ '%.2f'|format(total_balance_due) }} farm balance due</small>
+  </div>
+  <div class="card">
+    <small>Paid — Notify Butcher</small>
+    <div class="big">{{ ready_for_butcher_count }}</div>
+    <small>Ready to release to butcher</small>
+  </div>
+  <div class="card">
+    <small>Released / Complete</small>
+    <div class="big">{{ released_count }}</div>
+    <small>{{ completed_groups|length }} customer{{ '' if completed_groups|length == 1 else 's' }} picked up</small>
+  </div>
+  <div class="card">
+    <small>Collected So Far</small>
+    <div class="big">${{ '%.2f'|format(total_collected) }}</div>
+    <small>${{ '%.2f'|format(total_deposits) }} in deposits</small>
+  </div>
+</div>
+
+{% if ready_for_butcher_count > 0 %}
+<div class="card mb-md" style="border-color:var(--amber);background:#fffdf4">
+  <div class="flex-between" style="flex-wrap:wrap;gap:10px">
+    <div>
+      <b>{{ ready_for_butcher_count }} paid customer{{ '' if ready_for_butcher_count == 1 else 's' }} ready to release{% if b.butcher_name %} to {{ b.butcher_name }}{% endif %}</b>
+      <small class="muted" style="display:block">Copy the paid list or message the butcher directly before marking them released.</small>
+    </div>
+    <div class="row" style="gap:6px;flex-wrap:wrap">
+      <button type="button" class="btn sm" onclick='copyLiteralText({{ batch_butcher_release_text|tojson }}, this)'>Copy All Paid Releases</button>
+      {% if b.butcher_phone %}
+      <a class="btn sm" href="sms:{{ b.butcher_phone }}?&body={{ batch_butcher_release_text|urlencode }}">Text Butcher</a>
+      {% endif %}
+      {% if b.butcher_email %}
+      <a class="btn sm" href="mailto:{{ b.butcher_email }}?subject={{ (b.name ~ ' Paid Customer Release')|urlencode }}&body={{ batch_butcher_release_text|urlencode }}">Email Butcher</a>
+      {% endif %}
+      <form method="post" action="/batches/{{ b.id }}/pickup/butcher-release-all" class="inline-form">
+        <button class="btn sm primary">✓ Mark All Paid as Released</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% else %}
 <div class="cards four">
   <div class="card">
     <small>Pending Pickups</small>
@@ -38,6 +86,7 @@
     <small>${{ '%.2f'|format(total_deposits) }} in deposits</small>
   </div>
 </div>
+{% endif %}
 
 {% if not pickup_cfg.venmo_handle and not pickup_cfg.paypal_handle %}
 <div class="notice" style="background:#faf9f3;border-color:var(--line);color:var(--ink)">
@@ -46,11 +95,144 @@
 {% endif %}
 
 <div class="row" style="justify-content:space-between;align-items:center;margin:14px 0 10px;gap:10px;flex-wrap:wrap">
-  <h2 style="margin:0">Waiting for Pickup ({{ pending_groups|length }})</h2>
-  <input id="pu-search" type="search" placeholder="Search customer or bird #..." oninput="filterPickupCards()" style="max-width:280px;margin:0">
+  <h2 style="margin:0">{{ 'Active Customers' if is_share_mode else 'Waiting for Pickup' }} ({{ pending_groups|length }})</h2>
+  <input id="pu-search" type="search" placeholder="Search customer or {{ 'carcass' if is_share_mode else 'bird #' }}..." oninput="filterPickupCards()" style="max-width:280px;margin:0">
 </div>
 
 <div id="pu-pending-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:22px">
+{% if is_share_mode %}
+  {% for g in pending_groups %}
+  <div class="card pu-card" data-search="{{ (g.name ~ ' ' ~ g.phone ~ ' ' ~ g.email ~ ' ' ~ g.share_labels)|lower }}" style="margin-bottom:0;display:flex;flex-direction:column;gap:10px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+      <div>
+        <a href="/customers?selected={{ g.customer_id }}" style="text-decoration:none"><b style="font-size:17px">{{ g.name }}</b></a>
+        <small class="muted" style="display:block">{{ g.phone or g.email or 'No contact on file' }}</small>
+      </div>
+      <div style="text-align:right">
+        {% if g.balance_due > 0 %}
+          <small class="muted" style="display:block">Farm balance</small>
+          <b id="pu-bal-disp-{{ g.customer_id }}" style="font-size:22px;color:var(--green)">${{ '%.2f'|format(g.balance_due) }}</b>
+        {% elif g.all_paid and g.all_butcher_notified %}
+          <span class="pill green">Butcher Released ✓</span>
+        {% elif g.all_paid %}
+          <span class="pill amber">Paid · Notify Butcher</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px">
+      {% set multi = g.pending_shares|length > 1 %}
+      {% for sh in g.pending_shares %}
+      <div class="row" style="justify-content:space-between;align-items:center;padding:4px 0{% if not loop.last %};border-bottom:1px solid var(--line){% endif %}">
+        {% if multi %}
+        <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px">
+          <input type="checkbox" name="share_ids" value="{{ sh.id }}" form="pu-form-{{ g.customer_id }}" checked
+                 class="pu-bird-cb-{{ g.customer_id }}" data-num="{{ sh.carcass_label ~ ' ' ~ sh.slot_label }}" data-due="{{ '%.2f'|format(sh.due_amt) }}"
+                 onchange="recalcPickupCard({{ g.customer_id }})">
+          <span><b>{{ sh.carcass_label }} · {{ sh.slot_label }}</b>
+            {% if sh.weight_pending %}<span class="pill amber">Pending hanging wt</span>{% else %} · {{ '%.1f'|format(sh.effective_lbs) }} lb {{ sh.weight_basis }}{% endif %}
+          </span>
+        </label>
+        {% else %}
+        <input type="hidden" name="share_ids" value="{{ sh.id }}" form="pu-form-{{ g.customer_id }}">
+        <span><b>{{ sh.carcass_label }} · {{ sh.slot_label }}</b>
+          {% if sh.weight_pending %}<span class="pill amber">Pending hanging wt</span>{% else %} · {{ '%.1f'|format(sh.effective_lbs) }} lb {{ sh.weight_basis }}{% endif %}
+        </span>
+        {% endif %}
+        <b>{% if sh.weight_pending and sh.actual_sale_price is none %}TBD{% else %}${{ '%.2f'|format(sh.effective_price) }}{% endif %}</b>
+      </div>
+      {% if sh.cut_sheet_notes %}<small class="muted" style="display:block;padding-bottom:3px">Cuts: {{ sh.cut_sheet_notes }}</small>{% endif %}
+      {% endfor %}
+      {% if g.pending_deposits_paid > 0 %}
+      <div class="row" style="justify-content:space-between;padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);color:var(--green)">
+        <span>Deposit credited</span>
+        <b>-${{ '%.2f'|format(g.pending_deposits_paid) }}</b>
+      </div>
+      {% endif %}
+      {% if g.customer_butcher_fees_total > 0 %}
+      <div class="row" style="justify-content:space-between;padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);color:var(--muted)">
+        <span>Direct butcher fee (memo)</span>
+        <span>${{ '%.2f'|format(g.customer_butcher_fees_total) }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if not g.all_paid %}
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        {% if pickup_cfg.venmo_handle and g.balance_due > 0 %}
+        <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
+          onclick='openPickupQr("venmo", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.pending_share_labels|tojson }})'>
+          Venmo QR
+        </button>
+        {% endif %}
+        {% if pickup_cfg.paypal_handle and g.balance_due > 0 %}
+        <button type="button" class="btn sm" style="border-color:#2f6f9f;color:#1d4f7a;background:#eef6fc;font-weight:600"
+          onclick='openPickupQr("paypal", {{ g.customer_id }}, {{ g.name|tojson }}, {{ g.pending_share_labels|tojson }})'>
+          PayPal QR
+        </button>
+        {% endif %}
+        {% set rem_msg = 'Hi ' ~ g.name ~ '! Your ' ~ b.name ~ ' order (' ~ g.pending_share_labels ~ ') has a farm balance of $' ~ ('%.2f'|format(g.balance_due)) ~ '. Once settled, we will release your order with the butcher for pickup!' %}
+        {% if g.phone %}<a class="btn sm" href="sms:{{ g.phone }}?&body={{ rem_msg|urlencode }}">Text balance</a>{% endif %}
+        {% if g.email %}<a class="btn sm" href="mailto:{{ g.email }}?subject={{ (b.name ~ ' Balance & Butcher Release')|urlencode }}&body={{ rem_msg|urlencode }}">Email</a>{% endif %}
+      </div>
+
+      <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/settle-shares" id="pu-form-{{ g.customer_id }}" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
+        <input type="hidden" name="action" id="pu-act-{{ g.customer_id }}" value="pay_only">
+        <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <label style="flex:1;min-width:105px;margin:0;font-size:12px">
+            Collected today ($)
+            <input type="number" step="0.01" min="0" name="collected_today" id="pu-amt-{{ g.customer_id }}" value="{{ '%.2f'|format(g.balance_due) }}" style="margin-top:2px">
+          </label>
+          <label style="min-width:105px;margin:0;font-size:12px">
+            Paid by
+            <select name="payment_method" id="pu-pm-{{ g.customer_id }}" style="margin-top:2px">
+              <option value="cash">Cash</option>
+              <option value="venmo">Venmo</option>
+              <option value="paypal">PayPal</option>
+              <option value="card">Card</option>
+              <option value="check">Check</option>
+            </select>
+          </label>
+        </div>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button type="submit" class="btn sm" style="flex:1" onclick="document.getElementById('pu-act-{{ g.customer_id }}').value='pay_only'">✓ Mark Farm Paid</button>
+          <button type="submit" class="btn primary sm" id="pu-sub-{{ g.customer_id }}" style="flex:1" onclick="document.getElementById('pu-act-{{ g.customer_id }}').value='pay_and_release'">✓ Paid &amp; Release</button>
+        </div>
+      </form>
+    {% elif not g.all_butcher_notified %}
+      {% set b_rel_msg = 'Hi ' ~ (b.butcher_name or 'Butcher') ~ ' — ' ~ g.name ~ ' has paid the farm in full for ' ~ g.pending_share_labels ~ ' (' ~ b.name ~ ') and is cleared to pay processing and pick up.' %}
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn sm" onclick='copyLiteralText({{ b_rel_msg|tojson }}, this)'>Copy Butcher Notice</button>
+        {% if b.butcher_phone %}<a class="btn sm" href="sms:{{ b.butcher_phone }}?&body={{ b_rel_msg|urlencode }}">Text Butcher</a>{% endif %}
+        {% if b.butcher_email %}<a class="btn sm" href="mailto:{{ b.butcher_email }}?subject={{ ('Release: ' ~ g.name ~ ' - ' ~ b.name)|urlencode }}&body={{ b_rel_msg|urlencode }}">Email Butcher</a>{% endif %}
+      </div>
+      <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/butcher-release" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
+        <input type="hidden" name="notified" value="1">
+        <button class="btn primary wide">✓ Mark Butcher Notified</button>
+      </form>
+    {% else %}
+      <div class="flex-between" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line);gap:8px;flex-wrap:wrap">
+        <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/butcher-release" class="inline-form">
+          <input type="hidden" name="notified" value="0">
+          <button class="link" style="font-size:12px">Unrelease</button>
+        </form>
+        <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/settle-shares" class="inline-form" style="flex:1">
+          <input type="hidden" name="action" value="mark_picked_up">
+          <button class="btn primary wide">✓ Mark Picked Up</button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card empty" style="grid-column:1/-1">
+    {% if completed_groups %}
+      All shares for this batch have been paid, released, and picked up!
+    {% else %}
+      No customers have assigned shares yet. Assign shares in <a href="/batches/{{ b.id }}/harvest">Harvest Tally</a> or open <a href="/batches/{{ b.id }}/harvest">Public Picking</a>.
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
 {% for g in pending_groups %}
   <div class="card pu-card" data-search="{{ (g.name ~ ' ' ~ g.phone ~ ' ' ~ g.email ~ ' ' ~ g.bird_nums_label)|lower }}" style="margin-bottom:0;display:flex;flex-direction:column;gap:10px">
     <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
@@ -150,18 +332,19 @@
     {% endif %}
   </div>
 {% endfor %}
+{% endif %}
 </div>
 
 {% if completed_groups %}
 <details class="card table-card">
   <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Completed Pickups ({{ completed_groups|length }})</summary>
   <table>
-    <thead><tr><th>Customer</th><th>Birds</th><th class="num">Weight</th><th class="num">Total Paid</th><th>Payment</th><th></th></tr></thead>
+    <thead><tr><th>Customer</th><th>{{ 'Shares' if is_share_mode else 'Birds' }}</th><th class="num">Weight</th><th class="num">Total Paid</th><th>Payment</th><th></th></tr></thead>
     <tbody>
     {% for g in completed_groups %}
       <tr>
         <td><b>{{ g.name }}</b><small class="muted" style="display:block">{{ g.phone or g.email or '' }}</small></td>
-        <td>Bird {{ g.bird_nums_label }}</td>
+        <td>{{ g.share_labels if is_share_mode else ('Bird ' ~ g.bird_nums_label) }}</td>
         <td class="num">{{ '%.2f'|format(g.total_lbs) }} lb</td>
         <td class="num"><b>${{ '%.2f'|format(g.effective_total) }}</b></td>
         <td>
@@ -205,7 +388,7 @@
   </div>
   <div class="row" style="justify-content:space-between;gap:8px">
     <button type="button" class="btn" onclick="document.getElementById('pu-qrm').close()">Close</button>
-    <button type="button" id="pu-qr-done" class="btn primary" style="flex:1">Payment received · Mark Paid &amp; Picked Up</button>
+    <button type="button" id="pu-qr-done" class="btn primary" style="flex:1">{{ 'Payment received · Mark Farm Paid' if is_share_mode else 'Payment received · Mark Paid & Picked Up' }}</button>
   </div>
 </dialog>
 
@@ -213,11 +396,24 @@
 <script src="{{ shared_asset('pay_qr.js') }}"></script>
 <script>
 const BATCH_NAME = {{ b.name|tojson }};
+const IS_SHARE_MODE = {{ is_share_mode|tojson }};
 const VENMO_HANDLE = {{ (pickup_cfg.venmo_handle or '')|tojson }};
 const PAYPAL_HANDLE = {{ (pickup_cfg.paypal_handle or '')|tojson }};
 let activeQrCid = null;
 let activeQrProvider = 'cash';
 let activeQrUrl = '';
+
+async function copyLiteralText(text, btn) {
+  if (!text) return;
+  const orig = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch (e) {
+    window.prompt('Copy:', text);
+  }
+}
 
 function filterPickupCards() {
   const q = (document.getElementById('pu-search').value || '').trim().toLowerCase();
@@ -238,22 +434,30 @@ function recalcPickupCard(cid) {
   const btn = document.getElementById('pu-sub-' + cid);
   if (btn) {
     btn.disabled = checked.length === 0;
-    btn.textContent = checked.length === cbs.length
-      ? '✓ Paid & Picked Up'
-      : `✓ Paid & Picked Up (${checked.length} of ${cbs.length})`;
+    if (IS_SHARE_MODE) {
+      btn.textContent = checked.length === cbs.length
+        ? '✓ Paid & Release'
+        : `✓ Paid & Release (${checked.length} of ${cbs.length})`;
+    } else {
+      btn.textContent = checked.length === cbs.length
+        ? '✓ Paid & Picked Up'
+        : `✓ Paid & Picked Up (${checked.length} of ${cbs.length})`;
+    }
   }
 }
 
-function openPickupQr(provider, cid, custName, defaultBirdNums) {
+function openPickupQr(provider, cid, custName, defaultItemNums) {
   activeQrCid = cid;
   activeQrProvider = provider || 'cash';
   const cbs = Array.from(document.querySelectorAll('.pu-bird-cb-' + cid));
-  const birdNums = cbs.length
-    ? cbs.filter(c => c.checked).map(c => '#' + c.dataset.num).join(', ')
-    : defaultBirdNums;
+  const itemLabels = cbs.length
+    ? cbs.filter(c => c.checked).map(c => IS_SHARE_MODE ? c.dataset.num : ('#' + c.dataset.num)).join(', ')
+    : defaultItemNums;
   const amtIn = document.getElementById('pu-amt-' + cid);
   const amtVal = Math.max(0, parseFloat((amtIn && amtIn.value) || '0') || 0);
-  const note = `Pickup: ${BATCH_NAME} (Bird ${birdNums}) - ${custName}`;
+  const note = IS_SHARE_MODE
+    ? `Share balance: ${BATCH_NAME} (${itemLabels}) - ${custName}`
+    : `Pickup: ${BATCH_NAME} (Bird ${itemLabels}) - ${custName}`;
   const handle = provider === 'venmo' ? VENMO_HANDLE : PAYPAL_HANDLE;
   const info = window.PayQR.buildPaymentInfo(provider, handle, amtVal, note);
   if (!info || !info.payUrl) return;
@@ -296,6 +500,8 @@ document.getElementById('pu-qr-done').onclick = function() {
   if (activeQrCid) {
     const sel = document.getElementById('pu-pm-' + activeQrCid);
     if (sel && activeQrProvider) sel.value = activeQrProvider;
+    const act = document.getElementById('pu-act-' + activeQrCid);
+    if (act) act.value = 'pay_only';
     const f = document.getElementById('pu-form-' + activeQrCid);
     if (f) f.submit();
   }

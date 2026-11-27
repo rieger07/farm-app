@@ -9,6 +9,7 @@ from homestead.db.core import (
     get_db_connection,
     get_species_defaults,
 )
+from homestead.db.shares import backfill_batch_harvest_shares, normalize_sale_unit
 from shared.bridge import normalize_homestead_payment_method
 
 
@@ -147,6 +148,9 @@ def add_batch_harvest(
 
 def delete_batch_harvest(harvest_id: int) -> None:
     with get_db_connection() as conn:
+        conn.execute(
+            "DELETE FROM harvest_shares WHERE harvest_id = ?", (int(harvest_id),)
+        )
         conn.execute(
             "DELETE FROM batch_harvests WHERE id = ?", (int(harvest_id),)
         )
@@ -521,6 +525,14 @@ def _normalize_batch_payload(
                 )
             ),
         ),
+        "sale_unit": normalize_sale_unit(batch_data.get("sale_unit"))
+        if "sale_unit" in batch_data
+        else None,
+        "customer_pays_butcher": (
+            1 if batch_data.get("customer_pays_butcher") else 0
+        )
+        if "customer_pays_butcher" in batch_data
+        else None,
         "active": 1 if batch_data.get("active", True) else 0,
         "notes": str(batch_data.get("notes", "")),
     }
@@ -535,44 +547,70 @@ def save_batch(
     norm = _normalize_batch_payload(batch_data, user_id=uid)
     with get_db_connection() as conn:
         if batch_id is not None:
+            set_clauses = [
+                "name = ?",
+                "species = ?",
+                "lifecycle_type = ?",
+                "quantity = ?",
+                "start_date = ?",
+                "end_date = ?",
+                "days_to_birth = ?",
+                "weeks_to_proc = ?",
+                "feed_total = ?",
+                "starter_weeks = ?",
+                "starter_feed_lbs = ?",
+                "grower_weeks = ?",
+                "grower_feed_lbs = ?",
+                "starter_bag_price = ?",
+                "grower_bag_price = ?",
+                "unit_cost = ?",
+                "processing_cost = ?",
+                "expected_yield_lbs = ?",
+                "sale_price_per_lb = ?",
+                "active = ?",
+                "notes = ?",
+            ]
+            params: list[object] = [
+                norm["name"],
+                norm["species"],
+                norm["lifecycle_type"],
+                norm["quantity"],
+                norm["start_date"],
+                norm["end_date"],
+                norm["days_to_birth"],
+                norm["weeks_to_proc"],
+                norm["feed_total"],
+                norm["starter_weeks"],
+                norm["starter_feed_lbs"],
+                norm["grower_weeks"],
+                norm["grower_feed_lbs"],
+                norm["starter_bag_price"],
+                norm["grower_bag_price"],
+                norm["unit_cost"],
+                norm["processing_cost"],
+                norm["expected_yield_lbs"],
+                norm["sale_price_per_lb"],
+                norm["active"],
+                norm["notes"],
+            ]
+            if norm["sale_unit"] is not None:
+                set_clauses.append("sale_unit = ?")
+                params.append(norm["sale_unit"])
+            if norm["customer_pays_butcher"] is not None:
+                set_clauses.append("customer_pays_butcher = ?")
+                params.append(norm["customer_pays_butcher"])
+            params.append(int(batch_id))
             conn.execute(
-                """
-                UPDATE batches
-                SET name = ?, species = ?, lifecycle_type = ?, quantity = ?, start_date = ?, end_date = ?,
-                    days_to_birth = ?, weeks_to_proc = ?, feed_total = ?,
-                    starter_weeks = ?, starter_feed_lbs = ?, grower_weeks = ?, grower_feed_lbs = ?,
-                    starter_bag_price = ?, grower_bag_price = ?, unit_cost = ?,
-                    processing_cost = ?, expected_yield_lbs = ?, sale_price_per_lb = ?, active = ?, notes = ?
-                WHERE id = ?
-                """,
-                (
-                    norm["name"],
-                    norm["species"],
-                    norm["lifecycle_type"],
-                    norm["quantity"],
-                    norm["start_date"],
-                    norm["end_date"],
-                    norm["days_to_birth"],
-                    norm["weeks_to_proc"],
-                    norm["feed_total"],
-                    norm["starter_weeks"],
-                    norm["starter_feed_lbs"],
-                    norm["grower_weeks"],
-                    norm["grower_feed_lbs"],
-                    norm["starter_bag_price"],
-                    norm["grower_bag_price"],
-                    norm["unit_cost"],
-                    norm["processing_cost"],
-                    norm["expected_yield_lbs"],
-                    norm["sale_price_per_lb"],
-                    norm["active"],
-                    norm["notes"],
-                    int(batch_id),
-                ),
+                f"UPDATE batches SET {', '.join(set_clauses)} WHERE id = ?",
+                params,
             )
+            if norm["sale_unit"] == "shares":
+                backfill_batch_harvest_shares(int(batch_id), conn=conn)
             conn.commit()
             return int(batch_id)
         else:
+            s_unit = norm["sale_unit"] or "whole"
+            cust_butcher = int(norm["customer_pays_butcher"] or 0)
             cursor = conn.execute(
                 """
                 INSERT INTO batches (
@@ -580,10 +618,11 @@ def save_batch(
                     days_to_birth, weeks_to_proc, feed_total,
                     starter_weeks, starter_feed_lbs, grower_weeks, grower_feed_lbs,
                     starter_bag_price, grower_bag_price, unit_cost,
-                    processing_cost, expected_yield_lbs, sale_price_per_lb, active, notes,
+                    processing_cost, expected_yield_lbs, sale_price_per_lb,
+                    sale_unit, customer_pays_butcher, active, notes,
                     picking_slug, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uid,
@@ -606,6 +645,8 @@ def save_batch(
                     norm["processing_cost"],
                     norm["expected_yield_lbs"],
                     norm["sale_price_per_lb"],
+                    s_unit,
+                    cust_butcher,
                     norm["active"],
                     norm["notes"],
                     secrets.token_urlsafe(10),
@@ -658,6 +699,9 @@ def acknowledge_milestone(batch_id: int, task: str, done: bool = True) -> None:
 
 def delete_batch(batch_id: int) -> None:
     with get_db_connection() as conn:
+        conn.execute(
+            "DELETE FROM harvest_shares WHERE batch_id = ?", (int(batch_id),)
+        )
         conn.execute(
             "DELETE FROM batch_sales WHERE batch_id = ?", (int(batch_id),)
         )

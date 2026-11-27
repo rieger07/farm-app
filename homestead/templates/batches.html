@@ -74,6 +74,9 @@
   }
   if (lp.name) document.getElementById('bm-name').value = lp.name;
   if (lp.lifecycle_type) document.getElementById('bm-life').value = lp.lifecycle_type;
+  if (lp.sale_unit) document.getElementById('bm-sale-unit').value = lp.sale_unit;
+  document.getElementById('bm-cpb').checked = !!lp.customer_pays_butcher;
+  if (typeof syncBatchShareFields === 'function') syncBatchShareFields();
   if (lp.quantity) document.getElementById('bm-qty').value = String(lp.quantity);
   if (lp.unit_cost !== undefined && lp.unit_cost !== null) document.getElementById('bm-ucost').value = Number(lp.unit_cost).toFixed(2);
   if (lp.notes) document.getElementById('bm-notes').value = lp.notes;

@@ -92,7 +92,7 @@
       {% if other_custs %}
       <details style="margin-bottom:12px;background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
         <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)">Merge duplicate into another customer</summary>
-        <form method="post" action="/customers/{{ sel_customer.id }}/merge" onsubmit="return confirm('Merge {{ sel_customer.name }} into the selected customer? All birds, contact info, and notes will be combined.')" class="row" style="gap:8px;margin-top:8px;align-items:center">
+        <form method="post" action="/customers/{{ sel_customer.id }}/merge" onsubmit="return confirm('Merge this customer into the selected record? All livestock assignments, contact info, and notes will be combined.')" class="row" style="gap:8px;margin-top:8px;align-items:center">
           <select name="target_customer_id" required style="flex:1">
             {% for oc in other_custs %}
             <option value="{{ oc.id }}">{{ oc.name }}{% if oc.phone %} ({{ oc.phone }}){% elif oc.email %} ({{ oc.email }}){% endif %}</option>
@@ -130,14 +130,25 @@
         {% for b in sel_birds %}
           <tr>
             <td>{{ b.harvest_date }}</td>
-            <td><a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a><small>{{ b.species|title }}</small></td>
-            <td class="num">{{ '%.2f'|format(b.dressed_lbs) }} lb <small>{{ b.lb_oz }}</small></td>
+            <td>
+              <a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a>
+              {% if b.share_label %}<span class="pill blue" style="margin-left:4px">{{ b.share_label }}</span>{% endif %}
+              <small>{{ b.species|title }}</small>
+            </td>
+            <td class="num">
+              {% if b.is_share and b.dressed_lbs <= 0 %}
+                <span class="pill amber">Pending hanging wt</span>
+              {% else %}
+                {{ '%.2f'|format(b.dressed_lbs) }} lb <small>{{ b.weight_basis if b.weight_basis == 'hanging' else b.lb_oz }}</small>
+              {% endif %}
+            </td>
             <td class="num">
               <b>${{ '%.2f'|format(b.actual_price) }}</b>
               <small>calc ${{ '%.2f'|format(b.calculated_price) }}{% if b.tip_diff > 0.005 %} (+${{ '%.2f'|format(b.tip_diff) }}){% endif %}</small>
             </td>
             <td>
               <span class="pill {{ 'green' if b.pickup_status == 'picked_up' else 'amber' }}">{{ b.pickup_status|replace('_', ' ')|title }}</span>
+              {% if b.butcher_notified_at %}<span class="pill green" style="margin-left:4px">Butcher Released</span>{% endif %}
               <small>{{ b.payment_status|title }}</small>
             </td>
           </tr>
