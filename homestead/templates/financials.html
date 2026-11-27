@@ -196,6 +196,14 @@
           </div>
           {% if e.can_delete %}
           <div class="row">
+            <button
+              type="button"
+              class="btn sm"
+              data-src="{{ e.source_key }}"
+              data-id="{{ e.entry_id }}"
+              data-group="{{ e.receipt_group_id if e.is_split else '' }}"
+              onclick="openEditReceiptModal(this)"
+            >{{ 'Edit receipt (' ~ e.split_count ~ ')' if (e.is_split and e.receipt_group_id) else 'Edit / Re-allocate' }}</button>
             <form
               method="post"
               action="/expenses/entry/delete"
@@ -321,14 +329,19 @@
 <!-- ==================== MODAL 1: UNIFIED / SPLIT RECEIPT LOGGER ==================== -->
 <dialog id="dlg-receipt">
   <div class="modal-head">
-    <h2>Log Receipt / Expense</h2>
+    <h2 id="rcpt-modal-title">Log Receipt / Expense</h2>
     <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
   </div>
   <form id="rcpt-form" method="post" action="/expenses/receipt" enctype="multipart/form-data" onsubmit="return submitReceiptForm()">
+    <input type="hidden" name="edit_mode" id="rcpt-edit-mode" value="">
+    <input type="hidden" name="orig_group_id" id="rcpt-orig-group" value="">
+    <input type="hidden" name="orig_source_key" id="rcpt-orig-src" value="">
+    <input type="hidden" name="orig_entry_id" id="rcpt-orig-id" value="">
+    <input type="hidden" name="keep_existing_receipt" id="rcpt-keep-existing" value="1">
     <div class="fgrid">
       <label>
         Date
-        <input type="date" name="receipt_date" id="rcpt-date" value="{{ today_iso }}" required>
+        <input type="date" name="receipt_date" id="rcpt-date" value="{{ today_iso }}" required onchange="refreshAllBatchPickers()">
       </label>
       <label>
         Receipt Total ($ optional check)
@@ -358,16 +371,28 @@
         <div id="rcpt-ocr-status" class="ocr-status" hidden></div>
         <div id="rcpt-tax-note" class="ocr-tax-note" hidden></div>
       </div>
+      <div id="rcpt-existing-link" class="notice full" hidden>
+        Current receipt attached: <a id="rcpt-existing-anchor" href="#" target="_blank" rel="noopener">View existing receipt ↗</a>
+        <small class="muted" style="margin-left:6px">(Kept automatically unless replaced above)</small>
+      </div>
       <details class="full">
         <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Or paste an existing receipt URL</summary>
-        <input type="url" name="receipt_url" class="mt-sm" placeholder="https://..." style="width:100%">
+        <input type="url" name="receipt_url" id="rcpt-url" class="mt-sm" placeholder="https://..." style="width:100%">
       </details>
     </div>
 
     <div class="modal-section">
-      <div class="flex-between mb-sm">
+      <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
         <b>Line items / Splits</b>
-        <button type="button" class="btn sm" onclick="addSplitLine()">+ Add split line</button>
+        <div class="row" style="gap:10px;align-items:center">
+          {% if receipt_batches %}
+          <label class="batch-scope-toggle">
+            <input type="checkbox" id="rcpt-show-all-batches" onchange="refreshAllBatchPickers()">
+            Show all batches (incl. future/archived)
+          </label>
+          {% endif %}
+          <button type="button" class="btn sm" onclick="addSplitLine()">+ Add split line</button>
+        </div>
       </div>
       <div id="rcpt-mixed-warn" class="notice warn mb-sm" hidden>Heads up: check for personal/non-deductible items before saving.</div>
       <div id="rcpt-lines"></div>
@@ -377,7 +402,7 @@
     <input type="hidden" name="lines_json" id="rcpt-lines-json">
     <div class="row mt-md" style="justify-content:flex-end">
       <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
-      <button type="submit" class="btn primary">Save receipt</button>
+      <button type="submit" class="btn primary" id="rcpt-submit-btn">Save receipt</button>
     </div>
   </form>
 </dialog>
@@ -414,6 +439,8 @@
 
 <script>
 const FIN_BATCHES = {{ all_batches|tojson }};
+const FIN_RECEIPT_BATCHES = {{ receipt_batches|tojson }};
+const FIN_TODAY = {{ today_iso|tojson }};
 const FIN_BAG_WT = {{ bag_weight|int }};
 const FIN_LAYER_CFG = {{ layer_cfg|tojson }};
 const FIN_CATEGORIES = {{ expense_categories|tojson }};
@@ -493,7 +520,7 @@ function pickVendor(btn) {
   if (v) v.value = btn.dataset.vendor || '';
 }
 
-function buildLayerTagCheckboxes(seq, preselectSpecies) {
+function buildLayerTagCheckboxes(seq, preselectSpecies, speciesTags) {
   const tags = [
     ['all', 'All'],
     ['chicken', 'Chickens'],
@@ -503,12 +530,18 @@ function buildLayerTagCheckboxes(seq, preselectSpecies) {
   if (en.includes('duck') && en.includes('goose')) {
     tags.push(['duck', 'Ducks'], ['goose', 'Geese']);
   }
-  const activeSp = preselectSpecies && ['chicken', 'waterfowl', 'duck', 'goose'].includes(preselectSpecies)
-    ? (en.includes('duck') && en.includes('goose') ? preselectSpecies : (['duck', 'goose'].includes(preselectSpecies) ? 'waterfowl' : preselectSpecies))
-    : 'all';
+  let checkedSet = null;
+  if (Array.isArray(speciesTags) && speciesTags.length) {
+    checkedSet = new Set(speciesTags.map(t => String(t || '').toLowerCase()));
+  } else {
+    const activeSp = preselectSpecies && ['chicken', 'waterfowl', 'duck', 'goose'].includes(preselectSpecies)
+      ? (en.includes('duck') && en.includes('goose') ? preselectSpecies : (['duck', 'goose'].includes(preselectSpecies) ? 'waterfowl' : preselectSpecies))
+      : 'all';
+    checkedSet = new Set([activeSp]);
+  }
   return tags.map(([val, lbl]) =>
     '<label class="tag-chip"><input type="checkbox" class="sl-tag" value="' + val + '"' +
-    (val === activeSp ? ' checked' : '') + ' onchange="syncSplitLayerTags(this)"> ' + lbl + '</label>'
+    (checkedSet.has(val) ? ' checked' : '') + ' onchange="syncSplitLayerTags(this)"> ' + lbl + '</label>'
   ).join('');
 }
 
@@ -560,28 +593,290 @@ function toggleSplitRefund(cb) {
     if (val < 0) amtEl.value = Math.abs(val).toFixed(2);
   }
   syncSplitRefundUi(card);
+  updateBatchAllocPreview(card);
   updateAllocBar();
 }
 
 function onSplitAmountInput(input) {
   input.dataset.manual = '1';
+  const card = input.closest('.split-line');
   const val = parseFloat(input.value || '0');
   if (!Number.isNaN(val) && val < 0) {
-    const card = input.closest('.split-line');
     const cb = card && card.querySelector('.sl-refund');
     if (cb && !cb.checked) {
       cb.checked = true;
       syncSplitRefundUi(card);
     }
   }
+  if (card) updateBatchAllocPreview(card);
   updateAllocBar();
+}
+
+function jsAllocateSignedTotal(total, weights, decimals) {
+  if (!weights.length) return [];
+  const scale = Math.pow(10, decimals);
+  const totalUnits = Math.round(Number(total || 0) * scale);
+  const totalWeight = weights.reduce((a, b) => a + Math.max(0, Number(b || 0)), 0);
+  if (totalWeight <= 0 || totalUnits === 0) return weights.map(() => 0);
+  const sign = totalUnits < 0 ? -1 : 1;
+  const absUnits = Math.abs(totalUnits);
+  const raw = weights.map(w => (absUnits * Math.max(0, Number(w || 0))) / totalWeight);
+  const floors = raw.map(v => Math.floor(v));
+  let rem = absUnits - floors.reduce((a, b) => a + b, 0);
+  if (rem > 0) {
+    const order = weights
+      .map((w, i) => ({ idx: i, frac: raw[i] - floors[i], w: Number(w || 0) }))
+      .sort((a, b) => (b.frac - a.frac) || (b.w - a.w) || (a.idx - b.idx));
+    for (let k = 0; k < rem && k < order.length; k += 1) {
+      floors[order[k].idx] += 1;
+    }
+  }
+  return floors.map(c => Number(((sign * c) / scale).toFixed(decimals)));
+}
+
+function getCurrentReceiptDate() {
+  return ((document.getElementById('rcpt-date') || {}).value || '').trim() || FIN_TODAY;
+}
+
+function batchMatchesDate(b, rdate) {
+  if (!rdate) return Boolean(b.active);
+  return b.start_date <= rdate && rdate <= b.end_date;
+}
+
+function eligibleBatchesForDate(rdate, showAll, keepIds) {
+  const keepSet = new Set((keepIds || []).map(String));
+  return FIN_RECEIPT_BATCHES.filter(
+    b => showAll || keepSet.has(String(b.id)) || batchMatchesDate(b, rdate)
+  );
+}
+
+function batchDemandWeight(b, rdate) {
+  if (rdate && b.transition_date && rdate < b.transition_date && Number(b.starter_weekly_feed || 0) > 0) {
+    return Number(b.starter_weekly_feed);
+  }
+  if (Number(b.grower_weekly_feed || 0) > 0) return Number(b.grower_weekly_feed);
+  if (Number(b.weekly_feed || 0) > 0) return Number(b.weekly_feed);
+  return Math.max(1, Number(b.surviving_quantity || 1));
+}
+
+function getCardSelectedBatchIds(card) {
+  const set = card._selectedBatches instanceof Set ? card._selectedBatches : new Set();
+  return Array.from(set).filter(id => FIN_RECEIPT_BATCHES.some(b => String(b.id) === String(id)));
+}
+
+function getCardAllocMode(card) {
+  const sel = card.querySelector('.sl-alloc-mode');
+  return (sel && sel.value) || card._allocMode || 'demand';
+}
+
+function computeCardAllocationWeights(card, selectedIds, kind, mode) {
+  const rdate = getCurrentReceiptDate();
+  const batches = selectedIds
+    .map(id => FIN_RECEIPT_BATCHES.find(b => String(b.id) === String(id)))
+    .filter(Boolean);
+  if (mode === 'even') {
+    return batches.map(() => 1);
+  }
+  if (mode === 'custom') {
+    const customMap = card._customWeights || {};
+    return batches.map(b => Math.max(0, Number(customMap[String(b.id)] || 0)));
+  }
+  return batches.map(b => batchDemandWeight(b, rdate));
+}
+
+function seedCustomWeightsIfMissing(card, selectedIds, kind) {
+  card._customWeights = card._customWeights || {};
+  const rdate = getCurrentReceiptDate();
+  const batches = selectedIds
+    .map(id => FIN_RECEIPT_BATCHES.find(b => String(b.id) === String(id)))
+    .filter(Boolean);
+  const missing = batches.filter(b => card._customWeights[String(b.id)] === undefined);
+  if (!missing.length) return;
+  if (kind === 'batch_feed') {
+    const bags = Math.abs(parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0);
+    const dw = batches.map(b => batchDemandWeight(b, rdate));
+    const defaults = bags > 0
+      ? jsAllocateSignedTotal(bags, dw, 2)
+      : jsAllocateSignedTotal(100, dw, 1);
+    batches.forEach((b, i) => {
+      if (card._customWeights[String(b.id)] === undefined) {
+        card._customWeights[String(b.id)] = defaults[i];
+      }
+    });
+  } else {
+    const evenPct = jsAllocateSignedTotal(100, batches.map(() => 1), 1);
+    batches.forEach((b, i) => {
+      if (card._customWeights[String(b.id)] === undefined) {
+        card._customWeights[String(b.id)] = evenPct[i];
+      }
+    });
+  }
+}
+
+function refreshAllBatchPickers() {
+  document.querySelectorAll('#rcpt-lines .split-line').forEach(card => {
+    renderCardBatchPicker(card);
+    autoEstimateSplitFeed(card);
+  });
+}
+
+function renderCardBatchPicker(card) {
+  const wrap = card.querySelector('.sl-batch-picker');
+  if (!wrap) return;
+  const kind = (card.querySelector('.sl-kind') || {}).value || 'general';
+  const show = (kind === 'batch_feed' || kind === 'general') && FIN_RECEIPT_BATCHES.length > 0;
+  wrap.hidden = !show;
+  if (!show) return;
+
+  const rdate = getCurrentReceiptDate();
+  const showAll = Boolean((document.getElementById('rcpt-show-all-batches') || {}).checked);
+  const selectedIds = getCardSelectedBatchIds(card);
+  const visibleBatches = eligibleBatchesForDate(rdate, showAll, selectedIds);
+  const mode = getCardAllocMode(card);
+  card._allocMode = mode;
+  if (selectedIds.length >= 2 && mode === 'custom') {
+    seedCustomWeightsIfMissing(card, selectedIds, kind);
+  }
+
+  const labelText = kind === 'batch_feed'
+    ? 'Batches (select 1 or more)'
+    : 'Batch tag / split (optional — leave unchecked for General farm)';
+
+  if (!visibleBatches.length) {
+    wrap.innerHTML =
+      '<div class="mb-sm"><small>' + escapeHtml(labelText) + '</small></div>' +
+      '<small class="muted">No batches active on ' + escapeHtml(rdate) +
+      ' — check "Show all batches (incl. future/archived)" above to assign to another batch.</small>';
+    return;
+  }
+
+  const chipsHtml = visibleBatches.map(b => {
+    const sid = String(b.id);
+    const checked = selectedIds.includes(sid);
+    const inWin = batchMatchesDate(b, rdate);
+    const statusTags = [];
+    if (!b.active) statusTags.push('archived');
+    else if (!inWin) statusTags.push('outside date');
+    const tagStr = statusTags.length ? ' · ' + statusTags.join(', ') : '';
+    const customIn = (checked && selectedIds.length >= 2 && mode === 'custom')
+      ? '<input type="number" class="batch-custom-in" step="0.1" min="0" value="' +
+        escapeHtml(String((card._customWeights || {})[sid] ?? 0)) +
+        '" aria-label="Split weight for ' + escapeHtml(b.name) +
+        '" oninput="onBatchCustomWeightInput(this, \'' + sid + '\')">'
+      : '';
+    return (
+      '<span class="batch-chip' + (checked ? ' on' : '') + '">' +
+        '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0">' +
+          '<input type="checkbox" class="sl-batch-cb" value="' + sid + '"' + (checked ? ' checked' : '') + ' onchange="onBatchChipToggle(this)">' +
+          '<span>' + escapeHtml(b.name) + ' <small>(' + b.surviving_quantity + ' hd' + escapeHtml(tagStr) + ')</small></span>' +
+        '</label>' +
+        customIn +
+      '</span>'
+    );
+  }).join('');
+
+  let allocBarHtml = '';
+  if (selectedIds.length >= 2) {
+    const customLbl = kind === 'batch_feed' ? 'Custom bags / ratio' : 'Custom % / ratio';
+    allocBarHtml =
+      '<div class="batch-alloc-bar">' +
+        '<select class="sl-alloc-mode" onchange="onBatchAllocModeChange(this)">' +
+          '<option value="demand"' + (mode === 'demand' ? ' selected' : '') + '>Auto by feed demand</option>' +
+          '<option value="even"' + (mode === 'even' ? ' selected' : '') + '>Even split</option>' +
+          '<option value="custom"' + (mode === 'custom' ? ' selected' : '') + '>' + customLbl + '</option>' +
+        '</select>' +
+        '<span class="sl-alloc-preview"></span>' +
+      '</div>';
+  }
+
+  wrap.innerHTML =
+    '<div class="mb-sm"><small>' + escapeHtml(labelText) + '</small></div>' +
+    '<div class="batch-alloc-wrap">' + chipsHtml + '</div>' +
+    allocBarHtml;
+
+  if (selectedIds.length >= 2) {
+    updateBatchAllocPreview(card);
+  }
+}
+
+function updateBatchAllocPreview(card) {
+  const prevEl = card && card.querySelector('.sl-alloc-preview');
+  if (!prevEl) return;
+  const kind = (card.querySelector('.sl-kind') || {}).value || 'general';
+  const selectedIds = getCardSelectedBatchIds(card);
+  if (selectedIds.length < 2) {
+    prevEl.textContent = '';
+    return;
+  }
+  const mode = getCardAllocMode(card);
+  const weights = computeCardAllocationWeights(card, selectedIds, kind, mode);
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  if (wSum <= 0) {
+    prevEl.textContent = 'Enter a positive weight to preview split.';
+    return;
+  }
+  const amt = effectiveLineAmount(card);
+  const amtShares = amt !== 0 ? jsAllocateSignedTotal(amt, weights, 2) : [];
+  const rawBags = Math.abs(parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0);
+  const signedBags = amt < 0 ? (rawBags ? -rawBags : 0) : rawBags;
+  const bagShares = kind === 'batch_feed' && signedBags !== 0
+    ? jsAllocateSignedTotal(signedBags, weights, 2)
+    : [];
+
+  const parts = selectedIds.map((sid, idx) => {
+    const b = FIN_RECEIPT_BATCHES.find(x => String(x.id) === String(sid));
+    const bName = b ? b.name : ('Batch #' + sid);
+    const pct = Math.round((weights[idx] / wSum) * 100);
+    const bits = [pct + '%'];
+    if (amtShares.length) bits.push(fmtSignedMoney(amtShares[idx]));
+    if (bagShares.length) bits.push(bagShares[idx] + ' bag');
+    return bName + ': ' + bits.join(' · ');
+  });
+  prevEl.textContent = parts.join(' | ');
+}
+
+function onBatchChipToggle(cb) {
+  const card = cb.closest('.split-line');
+  if (!card) return;
+  card._selectedBatches = card._selectedBatches instanceof Set ? card._selectedBatches : new Set();
+  const sid = String(cb.value || '');
+  if (cb.checked) {
+    card._selectedBatches.add(sid);
+  } else {
+    card._selectedBatches.delete(sid);
+    if (card._customWeights) delete card._customWeights[sid];
+  }
+  if (card._customWeights && getCardAllocMode(card) === 'custom') {
+    card._customWeights = {};
+  }
+  renderCardBatchPicker(card);
+  autoEstimateSplitFeed(card);
+}
+
+function onBatchAllocModeChange(sel) {
+  const card = sel.closest('.split-line');
+  if (!card) return;
+  card._allocMode = sel.value || 'demand';
+  if (card._allocMode === 'custom') {
+    card._customWeights = {};
+    seedCustomWeightsIfMissing(card, getCardSelectedBatchIds(card), (card.querySelector('.sl-kind') || {}).value || 'general');
+  }
+  renderCardBatchPicker(card);
+}
+
+function onBatchCustomWeightInput(input, sid) {
+  const card = input.closest('.split-line');
+  if (!card) return;
+  card._customWeights = card._customWeights || {};
+  card._customWeights[String(sid)] = Math.max(0, parseFloat(input.value || '0') || 0);
+  updateBatchAllocPreview(card);
 }
 
 function addSplitLine(opts) {
   opts = opts || {};
   lineSeq += 1;
   const idx = lineSeq;
-  const kind = opts.kind || (FIN_BATCHES.length ? 'general' : 'general');
+  const kind = opts.kind || 'general';
   const targetEl = document.getElementById('rcpt-target-total');
   const targetRaw = targetEl ? targetEl.value.trim() : '';
   const hasTarget = targetRaw !== '' && !Number.isNaN(Number(targetRaw));
@@ -600,11 +895,6 @@ function addSplitLine(opts) {
     ? (opts.amount === '' ? '' : Math.abs(explicitNum).toFixed(2))
     : (rem !== 0 ? Math.abs(rem).toFixed(2) : '');
 
-  const batchOpts = FIN_BATCHES.map(b =>
-    '<option value="' + b.id + '"' + (String(opts.batchId || '') === String(b.id) ? ' selected' : '') + '>' +
-    escapeHtml(b.name) + (b.active ? '' : ' (archived)') + '</option>'
-  ).join('');
-
   const catOpts = FIN_CATEGORY_OPTIONS.map(([val, lbl]) =>
     '<option value="' + escapeHtml(val) + '"' + (val === (opts.category || 'Supplies & Equipment') ? ' selected' : '') + '>' + escapeHtml(lbl) + '</option>'
   ).join('');
@@ -612,32 +902,43 @@ function addSplitLine(opts) {
   const card = document.createElement('div');
   card.className = 'split-line';
   card.dataset.lineId = String(idx);
+  card._selectedBatches = new Set();
+  if (Array.isArray(opts.batchIds) && opts.batchIds.length) {
+    opts.batchIds.forEach(bid => { if (bid !== '' && bid !== null && bid !== undefined) card._selectedBatches.add(String(bid)); });
+  } else if (opts.batchId !== undefined && opts.batchId !== null && opts.batchId !== '') {
+    card._selectedBatches.add(String(opts.batchId));
+  } else if (kind === 'batch_feed' && FIN_RECEIPT_BATCHES.length) {
+    const showAll = Boolean((document.getElementById('rcpt-show-all-batches') || {}).checked);
+    const elig = eligibleBatchesForDate(getCurrentReceiptDate(), showAll, []);
+    if (elig.length === 1) card._selectedBatches.add(String(elig[0].id));
+  }
+  card._allocMode = opts.allocMode || 'demand';
+
   card.innerHTML =
     '<div class="split-head">' +
       '<select class="sl-kind" onchange="syncSplitLine(this.closest(\'.split-line\'))" style="flex:1;min-width:150px;font-weight:600">' +
         '<option value="general"' + (kind === 'general' ? ' selected' : '') + '>General Farm Expense</option>' +
         '<option value="layer_feed"' + (kind === 'layer_feed' ? ' selected' : '') + '>Laying Flock Feed</option>' +
-        (FIN_BATCHES.length ? '<option value="batch_feed"' + (kind === 'batch_feed' ? ' selected' : '') + '>Meat Batch Feed</option>' : '') +
+        (FIN_RECEIPT_BATCHES.length ? '<option value="batch_feed"' + (kind === 'batch_feed' ? ' selected' : '') + '>Meat Batch Feed</option>' : '') +
       '</select>' +
       '<label class="refund-toggle"><input type="checkbox" class="sl-refund"' + (isRefund ? ' checked' : '') + ' onchange="toggleSplitRefund(this)"> Refund / Credit</label>' +
       '<button type="button" class="btn sm danger sl-remove" onclick="removeSplitLine(this)">Remove</button>' +
     '</div>' +
 
     '<div class="fgrid">' +
-      '<label class="sl-only sl-only-batch" hidden>Batch<select class="sl-batch" onchange="autoEstimateSplitFeed(this.closest(\'.split-line\'))">' + batchOpts + '</select></label>' +
       '<label class="sl-only sl-only-batch" hidden>Phase<select class="sl-bphase" onchange="autoEstimateSplitFeed(this.closest(\'.split-line\'))"><option value="grower">Grower / Finisher</option><option value="starter">Starter</option></select></label>' +
 
       '<label class="sl-only sl-only-layer" hidden>Feed Type<select class="sl-ltype" onchange="autoEstimateSplitFeed(this.closest(\'.split-line\'))"><option value="layer">Layer / Waterfowl Feed</option><option value="scratch">Scratch Grains</option><option value="supplement">Grit / Oyster Shell</option></select></label>' +
-      '<div class="full sl-only sl-only-layer sl-tags-wrap" hidden><small class="mb-sm">Allocate layer feed to</small><div class="row">' + buildLayerTagCheckboxes(idx, opts.species || '') + '</div></div>' +
+      '<div class="full sl-only sl-only-layer sl-tags-wrap" hidden><small class="mb-sm">Allocate layer feed to</small><div class="row">' + buildLayerTagCheckboxes(idx, opts.species || '', opts.speciesTags) + '</div></div>' +
 
       '<label class="sl-only sl-only-feed" hidden><span class="sl-bags-label">Bags (' + FIN_BAG_WT + ' lb)</span><input type="number" class="sl-bags" step="0.5" min="0" value="1" oninput="autoEstimateSplitFeed(this.closest(\'.split-line\'))"></label>' +
       '<label class="sl-only sl-only-feed" hidden><span class="sl-lbs-label">Total weight (lb)</span><input type="number" class="sl-lbs" step="0.1" min="0" value="' + FIN_BAG_WT + '"></label>' +
 
       '<label class="sl-only sl-only-gen">Schedule F Category<select class="sl-cat" onchange="syncGeneralFeedTip(this.closest(\'.split-line\'))">' + catOpts + '</select></label>' +
-      (FIN_BATCHES.length ? '<label class="sl-only sl-only-gen">Batch tag (optional)<select class="sl-gbatch"><option value="">General farm</option>' + batchOpts + '</select></label>' : '') +
 
       '<label><span class="sl-amt-label">Amount ($)</span><input type="number" class="sl-amount" step="0.01" required placeholder="0.00" value="' + initAmt + '" oninput="onSplitAmountInput(this)"></label>' +
       '<label>Notes (optional)<input class="sl-notes" placeholder="e.g. 2 bags pellets, pine shavings"></label>' +
+      '<div class="full sl-batch-picker" hidden></div>' +
       '<small class="full text-amber sl-feed-tip" hidden>Tip: Use "Meat Batch Feed" or "Laying Flock Feed" above if this feed belongs to livestock/layers so weights &amp; batch costs update together.</small>' +
     '</div>';
 
@@ -667,6 +968,7 @@ function addSplitLine(opts) {
     if (lbsEl) lbsEl.value = String(Math.abs(Number(opts.lbs)));
   }
   syncSplitRefundUi(card);
+  updateBatchAllocPreview(card);
   refreshRemoveButtons();
   updateAllocBar();
 }
@@ -682,10 +984,20 @@ function syncSplitLine(card, keepAmount) {
   card.querySelectorAll('.sl-only-layer').forEach(el => { el.hidden = kind !== 'layer_feed'; });
   card.querySelectorAll('.sl-only-feed').forEach(el => { el.hidden = !isFeed; });
   card.querySelectorAll('.sl-only-gen').forEach(el => { el.hidden = kind !== 'general'; });
+  if (kind === 'batch_feed' && getCardSelectedBatchIds(card).length === 0) {
+    const showAll = Boolean((document.getElementById('rcpt-show-all-batches') || {}).checked);
+    const elig = eligibleBatchesForDate(getCurrentReceiptDate(), showAll, []);
+    if (elig.length === 1) {
+      card._selectedBatches = card._selectedBatches || new Set();
+      card._selectedBatches.add(String(elig[0].id));
+    }
+  }
+  renderCardBatchPicker(card);
   syncGeneralFeedTip(card);
   if (isFeed && !keepAmount) {
     autoEstimateSplitFeed(card);
   }
+  updateBatchAllocPreview(card);
   updateAllocBar();
 }
 
@@ -702,22 +1014,27 @@ function autoEstimateSplitFeed(card) {
   const lbsEl = card.querySelector('.sl-lbs');
   const amtEl = card.querySelector('.sl-amount');
   if (lbsEl) lbsEl.value = (bags * FIN_BAG_WT).toFixed(1).replace(/\.0$/, '');
-  if (!amtEl || amtEl.dataset.manual === '1') {
-    updateAllocBar();
-    return;
+  if (amtEl && amtEl.dataset.manual !== '1') {
+    let bagPrice = 22.0;
+    if (kind === 'batch_feed') {
+      const selIds = getCardSelectedBatchIds(card);
+      const phase = (card.querySelector('.sl-bphase') || {}).value || 'grower';
+      const selBatches = selIds
+        .map(id => FIN_RECEIPT_BATCHES.find(x => String(x.id) === String(id)))
+        .filter(Boolean);
+      if (selBatches.length) {
+        bagPrice = selBatches.reduce((sum, b) => (
+          sum + Number(phase === 'starter' ? (b.starter_bag_price || 24) : (b.grower_bag_price || 22))
+        ), 0) / selBatches.length;
+      }
+    } else if (kind === 'layer_feed') {
+      const ltype = (card.querySelector('.sl-ltype') || {}).value || 'layer';
+      const sett = (FIN_LAYER_CFG && FIN_LAYER_CFG.settings) || {};
+      bagPrice = Number(ltype === 'scratch' ? (sett.scratch_bag_price || 16) : (sett.bag_price || 22));
+    }
+    amtEl.value = (bags * bagPrice).toFixed(2);
   }
-  let bagPrice = 22.0;
-  if (kind === 'batch_feed') {
-    const bid = Number((card.querySelector('.sl-batch') || {}).value || 0);
-    const phase = (card.querySelector('.sl-bphase') || {}).value || 'grower';
-    const b = FIN_BATCHES.find(x => Number(x.id) === bid);
-    if (b) bagPrice = Number(phase === 'starter' ? (b.starter_bag_price || 24) : (b.grower_bag_price || 22));
-  } else if (kind === 'layer_feed') {
-    const ltype = (card.querySelector('.sl-ltype') || {}).value || 'layer';
-    const sett = (FIN_LAYER_CFG && FIN_LAYER_CFG.settings) || {};
-    bagPrice = Number(ltype === 'scratch' ? (sett.scratch_bag_price || 16) : (sett.bag_price || 22));
-  }
-  amtEl.value = (bags * bagPrice).toFixed(2);
+  updateBatchAllocPreview(card);
   updateAllocBar();
 }
 
@@ -936,7 +1253,7 @@ function applyParsedReceipt(data) {
       kind = 'layer_feed';
       if (!['layer', 'scratch', 'supplement'].includes(feedType)) feedType = 'layer';
     } else if (sp.split_type === 'meat_batch_feed') {
-      if (FIN_BATCHES.length) {
+      if (FIN_RECEIPT_BATCHES.length) {
         kind = 'batch_feed';
         if (!['starter', 'grower'].includes(feedType)) feedType = 'grower';
       } else {
@@ -1004,13 +1321,45 @@ async function scanReceiptFile() {
   }
 }
 
+function setReceiptModalEditState(opts) {
+  opts = opts || {};
+  const isEdit = opts.editMode === 'single' || opts.editMode === 'group';
+  document.getElementById('rcpt-edit-mode').value = isEdit ? opts.editMode : '';
+  document.getElementById('rcpt-orig-group').value = opts.receiptGroupId || '';
+  document.getElementById('rcpt-orig-src').value = opts.sourceKey || '';
+  document.getElementById('rcpt-orig-id').value = opts.entryId ? String(opts.entryId) : '';
+  document.getElementById('rcpt-keep-existing').value = '1';
+  document.getElementById('rcpt-modal-title').textContent = isEdit ? 'Edit Receipt / Re-allocate' : 'Log Receipt / Expense';
+  document.getElementById('rcpt-submit-btn').textContent = isEdit ? 'Save changes' : 'Save receipt';
+
+  const linkWrap = document.getElementById('rcpt-existing-link');
+  const linkAnchor = document.getElementById('rcpt-existing-anchor');
+  const rawUrl = String(opts.receiptUrl || '').trim();
+  if (linkWrap && linkAnchor) {
+    if (isEdit && /^https?:\/\//i.test(rawUrl)) {
+      linkAnchor.href = rawUrl;
+      linkWrap.hidden = false;
+    } else {
+      linkAnchor.removeAttribute('href');
+      linkWrap.hidden = true;
+    }
+  }
+}
+
 function openReceiptModal(mode, batchId, species) {
   resetReceiptOcrUi();
+  setReceiptModalEditState({ editMode: '' });
   const container = document.getElementById('rcpt-lines');
   container.innerHTML = '';
   lineSeq = 0;
+  document.getElementById('rcpt-date').value = FIN_TODAY;
+  document.getElementById('rcpt-vendor').value = '';
+  document.getElementById('rcpt-url').value = '';
   document.getElementById('rcpt-target-total').value = '';
-  if (mode === 'batch' && FIN_BATCHES.length) {
+  const showAllCb = document.getElementById('rcpt-show-all-batches');
+  if (showAllCb) showAllCb.checked = false;
+
+  if (mode === 'batch' && FIN_RECEIPT_BATCHES.length) {
     addSplitLine({ kind: 'batch_feed', batchId: batchId });
   } else if (mode === 'layers') {
     addSplitLine({ kind: 'layer_feed', species: species });
@@ -1020,27 +1369,131 @@ function openReceiptModal(mode, batchId, species) {
   document.getElementById('dlg-receipt').showModal();
 }
 
+async function openEditReceiptModal(btn) {
+  const src = (btn.dataset.src || '').trim();
+  const id = (btn.dataset.id || '').trim();
+  const group = (btn.dataset.group || '').trim();
+  const params = new URLSearchParams();
+  if (group) {
+    params.set('receipt_group_id', group);
+  } else {
+    params.set('source_key', src);
+    params.set('entry_id', id);
+  }
+  try {
+    const resp = await fetch('/api/receipts/entry?' + params.toString());
+    if (resp.redirected && resp.url && resp.url.includes('/login')) {
+      window.location.href = '/login';
+      return;
+    }
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || !Array.isArray(data.lines)) {
+      alert((data && data.error) || 'Could not load receipt details.');
+      return;
+    }
+
+    resetReceiptOcrUi();
+    setReceiptModalEditState({
+      editMode: data.edit_mode || '',
+      receiptGroupId: data.receipt_group_id || '',
+      sourceKey: data.source_key || '',
+      entryId: data.entry_id || '',
+      receiptUrl: data.receipt_url || '',
+    });
+
+    const rdate = data.receipt_date || FIN_TODAY;
+    document.getElementById('rcpt-date').value = rdate;
+    document.getElementById('rcpt-vendor').value = data.vendor || '';
+    document.getElementById('rcpt-url').value = '';
+    const tot = Number(data.total_amount || 0);
+    document.getElementById('rcpt-target-total').value = tot !== 0 ? tot.toFixed(2) : '';
+
+    const showAllCb = document.getElementById('rcpt-show-all-batches');
+    if (showAllCb) {
+      const hasOutside = data.lines.some(ln => {
+        if (!ln.batch_id) return false;
+        const b = FIN_RECEIPT_BATCHES.find(x => String(x.id) === String(ln.batch_id));
+        return !b || !batchMatchesDate(b, rdate);
+      });
+      showAllCb.checked = hasOutside;
+    }
+
+    const container = document.getElementById('rcpt-lines');
+    container.innerHTML = '';
+    lineSeq = 0;
+    data.lines.forEach(ln => {
+      const amtNum = Number(ln.amount || 0);
+      addSplitLine({
+        kind: ln.kind || 'general',
+        category: ln.category || 'Other',
+        batchId: ln.batch_id !== undefined && ln.batch_id !== null ? ln.batch_id : '',
+        feedType: ln.feed_type || '',
+        speciesTags: Array.isArray(ln.species_tags) ? ln.species_tags : undefined,
+        bags: ln.bags !== undefined && ln.bags !== null ? Math.abs(Number(ln.bags)) : undefined,
+        lbs: ln.feed_lbs !== undefined && ln.feed_lbs !== null ? Math.abs(Number(ln.feed_lbs)) : undefined,
+        isRefund: amtNum < 0,
+        amount: amtNum !== 0 ? Math.abs(amtNum).toFixed(2) : '',
+        notes: ln.notes || '',
+        manualAmount: true,
+      });
+    });
+    updateAllocBar();
+    document.getElementById('dlg-receipt').showModal();
+  } catch (err) {
+    alert('Could not load receipt details.');
+  }
+}
+
 function submitReceiptForm() {
   const lines = [];
+  let validationError = '';
   document.querySelectorAll('#rcpt-lines .split-line').forEach(card => {
+    if (validationError) return;
     const kind = (card.querySelector('.sl-kind') || {}).value || 'general';
     const amount = effectiveLineAmount(card);
     const notes = ((card.querySelector('.sl-notes') || {}).value || '').trim();
     if (amount === 0) return;
+
     const rawBags = Math.abs(parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0);
     const rawLbs = Math.abs(parseFloat((card.querySelector('.sl-lbs') || {}).value || '0') || 0);
     const signedBags = amount < 0 ? (rawBags ? -rawBags : 0) : rawBags;
     const signedLbs = amount < 0 ? (rawLbs ? -rawLbs : 0) : rawLbs;
+    const selected = getCardSelectedBatchIds(card);
+
     if (kind === 'batch_feed') {
-      lines.push({
-        kind,
-        amount,
-        batch_id: (card.querySelector('.sl-batch') || {}).value || '',
-        feed_type: (card.querySelector('.sl-bphase') || {}).value || 'grower',
-        bags: signedBags,
-        feed_lbs: signedLbs,
-        notes,
-      });
+      if (!selected.length) {
+        validationError = 'Choose at least one batch for each Meat Batch Feed line.';
+        return;
+      }
+      if (selected.length === 1) {
+        lines.push({
+          kind,
+          amount,
+          batch_id: selected[0],
+          feed_type: (card.querySelector('.sl-bphase') || {}).value || 'grower',
+          bags: signedBags,
+          feed_lbs: signedLbs,
+          notes,
+        });
+      } else {
+        const mode = getCardAllocMode(card);
+        const weights = computeCardAllocationWeights(card, selected, kind, mode);
+        if (weights.reduce((a, b) => a + b, 0) <= 0) {
+          validationError = 'Enter a positive split weight for at least one selected batch.';
+          return;
+        }
+        lines.push({
+          kind,
+          amount,
+          feed_type: (card.querySelector('.sl-bphase') || {}).value || 'grower',
+          bags: signedBags,
+          feed_lbs: signedLbs,
+          notes,
+          alloc_mode: mode,
+          allocations: selected.map((bid, i) => ({ batch_id: Number(bid), weight: weights[i] })),
+        });
+      }
     } else if (kind === 'layer_feed') {
       const tags = Array.from(card.querySelectorAll('input.sl-tag:checked')).map(b => b.value);
       lines.push({
@@ -1053,15 +1506,37 @@ function submitReceiptForm() {
         notes,
       });
     } else {
-      lines.push({
-        kind: 'general',
-        amount,
-        category: (card.querySelector('.sl-cat') || {}).value || 'Other',
-        batch_id: (card.querySelector('.sl-gbatch') || {}).value || '',
-        notes,
-      });
+      const category = (card.querySelector('.sl-cat') || {}).value || 'Other';
+      if (selected.length <= 1) {
+        lines.push({
+          kind: 'general',
+          amount,
+          category,
+          batch_id: selected.length === 1 ? selected[0] : '',
+          notes,
+        });
+      } else {
+        const mode = getCardAllocMode(card);
+        const weights = computeCardAllocationWeights(card, selected, kind, mode);
+        if (weights.reduce((a, b) => a + b, 0) <= 0) {
+          validationError = 'Enter a positive split weight for at least one selected batch.';
+          return;
+        }
+        lines.push({
+          kind: 'general',
+          amount,
+          category,
+          notes,
+          alloc_mode: mode,
+          allocations: selected.map((bid, i) => ({ batch_id: Number(bid), weight: weights[i] })),
+        });
+      }
     }
   });
+  if (validationError) {
+    alert(validationError);
+    return false;
+  }
   if (!lines.length) {
     alert('Add at least one line item with a non-zero amount.');
     return false;

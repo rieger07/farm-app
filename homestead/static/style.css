@@ -73,3 +73,15 @@
 .refund-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:12px;font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;user-select:none}
 .refund-toggle input{margin:0;width:auto}
 .split-line.is-refund .refund-toggle{border-color:var(--blue);color:var(--blueink)}
+
+/* Multi-batch timeframe picker & allocation preview */
+.batch-scope-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.batch-scope-toggle input{margin:0;width:auto}
+.batch-alloc-wrap{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.batch-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer;color:var(--ink);user-select:none}
+.batch-chip input[type="checkbox"]{margin:0;width:auto}
+.batch-chip.on{background:var(--sage);border-color:var(--green);color:var(--green);font-weight:600}
+.batch-chip small{font-size:11px;color:var(--muted);font-weight:400}
+.batch-custom-in{width:64px!important;padding:2px 6px!important;font-size:12px!important;height:24px;border-radius:6px;text-align:right}
+.batch-alloc-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:var(--card);border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--muted)}
+.batch-alloc-bar select{min-width:165px;font-size:12px;padding:4px 8px}
