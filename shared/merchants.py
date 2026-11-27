@@ -224,6 +224,37 @@ def add_member(merchant_id: int, user_id: int, role: str) -> None:
         conn.close()
 
 
+def update_member_role(
+    merchant_id: int, user_id: int, role: str, allow_zero_owners: bool = False
+) -> None:
+    """Change an existing workspace member's role, guarding the last owner unless allowed."""
+    if role not in ROLES:
+        raise ValueError(f"Unknown role: {role}")
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT role FROM merchant_members WHERE merchant_id = ? AND user_id = ?",
+            (int(merchant_id), int(user_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("Member not found in this workspace.")
+        if row["role"] == OWNER and role != OWNER and not allow_zero_owners:
+            owners = conn.execute(
+                "SELECT COUNT(*) FROM merchant_members"
+                " WHERE merchant_id = ? AND role = ?",
+                (int(merchant_id), OWNER),
+            ).fetchone()[0]
+            if owners <= 1:
+                raise ValueError("Cannot demote the last owner.")
+        conn.execute(
+            "UPDATE merchant_members SET role = ? WHERE merchant_id = ? AND user_id = ?",
+            (role, int(merchant_id), int(user_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def remove_member(
     merchant_id: int, user_id: int, allow_zero_owners: bool = False
 ) -> None:

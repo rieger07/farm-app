@@ -26,6 +26,7 @@ from shared.merchants import (
     redeem_invite,
     remove_member,
     rename_merchant,
+    update_member_role,
     update_payment_handles,
 )
 
@@ -57,6 +58,7 @@ __all__ = [
     "remove_member",
     "rename_merchant",
     "set_user_admin",
+    "update_member_role",
     "update_payment_handles",
 ]
 

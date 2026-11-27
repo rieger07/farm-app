@@ -5,57 +5,65 @@
 <div class="pagehead">
   <div><h1>Settings</h1><p class="sub">Shared farm workspace, family access, species presets, notifications, and backups.</p></div>
 </div>
-{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
 
-<div class="card" id="farm-members">
-  <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+<div class="card ws-card" id="farm-members">
+  <div class="ws-head">
     <div>
-      <h2 style="margin:0">Farm Workspace &amp; Family / Team Access ({{ user.merchant_name }})</h2>
-      <small class="muted">Shared with Iron Ledger — anyone you add here can log in to collect eggs, view unassigned turkeys, and check out pickups on this farm.</small>
+      <div class="ws-title">
+        <span>Farm Workspace &amp; Team</span>
+        <small class="inline">{{ user.merchant_name }}</small>
+      </div>
+      <div class="ws-meta">
+        <span>{{ members|length }} member{{ '' if members|length == 1 else 's' }} · Shared with Iron Ledger</span>
+      </div>
     </div>
-    <form method="post" action="/settings/merchant/rename" class="row" style="gap:6px;align-items:center">
-      <input name="name" value="{{ user.merchant_name }}" placeholder="Farm workspace name" required style="width:200px;margin:0">
-      <button class="btn sm">Rename farm</button>
-    </form>
+    <div class="ws-actions">
+      <button type="button" class="btn sm" onclick="document.getElementById('dlg-rename-farm').showModal()">Rename</button>
+      <button type="button" class="btn sm primary" onclick="document.getElementById('dlg-add-member').showModal()">+ Add member</button>
+    </div>
   </div>
-
-  <table style="margin-bottom:14px">
-    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
-    <tbody>
-    {% for m in members %}
-      <tr>
-        <td><b>{{ m.display_name }}</b></td>
-        <td>@{{ m.username }}</td>
-        <td><span class="pill {{ 'green' if m.role == 'owner' else 'amber' }}">{{ m.role }}</span></td>
-        <td class="num">
-          <form method="post" action="/settings/members/remove" style="display:inline" onsubmit="return confirm('Remove {{ m.display_name }} from {{ user.merchant_name }}?')">
+  <div class="ws-body">
+    <div class="member-list">
+      {% for m in members %}
+      <div class="member-row">
+        <div class="member-info">
+          <div class="member-name">
+            <b>{{ m.display_name }}</b>
+            <span class="member-handle">@{{ m.username }}</span>
+          </div>
+        </div>
+        <div class="member-controls">
+          <form method="post" action="/settings/members/role" class="inline-form">
             <input type="hidden" name="user_id" value="{{ m.user_id }}">
-            <button class="link" style="color:var(--redink)">Remove</button>
+            <select
+              name="role"
+              class="role-select"
+              aria-label="Role for {{ m.username }}"
+              onchange="this.form.submit()"
+            >
+              {% for r in roles %}
+              <option value="{{ r }}"{{ ' selected' if m.role == r }}>{{ r|title }}</option>
+              {% endfor %}
+            </select>
           </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-
-  <h3 style="font-size:15px;margin:10px 0 4px">Add or update family / team member</h3>
-  <p class="sub" style="margin-bottom:10px">
-    <b>Manager</b> (wife / parents): full access to Radar, Batches, Harvest Tally, Pickup Day, Eggs, Customers, Feed &amp; Financials.
-    <b>Staff</b> (helper): Radar, Eggs &amp; Harvest Tally / Pickup Day only. If the username already exists, their role on this farm is updated.
-  </p>
-  <form method="post" action="/settings/members" class="fgrid">
-    <label>Username<input name="username" placeholder="e.g. sarah or mom" required></label>
-    <label>Display Name<input name="display_name" placeholder="e.g. Sarah"></label>
-    <label>Password (if new user)<input name="password" type="password" placeholder="Min 4 chars"></label>
-    <label>Role
-      <select name="role">
-        {% for r in roles %}
-        <option value="{{ r }}" {{ 'selected' if r == 'manager' }}>{{ r|title }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <div class="full"><button class="btn sm primary">Save member</button></div>
-  </form>
+          <form
+            method="post"
+            action="/settings/members/remove"
+            class="inline-form"
+            data-confirm="Remove {{ m.display_name }} from {{ user.merchant_name }}?"
+            onsubmit="return confirm(this.dataset.confirm)"
+          >
+            <input type="hidden" name="user_id" value="{{ m.user_id }}">
+            <button class="btn sm danger">Remove</button>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <small class="muted">No family or team members added yet.</small>
+      {% endfor %}
+    </div>
+  </div>
 </div>
 
 <div class="card" id="egg-species">
@@ -217,39 +225,166 @@
 </div>
 
 {% if user.is_admin %}
-<div class="card">
-  <h2>Admin · Users &amp; registration</h2>
-  <form method="post" action="/settings/admin/registration" class="row" style="margin-bottom:14px">
-    <span>Public self-registration: <b>{{ 'Open' if reg_open else 'Closed' }}</b></span>
-    <input type="hidden" name="enabled" value="{{ '0' if reg_open else '1' }}">
-    <button class="btn sm">{{ 'Disable' if reg_open else 'Enable' }}</button>
-  </form>
-  <form method="post" action="/settings/admin/users" class="row" style="margin-bottom:14px">
-    <input name="username" placeholder="Username" required>
-    <input name="display_name" placeholder="Display name">
-    <input name="password" type="password" placeholder="Password (min 4)" minlength="4" required>
-    <button class="btn sm primary">+ Add user</button>
-  </form>
-  <table>
-    <thead><tr><th>Username</th><th>Display name</th><th>Role</th><th></th></tr></thead>
-    <tbody>
-    {% for u in users %}
-      <tr>
-        <td><b>{{ u.username }}</b></td>
-        <td>{{ u.display_name }}</td>
-        <td>{{ 'Admin' if u.is_admin else 'User' }}</td>
-        <td class="num">
-          {% if u.id != user.id %}
-          <form method="post" action="/settings/admin/users/{{ u.id }}/delete" onsubmit="return confirm('Delete user {{ u.username }}?')">
-            <button class="link">Delete</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+<div class="card ws-card" id="admin-users">
+  <div class="ws-head">
+    <div>
+      <div class="ws-title"><span>Admin · Users &amp; registration</span></div>
+      <div class="ws-meta">
+        <span>Public registration:</span>
+        <span class="pill {{ 'green' if reg_open else 'gray' }}">{{ 'Open' if reg_open else 'Closed' }}</span>
+        <form method="post" action="/settings/admin/registration" class="inline-form">
+          <input type="hidden" name="enabled" value="{{ '0' if reg_open else '1' }}">
+          <button class="btn sm">{{ 'Disable' if reg_open else 'Enable' }}</button>
+        </form>
+      </div>
+    </div>
+    <div class="ws-actions">
+      <button type="button" class="btn sm primary" onclick="document.getElementById('dlg-admin-add-user').showModal()">+ Add user</button>
+    </div>
+  </div>
+  <div class="ws-body">
+    <div class="member-list">
+      {% for u in users %}
+      <div class="member-row">
+        <div class="member-info">
+          <div class="member-name">
+            <b>{{ u.display_name or u.username }}</b>
+            <span class="member-handle">@{{ u.username }} · #{{ u.id }}</span>
+            {% if u.is_admin %}
+            <span class="pill blue">Super Admin</span>
+            {% else %}
+            <span class="pill gray">User</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="member-controls">
+          <button
+            type="button"
+            class="btn sm"
+            data-id="{{ u.id }}"
+            data-username="{{ u.username }}"
+            data-display-name="{{ u.display_name or '' }}"
+            data-admin="{{ '1' if u.is_admin else '0' }}"
+            onclick="openHsEditUser(this)"
+          >Edit</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
 </div>
+{% endif %}
+
+<dialog id="dlg-rename-farm">
+  <div class="modal-head">
+    <h2>Rename farm workspace</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/settings/merchant/rename" class="fgrid">
+    <label class="full">
+      Farm workspace name
+      <input name="name" value="{{ user.merchant_name }}" required>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Rename farm</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-add-member">
+  <div class="modal-head">
+    <div>
+      <h2>Add family or team member</h2>
+      <small>{{ user.merchant_name }}</small>
+    </div>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <p class="sub mb-md">
+    <b>Owner:</b> full workspace &amp; settings · <b>Manager:</b> Radar, Batches, Harvest Tally, Pickup Day, Eggs, Customers, Feed &amp; Financials · <b>Staff:</b> Radar, Eggs &amp; Harvest Tally / Pickup Day only. If the username already exists, their role on this farm is updated.
+  </p>
+  <form method="post" action="/settings/members" class="fgrid">
+    <label>Username<input name="username" placeholder="e.g. sarah or mom" required></label>
+    <label>Display Name<input name="display_name" placeholder="e.g. Sarah"></label>
+    <label>Password (if new user)<input name="password" type="password" placeholder="Min 4 chars"></label>
+    <label>Role
+      <select name="role">
+        {% for r in roles %}
+        <option value="{{ r }}" {{ 'selected' if r == 'manager' }}>{{ r|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save member</button>
+    </div>
+  </form>
+</dialog>
+
+{% if user.is_admin %}
+<dialog id="dlg-admin-add-user">
+  <div class="modal-head">
+    <h2>Add user account</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/settings/admin/users" class="fgrid">
+    <label>Username<input name="username" placeholder="e.g. sarah" required></label>
+    <label>Display name<input name="display_name" placeholder="e.g. Sarah"></label>
+    <label class="full">Password<input name="password" type="password" placeholder="Min 4 chars" minlength="4" required></label>
+    <label class="full check-row">
+      <input type="checkbox" name="is_admin" value="1">
+      <span>Super Admin (all workspaces &amp; admin tools)</span>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Create user</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-admin-edit-user">
+  <div class="modal-head">
+    <div>
+      <h2>Edit user</h2>
+      <small id="hs-eu-sub"></small>
+    </div>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" id="hs-eu-form" action="" class="fgrid">
+    <label class="full">
+      Display name
+      <input name="display_name" id="hs-eu-display" required>
+    </label>
+    <label class="full">
+      Reset password (optional)
+      <input name="new_password" id="hs-eu-password" type="password" minlength="4" placeholder="Leave blank to keep current password">
+    </label>
+    <label class="full check-row">
+      <input type="checkbox" name="is_admin" id="hs-eu-admin" value="1">
+      <span>Super Admin (all workspaces &amp; admin tools)</span>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save changes</button>
+    </div>
+  </form>
+  <div class="danger-zone" id="hs-eu-danger-zone">
+    <div>
+      <b class="text-red">Delete user</b>
+      <small>Removes this account, batches, and workspace memberships.</small>
+    </div>
+    <form
+      method="post"
+      id="hs-eu-del-form"
+      action=""
+      class="inline-form"
+      onsubmit="return confirm(this.dataset.confirm)"
+    >
+      <button class="btn sm danger">Delete user</button>
+    </form>
+  </div>
+  <small class="muted mt-sm" id="hs-eu-self-note" hidden>You are signed in as this account and cannot delete it here.</small>
+</dialog>
 {% endif %}
 
 <dialog id="presetm">
@@ -319,6 +454,26 @@ function openPresetModal(sp, cfg) {
   }
   syncPresetLifecycle();
   document.getElementById('presetm').showModal();
+}
+
+function openHsEditUser(btn) {
+  const uid = Number(btn.dataset.id);
+  const username = btn.dataset.username || '';
+  const displayName = btn.dataset.displayName || '';
+  const isAdmin = btn.dataset.admin === '1';
+  document.getElementById('hs-eu-sub').textContent = '@' + username + ' · #' + uid;
+  document.getElementById('hs-eu-form').action = '/settings/admin/users/' + uid + '/update';
+  document.getElementById('hs-eu-display').value = displayName || username;
+  document.getElementById('hs-eu-password').value = '';
+  document.getElementById('hs-eu-admin').checked = isAdmin;
+
+  const isSelf = uid === {{ actor_id|int }};
+  document.getElementById('hs-eu-danger-zone').hidden = isSelf;
+  document.getElementById('hs-eu-self-note').hidden = !isSelf;
+  const delForm = document.getElementById('hs-eu-del-form');
+  delForm.action = '/settings/admin/users/' + uid + '/delete';
+  delForm.dataset.confirm = 'Delete user @' + username + '? All their data and memberships will be removed.';
+  document.getElementById('dlg-admin-edit-user').showModal();
 }
 </script>
 {% endblock %}

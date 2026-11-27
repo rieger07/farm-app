@@ -19,6 +19,8 @@ from homestead.db.core import (
     list_users,
     save_species_preset,
     set_public_registration_enabled,
+    set_user_admin,
+    update_user_display_name,
     update_user_password,
     verify_password,
 )
@@ -44,6 +46,7 @@ from homestead.db.workspaces import (
     list_homestead_merchant_members,
     remove_homestead_merchant_member,
     rename_homestead_merchant,
+    update_homestead_merchant_member_role,
 )
 from homestead.gdrive import (
     GoogleDriveError,
@@ -84,6 +87,7 @@ def settings_page(request: Request, msg: str = "", user: dict = Depends(current_
         gdrive_conn=get_google_drive_connection(user["id"]),
         ntfy_cfg=get_ntfy_config(user["id"]),
         pickup_cfg=get_farm_pickup_settings(user["id"]),
+        actor_id=user.get("actor_id", user["id"]),
         msg=msg,
     )
 
@@ -119,6 +123,16 @@ def settings_members_save(
         existing = get_user_by_username(clean_user)
         if existing:
             uid = int(existing["id"])
+            current_ids = {
+                int(m["user_id"])
+                for m in list_homestead_merchant_members(user["merchant_id"])
+            }
+            if uid in current_ids:
+                update_homestead_merchant_member_role(
+                    user["merchant_id"], uid, role=role
+                )
+            else:
+                add_homestead_merchant_member(user["merchant_id"], uid, role=role)
         else:
             if not password:
                 raise ValueError("Password is required when creating a new family/member account.")
@@ -130,8 +144,24 @@ def settings_members_save(
                 claim_unowned_data=False,
             )
             uid = int(created["id"])
-        add_homestead_merchant_member(user["merchant_id"], uid, role=role)
+            add_homestead_merchant_member(user["merchant_id"], uid, role=role)
         msg = f"Saved {display_name.strip() or clean_user} ({role}) on {user['merchant_name']}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
+
+
+@router.post("/settings/members/role")
+def settings_members_role(
+    user_id: int = Form(...),
+    role: str = Form(...),
+    user: dict = Depends(current_user),
+):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(status_code=403, detail="Only farm owners can manage members.")
+    try:
+        update_homestead_merchant_member_role(user["merchant_id"], user_id, role=role)
+        msg = f"Updated member role to {role}."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
@@ -397,15 +427,43 @@ def settings_admin_add_user(
     username: str = Form(...),
     password: str = Form(...),
     display_name: str = Form(""),
+    is_admin: str = Form(""),
     user: dict = Depends(current_user),
 ):
     if not user.get("is_admin"):
         raise HTTPException(status_code=403)
     try:
-        create_user(username, password, display_name=display_name, is_admin=False, claim_unowned_data=False)
+        create_user(
+            username,
+            password,
+            display_name=display_name,
+            is_admin=(is_admin == "1"),
+            claim_unowned_data=False,
+        )
         msg = f"Created user {username}."
     except ValueError as exc:
-        msg = str(exc)
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
+
+
+@router.post("/settings/admin/users/{uid}/update")
+def settings_admin_update_user(
+    uid: int,
+    display_name: str = Form(...),
+    new_password: str = Form(""),
+    is_admin: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403)
+    try:
+        clean_name = update_user_display_name(uid, display_name)
+        if new_password:
+            update_user_password(uid, new_password)
+        set_user_admin(uid, is_admin == "1")
+        msg = f"Updated user {clean_name}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
     return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)
 
 
@@ -413,6 +471,9 @@ def settings_admin_add_user(
 def settings_admin_delete_user(uid: int, user: dict = Depends(current_user)):
     if not user.get("is_admin"):
         raise HTTPException(status_code=403)
-    if uid != user["id"]:
-        delete_user(uid)
-    return RedirectResponse("/settings?msg=" + quote_plus("User deleted."), status_code=303)
+    try:
+        delete_user(uid, acting_user_id=user.get("actor_id", user["id"]))
+        msg = "User deleted."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse("/settings?msg=" + quote_plus(msg), status_code=303)

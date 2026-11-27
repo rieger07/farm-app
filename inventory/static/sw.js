@@ -1,5 +1,5 @@
 // Minimal service worker: lets /quick-sale load offline.
-const CACHE = 'il-v6';
+const CACHE = 'il-v7';
 const SHELL = ['/shared-static/theme.css', '/shared-static/qrcode.min.js', '/shared-static/pay_qr.js', '/static/style.css', '/static/quicksale.js'];
 
 self.addEventListener('install', e => {

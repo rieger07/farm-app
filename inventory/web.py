@@ -60,6 +60,32 @@ def to_local(occurred_at: str) -> datetime:
     return datetime.fromisoformat(occurred_at).replace(tzinfo=timezone.utc).astimezone(local_tz())
 
 
+def format_last_sync(iso_ts: str | None) -> str:
+    """Format an ISO UTC timestamp as a human-readable relative + local time string."""
+    if not iso_ts:
+        return "Never"
+    try:
+        local_dt = to_local(iso_ts)
+        now_local = datetime.now(local_tz())
+        diff_sec = max(0, int((now_local - local_dt).total_seconds()))
+        if diff_sec < 60:
+            rel = "just now"
+        elif diff_sec < 3600:
+            rel = f"{diff_sec // 60} min ago"
+        elif diff_sec < 86400:
+            hrs = diff_sec // 3600
+            rel = f"{hrs} hr ago" if hrs == 1 else f"{hrs} hrs ago"
+        else:
+            days = diff_sec // 86400
+            rel = f"{days} day ago" if days == 1 else f"{days} days ago"
+        time_str = local_dt.strftime("%-I:%M %p")
+        if local_dt.date() != now_local.date():
+            time_str = f"{local_dt.strftime('%b %-d')}, {time_str}"
+        return f"{rel} ({time_str})"
+    except Exception:
+        return str(iso_ts)
+
+
 def _parse_date(value: str) -> date | None:
     try:
         return date.fromisoformat(value)

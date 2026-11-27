@@ -19,14 +19,18 @@ from inventory.merchants import (
     list_members,
     remove_member,
     rename_merchant,
+    update_member_role,
 )
-from inventory.web import Ctx, render, require
+from inventory.web import Ctx, format_last_sync, render, require
 from shared.auth import (
     create_user,
+    get_user_by_id,
     get_user_by_username,
     set_user_admin,
+    update_user_display_name,
     update_user_password,
 )
+from shared.bridge import delete_user_account
 
 router = APIRouter()
 
@@ -35,13 +39,20 @@ router = APIRouter()
 def admin_page(
     request: Request,
     msg: str = "",
+    tab: str = "workspaces",
     invite_token: str = "",
     checkout_url: str = "",
     ctx: Ctx = Depends(require("admin")),
 ):
+    active_tab = tab if tab in ("workspaces", "users", "invites") else "workspaces"
     merchants = list_all_merchants()
     for m in merchants:
         m["members"] = list_members(m["id"])
+        m["last_sync_display"] = format_last_sync(m.get("last_sync_at"))
+    invites = list_invites()
+    active_invite_count = sum(
+        1 for i in invites if not i["redeemed"] and not i["expired"]
+    )
     base_url = str(request.base_url).rstrip("/")
     invite_url = f"{base_url}/invite/{invite_token}" if invite_token else ""
     return render(
@@ -51,7 +62,9 @@ def admin_page(
         "admin",
         merchants=merchants,
         users=list_all_users_with_memberships(),
-        invites=list_invites(),
+        invites=invites,
+        active_invite_count=active_invite_count,
+        active_tab=active_tab,
         roles=ROLES,
         base_url=base_url,
         invite_url=invite_url,
@@ -66,6 +79,7 @@ def admin_page(
 @router.post("/admin/merchants/create")
 def admin_create_merchant(
     merchant_name: str = Form(...),
+    owner_user_id: str = Form(""),
     owner_username: str = Form(""),
     owner_display_name: str = Form(""),
     owner_password: str = Form(""),
@@ -73,24 +87,30 @@ def admin_create_merchant(
 ):
     try:
         owner_id = None
-        clean_user = owner_username.strip()
-        if clean_user:
-            existing = get_user_by_username(clean_user)
-            if existing:
-                owner_id = existing["id"]
-            else:
-                created = create_user(
-                    clean_user,
-                    owner_password,
-                    display_name=owner_display_name,
-                    is_admin=False,
-                )
-                owner_id = created["id"]
+        if owner_user_id.strip().isdigit():
+            existing = get_user_by_id(int(owner_user_id.strip()))
+            if not existing:
+                raise ValueError("Selected owner user not found.")
+            owner_id = int(existing["id"])
+        else:
+            clean_user = owner_username.strip()
+            if clean_user:
+                existing = get_user_by_username(clean_user)
+                if existing:
+                    owner_id = int(existing["id"])
+                else:
+                    created = create_user(
+                        clean_user,
+                        owner_password,
+                        display_name=owner_display_name,
+                        is_admin=False,
+                    )
+                    owner_id = int(created["id"])
         mid = create_merchant(merchant_name, owner_user_id=owner_id)
         msg = f"Created workspace '{merchant_name.strip()}' (#{mid})."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/merchants/rename")
@@ -104,7 +124,7 @@ def admin_rename_merchant(
         msg = f"Renamed workspace to '{name.strip()}'."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/merchants/delete")
@@ -114,7 +134,8 @@ def admin_delete_merchant(
 ):
     delete_merchant(merchant_id)
     return RedirectResponse(
-        f"/admin?msg={quote_plus('Deleted workspace.')}", status_code=303
+        f"/admin?tab=workspaces&msg={quote_plus('Deleted workspace.')}",
+        status_code=303,
     )
 
 
@@ -129,36 +150,63 @@ def admin_sync_merchant(
         if result["error"]
         else f"Synced {result['products']} products, {result['purchases']} new sales."
     )
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/members/save")
 def admin_save_member(
     merchant_id: int = Form(...),
-    username: str = Form(...),
+    existing_user_id: str = Form(""),
+    username: str = Form(""),
     display_name: str = Form(""),
     password: str = Form(""),
     role: str = Form("owner"),
     ctx: Ctx = Depends(require("admin")),
 ):
     try:
-        clean_user = username.strip()
-        existing = get_user_by_username(clean_user)
-        if existing:
-            uid = existing["id"]
+        if existing_user_id.strip().isdigit():
+            existing = get_user_by_id(int(existing_user_id.strip()))
+            if not existing:
+                raise ValueError("Selected user not found.")
+            uid = int(existing["id"])
+            label = existing["username"]
         else:
-            created = create_user(
-                clean_user,
-                password,
-                display_name=display_name,
-                is_admin=False,
-            )
-            uid = created["id"]
+            clean_user = username.strip()
+            if not clean_user:
+                raise ValueError("Choose an existing user or enter a username.")
+            existing = get_user_by_username(clean_user)
+            if existing:
+                uid = int(existing["id"])
+                label = existing["username"]
+            else:
+                created = create_user(
+                    clean_user,
+                    password,
+                    display_name=display_name,
+                    is_admin=False,
+                )
+                uid = int(created["id"])
+                label = clean_user
         add_member(merchant_id, uid, role)
-        msg = f"Assigned {clean_user} as {role}."
+        msg = f"Assigned {label} as {role}."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
+
+
+@router.post("/admin/members/role")
+def admin_update_member_role(
+    merchant_id: int = Form(...),
+    user_id: int = Form(...),
+    role: str = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        update_member_role(merchant_id, user_id, role, allow_zero_owners=True)
+        msg = f"Updated member role to {role}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/members/remove")
@@ -172,7 +220,7 @@ def admin_remove_member(
         msg = "Removed member from workspace."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=workspaces&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/invites/create")
@@ -195,11 +243,11 @@ def admin_create_invite(
             days_valid=days_valid,
         )
         return RedirectResponse(
-            f"/admin?msg={quote_plus('Created one-time invite link.')}&invite_token={quote_plus(token)}",
+            f"/admin?tab=invites&msg={quote_plus('Created one-time invite link.')}&invite_token={quote_plus(token)}",
             status_code=303,
         )
     except ValueError as exc:
-        return RedirectResponse(f"/admin?msg={quote_plus(f'Error: {exc}')}", status_code=303)
+        return RedirectResponse(f"/admin?tab=invites&msg={quote_plus(f'Error: {exc}')}", status_code=303)
 
 
 @router.post("/admin/invites/delete")
@@ -208,7 +256,64 @@ def admin_delete_invite(
     ctx: Ctx = Depends(require("admin")),
 ):
     delete_invite(token)
-    return RedirectResponse(f"/admin?msg={quote_plus('Deleted invite.')}", status_code=303)
+    return RedirectResponse(f"/admin?tab=invites&msg={quote_plus('Deleted invite.')}", status_code=303)
+
+
+@router.post("/admin/users/create")
+def admin_create_user(
+    username: str = Form(...),
+    display_name: str = Form(""),
+    password: str = Form(...),
+    is_admin: str = Form(""),
+    merchant_id: str = Form(""),
+    role: str = Form("staff"),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        created = create_user(
+            username,
+            password,
+            display_name=display_name,
+            is_admin=(is_admin == "1"),
+        )
+        if merchant_id.strip().isdigit():
+            add_member(int(merchant_id.strip()), int(created["id"]), role)
+        msg = f"Created user {created['username']}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?tab=users&msg={quote_plus(msg)}", status_code=303)
+
+
+@router.post("/admin/users/update")
+def admin_update_user(
+    user_id: int = Form(...),
+    display_name: str = Form(...),
+    new_password: str = Form(""),
+    is_admin: str = Form(""),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        clean_name = update_user_display_name(user_id, display_name)
+        if new_password:
+            update_user_password(user_id, new_password)
+        set_user_admin(user_id, is_admin == "1")
+        msg = f"Updated user {clean_name}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?tab=users&msg={quote_plus(msg)}", status_code=303)
+
+
+@router.post("/admin/users/delete")
+def admin_delete_user(
+    user_id: int = Form(...),
+    ctx: Ctx = Depends(require("admin")),
+):
+    try:
+        delete_user_account(user_id, acting_user_id=ctx.user["id"])
+        msg = "Deleted user."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/admin?tab=users&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/users/password")
@@ -222,7 +327,7 @@ def admin_reset_password(
         msg = "Updated user password."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=users&msg={quote_plus(msg)}", status_code=303)
 
 
 @router.post("/admin/users/admin")
@@ -236,4 +341,4 @@ def admin_toggle_user_admin(
         msg = "Updated Super Admin status."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"/admin?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(f"/admin?tab=users&msg={quote_plus(msg)}", status_code=303)

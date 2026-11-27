@@ -122,3 +122,28 @@ def get_sku_completed_sales_summary(
     finally:
         if owns_conn:
             c.close()
+
+
+def delete_user_account(
+    user_id: int, acting_user_id: int | None = None
+) -> None:
+    """Delete a user account and clean up Homestead & Core child rows atomically."""
+    if acting_user_id is not None and int(user_id) == int(acting_user_id):
+        raise ValueError("You cannot delete your own account.")
+    with get_connection() as conn:
+        target = conn.execute(
+            "SELECT id, is_admin FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if not target:
+            raise ValueError("User not found.")
+        if target["is_admin"]:
+            admins = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE is_admin = 1"
+            ).fetchone()[0]
+            if admins <= 1:
+                raise ValueError("Cannot delete the last Super Admin.")
+        # Legacy batches.user_id lacks an FK constraint; child batch tables cascade on batches(id).
+        conn.execute("DELETE FROM batches WHERE user_id = ?", (int(user_id),))
+        conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+        conn.commit()

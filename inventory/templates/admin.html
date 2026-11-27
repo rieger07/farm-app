@@ -3,253 +3,808 @@
 {% block content %}
 <div class="eyebrow">PLATFORM ADMINISTRATION</div>
 <div class="pagehead">
-  <div><h1>Tenants &amp; Onboarding</h1><p class="sub">Create merchant workspaces, generate one-time invite links, and manage users.</p></div>
+  <div>
+    <h1>Tenants &amp; Onboarding</h1>
+    <p class="sub">Manage tenant workspaces, team roles, one-time invite links, and user accounts.</p>
+  </div>
+  <div class="row">
+    <button type="button" class="btn sm primary" onclick="openNewWorkspace()">+ New workspace</button>
+    <button type="button" class="btn sm" onclick="openInviteModal()">+ Invite link</button>
+    {% if stripe_configured %}
+    <button type="button" class="btn sm" onclick="document.getElementById('dlg-checkout').showModal()">Checkout link</button>
+    {% endif %}
+  </div>
 </div>
-{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
 
 {% if invite_url %}
-<div class="card" style="margin-bottom:20px;background:var(--sage);border-color:#9bb8a5">
-  <b>One-time invite link ready to share:</b>
-  <div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap">
-    <input id="inv-url" value="{{ invite_url }}" readonly style="flex:1;min-width:260px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit">
-    <button type="button" class="btn primary" onclick="navigator.clipboard.writeText(document.getElementById('inv-url').value);this.textContent='Copied!'">Copy link</button>
+<div class="card copy-banner">
+  <b>One-time invite link ready to share</b>
+  <div class="copy-row">
+    <input id="inv-url" value="{{ invite_url }}" readonly onclick="this.select()">
+    <button type="button" class="btn sm primary" data-copy="{{ invite_url }}" onclick="copyFromBtn(this)">Copy link</button>
   </div>
 </div>
 {% endif %}
 
 {% if checkout_url %}
-<div class="card" style="margin-bottom:20px;background:var(--sage);border-color:#9bb8a5">
-  <b>Stripe Checkout link ready to send:</b>
-  <div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap">
-    <input id="chk-url" value="{{ checkout_url }}" readonly style="flex:1;min-width:260px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit">
-    <button type="button" class="btn primary" onclick="navigator.clipboard.writeText(document.getElementById('chk-url').value);this.textContent='Copied!'">Copy checkout link</button>
+<div class="card copy-banner">
+  <b>Stripe Checkout link ready to send</b>
+  <div class="copy-row">
+    <input id="chk-url" value="{{ checkout_url }}" readonly onclick="this.select()">
+    <button type="button" class="btn sm primary" data-copy="{{ checkout_url }}" onclick="copyFromBtn(this)">Copy checkout link</button>
   </div>
 </div>
 {% endif %}
 
-<div class="cards two even">
-  <div class="card">
-    <h2>1. Create tenant workspace directly</h2>
-    <p class="sub">Create a new workspace now and optionally set up its owner login in one step.</p>
-    <form method="post" action="/admin/merchants/create" style="display:flex;flex-direction:column;gap:10px">
-      <input name="merchant_name" placeholder="Business name (e.g. Willow Creek Farm)" required style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="owner_username" placeholder="Owner username (optional, e.g. owner)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="owner_display_name" placeholder="Owner display name (optional, e.g. Alex)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="owner_password" type="password" placeholder="Owner password (if creating new user)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <button class="btn primary">Create workspace</button>
-    </form>
+<div class="tab-bar">
+  <div class="seg-group" role="tablist" aria-label="Admin sections">
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'workspaces' }}" data-tab="workspaces" onclick="switchAdminTab('workspaces')">
+      Workspaces <span class="seg-badge">{{ merchants|length }}</span>
+    </button>
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'users' }}" data-tab="users" onclick="switchAdminTab('users')">
+      Users <span class="seg-badge">{{ users|length }}</span>
+    </button>
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'invites' }}" data-tab="invites" onclick="switchAdminTab('invites')">
+      Invites <span class="seg-badge">{{ active_invite_count }}</span>
+    </button>
   </div>
-
-  <div class="card">
-    <h2>2. Generate one-time invite link</h2>
-    <p class="sub">Send a link to a farm owner or staff member so they can choose their own username and password.</p>
-    <form method="post" action="/admin/invites/create" style="display:flex;flex-direction:column;gap:10px">
-      <select name="target_merchant_id" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-        <option value="">✨ Create a brand-new merchant workspace (Owner)</option>
-        {% for m in merchants %}
-        <option value="{{ m.id }}">Join existing: {{ m.name }} (#{{ m.id }})</option>
-        {% endfor %}
-      </select>
-      <div class="row">
-        <select name="role" style="flex:1;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-          {% for r in roles %}
-          <option value="{{ r }}" {{ 'selected' if r == 'owner' }}>Role: {{ r }}</option>
-          {% endfor %}
-        </select>
-        <input type="number" name="days_valid" value="14" min="1" max="90" title="Days valid" style="width:110px;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      </div>
-      <input name="default_merchant_name" placeholder="Pre-fill merchant name (if new workspace)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="note" placeholder="Note (e.g. Farm owner, Market cashier)" style="padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <button class="btn primary">Generate invite link</button>
-    </form>
-  </div>
-</div>
-
-<div class="card" style="margin-bottom:20px">
-  <div class="row" style="justify-content:space-between;flex-wrap:wrap">
-    <div>
-      <h2 style="margin-bottom:4px">Stripe Billing</h2>
-      <small>
-        API: {% if stripe_configured %}<span class="pill green">Configured</span>{% else %}<span class="pill amber">Not configured</span>{% endif %}
-        · Webhook: {% if stripe_webhook_configured %}<span class="pill green">Configured</span>{% else %}<span class="pill amber">Missing STRIPE_WEBHOOK_SECRET</span>{% endif %}
-      </small>
-    </div>
-    {% if stripe_configured %}
-    <form method="post" action="/admin/billing/checkout-link" class="row" style="flex-wrap:wrap">
-      <input name="merchant_name" placeholder="Farm name" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <input name="email" type="email" placeholder="Farmer email (optional)" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-      <select name="plan_key" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit">
-        {% for key, p in price_catalog.items() %}
-        <option value="{{ key }}">{{ p.label }}</option>
-        {% endfor %}
-      </select>
-      <button class="btn primary">Create Checkout link</button>
-    </form>
+  <div>
+    {% if stripe_configured and stripe_webhook_configured %}
+      <span class="pill green">Stripe: Ready</span>
+    {% elif stripe_configured %}
+      <span class="pill amber" title="Missing STRIPE_WEBHOOK_SECRET">Stripe: Missing webhook</span>
+    {% else %}
+      <span class="pill gray">Stripe: Not configured</span>
     {% endif %}
   </div>
 </div>
 
-<div class="card table-card" style="margin-bottom:20px">
-  <div class="filters"><b>Tenant workspaces ({{ merchants|length }})</b></div>
-  <table>
-    <thead><tr><th>Workspace</th><th>Billing</th><th>Zettle</th><th>Catalog &amp; Sales</th><th>Members</th><th>Actions</th></tr></thead>
-    <tbody>
-    {% for m in merchants %}
-      <tr>
-        <td>
-          <b>{{ m.name }}</b> <small class="inline">#{{ m.id }}</small>
-          <form method="post" action="/admin/merchants/rename" class="row" style="margin-top:6px">
-            <input type="hidden" name="merchant_id" value="{{ m.id }}">
-            <input name="name" value="{{ m.name }}" style="padding:4px 8px;font-size:12px;max-width:150px">
-            <button class="btn sm">Rename</button>
-          </form>
-        </td>
-        <td>
-          {% if m.billing_status == 'comp' %}<span class="pill green">Lifetime</span>
-          {% elif m.billing_status in ('active', 'trialing') %}<span class="pill green">{{ m.billing_status|title }}</span>
-          {% elif m.billing_status == 'past_due' %}<span class="pill amber">Past due</span>
-          {% else %}<span class="pill red">Paused</span>{% endif %}
-          <small>{{ m.plan_key }}</small>
-          <div class="row" style="margin-top:4px;gap:4px">
-            {% if m.billing_status != 'comp' %}
-            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="comp"><button class="link" style="font-size:11px">Grant lifetime</button></form>
-            {% endif %}
-            {% if m.billing_status != 'canceled' %}
-            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="grace"><button class="link" style="font-size:11px">+7d grace</button></form>
-            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="suspend"><button class="link" style="color:var(--redink);font-size:11px">Pause</button></form>
-            {% else %}
-            <form method="post" action="/admin/merchants/billing"><input type="hidden" name="merchant_id" value="{{ m.id }}"><input type="hidden" name="action" value="activate"><button class="link" style="font-size:11px">Reactivate</button></form>
-            {% endif %}
-          </div>
-        </td>
-        <td>
-          {% if m.zettle_connected %}<span class="pill green">Connected</span>{% else %}<span class="pill amber">Not connected</span>{% endif %}
-          <small>Last sync: {{ m.last_sync_at or 'never' }}</small>
-          {% if m.last_error %}<small class="err">{{ m.last_error }}</small>{% endif %}
-        </td>
-        <td>
-          <b>{{ m.sku_count }}</b> SKUs · <b>{{ m.sale_count }}</b> sales
-        </td>
-        <td>
-          {% for mem in m.members %}
-            <div style="font-size:13px;margin-bottom:2px">
-              <b>{{ mem.display_name }}</b> ({{ mem.username }}) · <span class="pill {{ 'green' if mem.role == 'owner' else 'amber' }}" style="padding:1px 8px;font-size:11px">{{ mem.role }}</span>
-              <form method="post" action="/admin/members/remove" style="display:inline">
-                <input type="hidden" name="merchant_id" value="{{ m.id }}">
-                <input type="hidden" name="user_id" value="{{ mem.user_id }}">
-                <button class="link" style="color:var(--redink);font-size:11px;padding:0 4px">×</button>
-              </form>
+<section id="tab-workspaces"{{ ' hidden' if active_tab != 'workspaces' }}>
+  {% for m in merchants %}
+  <div class="card ws-card">
+    <div class="ws-head">
+      <div>
+        <div class="ws-title">
+          <span>{{ m.name }}</span>
+          <small class="inline">#{{ m.id }}</small>
+        </div>
+        <div class="ws-meta">
+          {% if m.billing_status == 'comp' %}
+            <span class="pill green">Lifetime</span>
+          {% elif m.billing_status in ('active', 'trialing') %}
+            <span class="pill green">{{ m.billing_status|title }}{% if m.plan_key %} · {{ m.plan_key|title }}{% endif %}</span>
+          {% elif m.billing_status == 'past_due' %}
+            <span class="pill amber">Past due{% if m.plan_key %} · {{ m.plan_key|title }}{% endif %}</span>
+          {% else %}
+            <span class="pill red">Paused{% if m.plan_key %} · {{ m.plan_key|title }}{% endif %}</span>
+          {% endif %}
+          {% if m.zettle_connected %}
+            <span class="pill green">Zettle · {{ m.last_sync_display }}</span>
+          {% else %}
+            <span class="pill gray">Zettle · Not connected</span>
+          {% endif %}
+          {% if m.last_error %}
+            <span class="pill red" title="{{ m.last_error }}">Sync error</span>
+          {% endif %}
+          <span><b>{{ m.sku_count }}</b> SKUs · <b>{{ m.sale_count }}</b> sales</span>
+        </div>
+      </div>
+      <div class="ws-actions">
+        <form method="post" action="/switch-merchant" class="inline-form">
+          <input type="hidden" name="merchant_id" value="{{ m.id }}">
+          <input type="hidden" name="next_url" value="/inventory">
+          <button class="btn sm primary">Open</button>
+        </form>
+        {% if m.zettle_connected %}
+        <form method="post" action="/admin/merchants/sync" class="inline-form">
+          <input type="hidden" name="merchant_id" value="{{ m.id }}">
+          <button class="btn sm">Sync</button>
+        </form>
+        {% endif %}
+        <button
+          type="button"
+          class="btn sm"
+          data-id="{{ m.id }}"
+          data-name="{{ m.name }}"
+          data-billing="{{ m.billing_status }}"
+          data-plan="{{ m.plan_key }}"
+          onclick="openManageWorkspace(this)"
+        >Manage</button>
+      </div>
+    </div>
+
+    <div class="ws-body">
+      <div class="flex-between mb-sm">
+        <small><b>Members ({{ m.members|length }})</b></small>
+        <button
+          type="button"
+          class="btn sm"
+          data-id="{{ m.id }}"
+          data-name="{{ m.name }}"
+          data-members="{{ m.members|map(attribute='user_id')|join(',') }}"
+          onclick="openAddMember(this)"
+        >+ Add member</button>
+      </div>
+      {% if m.members %}
+      <div class="member-list">
+        {% for mem in m.members %}
+        <div class="member-row">
+          <div class="member-info">
+            <div class="member-name">
+              <b>{{ mem.display_name }}</b>
+              <span class="member-handle">@{{ mem.username }}</span>
+              {% if mem.is_admin %}<span class="pill blue">Super Admin</span>{% endif %}
             </div>
-          {% else %}
-            <small class="muted">No members yet</small>
-          {% endfor %}
-        </td>
-        <td>
-          <div class="row" style="flex-wrap:wrap">
-            <form method="post" action="/switch-merchant" style="display:inline">
+          </div>
+          <div class="member-controls">
+            <form method="post" action="/admin/members/role" class="inline-form">
               <input type="hidden" name="merchant_id" value="{{ m.id }}">
-              <input type="hidden" name="next_url" value="/inventory">
-              <button class="btn sm primary">Open workspace</button>
+              <input type="hidden" name="user_id" value="{{ mem.user_id }}">
+              <select
+                name="role"
+                class="role-select"
+                aria-label="Role for {{ mem.username }} in {{ m.name }}"
+                onchange="this.form.submit()"
+              >
+                {% for r in roles %}
+                <option value="{{ r }}"{{ ' selected' if mem.role == r }}>{{ r|title }}</option>
+                {% endfor %}
+              </select>
             </form>
-            {% if m.zettle_connected %}
-            <form method="post" action="/admin/merchants/sync" style="display:inline">
+            <form
+              method="post"
+              action="/admin/members/remove"
+              class="inline-form"
+              data-confirm="Remove {{ mem.display_name }} from {{ m.name }}?"
+              onsubmit="return confirm(this.dataset.confirm)"
+            >
               <input type="hidden" name="merchant_id" value="{{ m.id }}">
-              <button class="btn sm">Sync now</button>
-            </form>
-            {% endif %}
-            <form method="post" action="/admin/merchants/delete" style="display:inline" onsubmit="return confirm('Delete workspace {{ m.name }} and all its inventory/sales?')">
-              <input type="hidden" name="merchant_id" value="{{ m.id }}">
-              <button class="btn sm danger">Delete</button>
+              <input type="hidden" name="user_id" value="{{ mem.user_id }}">
+              <button class="btn sm danger">Remove</button>
             </form>
           </div>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="5" class="empty">No workspaces created yet.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <small class="muted">No members assigned yet.</small>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card empty">No workspaces created yet. Click <b>+ New workspace</b> to get started.</div>
+  {% endfor %}
+</section>
 
-<div class="card" style="margin-bottom:20px">
-  <h2>Assign user to a workspace</h2>
-  <p class="sub">Add a new or existing user (e.g. an owner or staff member) to any workspace.</p>
-  <form method="post" action="/admin/members/save" class="filters" style="padding:0;flex-wrap:wrap">
-    <select name="merchant_id" required>
-      {% for m in merchants %}<option value="{{ m.id }}">{{ m.name }} (#{{ m.id }})</option>{% endfor %}
-    </select>
-    <input name="username" placeholder="Username (e.g. alex)" required style="max-width:160px">
-    <input name="display_name" placeholder="Display name (e.g. Alex)" style="max-width:160px">
-    <input name="password" type="password" placeholder="Password (if new user)" style="max-width:160px">
-    <select name="role">
-      {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
-    </select>
-    <button class="btn primary">Save member</button>
-  </form>
-</div>
+<section id="tab-users"{{ ' hidden' if active_tab != 'users' }}>
+  <div class="card">
+    <div class="flex-between mb-md">
+      <input
+        type="search"
+        id="user-search"
+        class="search-input"
+        placeholder="Search users by name, @username, or workspace…"
+        oninput="filterUsers()"
+      >
+      <button type="button" class="btn sm primary" onclick="openNewUser()">+ New user</button>
+    </div>
+    <div class="member-list" id="user-list">
+      {% for u in users %}
+      <div
+        class="member-row"
+        data-search="{{ (u.display_name ~ ' ' ~ u.username ~ ' ' ~ (u.memberships|map(attribute='merchant_name')|join(' ')))|lower }}"
+      >
+        <div class="member-info">
+          <div class="member-name">
+            <b>{{ u.display_name or u.username }}</b>
+            <span class="member-handle">@{{ u.username }} · #{{ u.id }}</span>
+            {% if u.is_admin %}<span class="pill blue">Super Admin</span>{% endif %}
+          </div>
+          <div class="row">
+            {% for m in u.memberships %}
+            <span class="pill {{ 'green' if m.role == 'owner' else ('amber' if m.role == 'manager' else 'gray') }}">{{ m.merchant_name }} · {{ m.role }}</span>
+            {% else %}
+            <small class="muted">No workspace memberships</small>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="member-controls">
+          <button
+            type="button"
+            class="btn sm"
+            data-id="{{ u.id }}"
+            data-username="{{ u.username }}"
+            data-display-name="{{ u.display_name or '' }}"
+            data-admin="{{ '1' if u.is_admin else '0' }}"
+            onclick="openEditUser(this)"
+          >Edit</button>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No user accounts found.</div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
 
-<div class="card table-card" style="margin-bottom:20px">
-  <div class="filters"><b>One-time invite links ({{ invites|length }})</b></div>
-  <table>
-    <thead><tr><th>Invite URL</th><th>Target</th><th>Role</th><th>Note</th><th>Status</th><th></th></tr></thead>
-    <tbody>
-    {% for i in invites %}
-      <tr>
-        <td><code>{{ base_url }}/invite/{{ i.token }}</code></td>
-        <td>{{ i.merchant_name or ('New workspace: ' ~ (i.default_merchant_name or 'Custom')) }}</td>
-        <td><span class="pill amber">{{ i.role }}</span></td>
-        <td>{{ i.note }}</td>
-        <td>
-          {% if i.redeemed %}<span class="pill green">Used by {{ i.used_by_username or i.used_by }}</span>
-          {% elif i.expired %}<span class="pill red">Expired</span>
-          {% else %}<span class="pill green">Active (until {{ i.expires_at[:10] }})</span>{% endif %}
-        </td>
-        <td style="text-align:right">
-          <form method="post" action="/admin/invites/delete" style="display:inline">
+<section id="tab-invites"{{ ' hidden' if active_tab != 'invites' }}>
+  <div class="card">
+    <div class="flex-between mb-md">
+      <b>One-time invite links ({{ invites|length }})</b>
+      <button type="button" class="btn sm primary" onclick="openInviteModal()">+ Invite link</button>
+    </div>
+    {% if invites %}
+    <div class="member-list">
+      {% for i in invites %}
+      <div class="member-row">
+        <div class="member-info">
+          <div class="member-name">
+            <b>{{ i.merchant_name or ('New workspace: ' ~ (i.default_merchant_name or 'Custom')) }}</b>
+            <span class="pill {{ 'green' if i.role == 'owner' else ('amber' if i.role == 'manager' else 'gray') }}">{{ i.role|title }}</span>
+            {% if i.redeemed %}
+              <span class="pill green">Used by @{{ i.used_by_username or i.used_by }}</span>
+            {% elif i.expired %}
+              <span class="pill red">Expired</span>
+            {% else %}
+              <span class="pill green">Active · expires {{ i.expires_at[:10] }}</span>
+            {% endif %}
+          </div>
+          <small>
+            {% if i.note %}{{ i.note }} · {% endif %}
+            <code>{{ base_url }}/invite/{{ i.token }}</code>
+          </small>
+        </div>
+        <div class="member-controls">
+          {% if not i.redeemed and not i.expired %}
+          <button type="button" class="btn sm" data-copy="{{ base_url }}/invite/{{ i.token }}" onclick="copyFromBtn(this)">Copy link</button>
+          {% endif %}
+          <form
+            method="post"
+            action="/admin/invites/delete"
+            class="inline-form"
+            onsubmit="return confirm('Delete this invite link?')"
+          >
             <input type="hidden" name="token" value="{{ i.token }}">
-            <button class="link" style="color:var(--redink)">Delete</button>
+            <button class="btn sm danger">Delete</button>
           </form>
-        </td>
-      </tr>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
     {% else %}
-      <tr><td colspan="6" class="empty">No invite links generated yet.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
+    <div class="empty">No invite links generated yet.</div>
+    {% endif %}
+  </div>
+</section>
 
-<div class="card table-card">
-  <div class="filters"><b>All users ({{ users|length }})</b></div>
-  <table>
-    <thead><tr><th>User</th><th>Workspaces</th><th>Super Admin</th><th>Reset password</th></tr></thead>
-    <tbody>
-    {% for u in users %}
-      <tr>
-        <td><b>{{ u.display_name }}</b><small>{{ u.username }} · #{{ u.id }}</small></td>
-        <td>
-          {% for m in u.memberships %}
-            <span class="pill green" style="margin-right:4px">{{ m.merchant_name }} ({{ m.role }})</span>
-          {% else %}
-            <small class="muted">None</small>
-          {% endfor %}
-        </td>
-        <td>
-          <form method="post" action="/admin/users/admin" style="display:inline">
-            <input type="hidden" name="user_id" value="{{ u.id }}">
-            <input type="hidden" name="is_admin" value="{{ 0 if u.is_admin else 1 }}">
-            <button class="btn sm">{{ 'Yes (revoke)' if u.is_admin else 'No (grant)' }}</button>
-          </form>
-        </td>
-        <td>
-          <form method="post" action="/admin/users/password" class="row">
-            <input type="hidden" name="user_id" value="{{ u.id }}">
-            <input name="new_password" type="password" placeholder="New password" required style="padding:6px 8px;font-size:12px;max-width:150px">
-            <button class="btn sm">Reset</button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
+<dialog id="dlg-new-ws">
+  <div class="modal-head">
+    <h2>New workspace</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/merchants/create" class="fgrid">
+    <label class="full">
+      Workspace name
+      <input name="merchant_name" id="nw-name" placeholder="e.g. Willow Creek Farm" required>
+    </label>
+    <div class="full">
+      <small class="mb-sm"><b>Initial owner</b></small>
+      <div class="row">
+        <label class="tag-chip"><input type="radio" name="nw_owner_mode" value="none" checked onchange="syncNewWsMode()"> No owner yet</label>
+        <label class="tag-chip"><input type="radio" name="nw_owner_mode" value="existing" onchange="syncNewWsMode()"> Existing user</label>
+        <label class="tag-chip"><input type="radio" name="nw_owner_mode" value="new" onchange="syncNewWsMode()"> Create new user</label>
+      </div>
+    </div>
+    <label class="full" id="nw-existing-wrap" hidden>
+      Select existing user
+      <select name="owner_user_id" id="nw-owner-uid" disabled>
+        {% for u in users %}
+        <option value="{{ u.id }}">{{ u.display_name or u.username }} (@{{ u.username }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="fgrid full" id="nw-new-wrap" hidden>
+      <label>
+        Owner username
+        <input name="owner_username" id="nw-owner-username" placeholder="e.g. alex" disabled>
+      </label>
+      <label>
+        Display name
+        <input name="owner_display_name" id="nw-owner-display" placeholder="e.g. Alex" disabled>
+      </label>
+      <label class="full">
+        Password
+        <input name="owner_password" id="nw-owner-password" type="password" minlength="4" placeholder="Min 4 chars" disabled>
+      </label>
+    </div>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Create workspace</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-manage-ws">
+  <div class="modal-head">
+    <h2 id="mws-title">Manage workspace</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+
+  <form method="post" action="/admin/merchants/rename" class="fgrid">
+    <input type="hidden" name="merchant_id" id="mws-id">
+    <label class="full">
+      Workspace name
+      <div class="row">
+        <input name="name" id="mws-name" required style="flex:1">
+        <button class="btn primary">Rename</button>
+      </div>
+    </label>
+  </form>
+
+  <div class="modal-section">
+    <div class="flex-between mb-sm">
+      <div>
+        <b>Billing &amp; access</b>
+        <small id="mws-plan-note"></small>
+      </div>
+      <span id="mws-billing-pill" class="pill green"></span>
+    </div>
+    <div class="row">
+      <form method="post" action="/admin/merchants/billing" class="inline-form" id="mws-form-comp">
+        <input type="hidden" name="merchant_id" class="mws-mid-input">
+        <input type="hidden" name="action" value="comp">
+        <button class="btn sm">Grant lifetime</button>
+      </form>
+      <form method="post" action="/admin/merchants/billing" class="inline-form" id="mws-form-grace">
+        <input type="hidden" name="merchant_id" class="mws-mid-input">
+        <input type="hidden" name="action" value="grace">
+        <button class="btn sm">+7d grace</button>
+      </form>
+      <form method="post" action="/admin/merchants/billing" class="inline-form" id="mws-form-suspend">
+        <input type="hidden" name="merchant_id" class="mws-mid-input">
+        <input type="hidden" name="action" value="suspend">
+        <button class="btn sm danger">Pause access</button>
+      </form>
+      <form method="post" action="/admin/merchants/billing" class="inline-form" id="mws-form-activate">
+        <input type="hidden" name="merchant_id" class="mws-mid-input">
+        <input type="hidden" name="action" value="activate">
+        <button class="btn sm primary">Reactivate</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="danger-zone">
+    <div>
+      <b class="text-red">Delete workspace</b>
+      <small>Permanently removes inventory, sales history, and links for this workspace.</small>
+    </div>
+    <form
+      method="post"
+      action="/admin/merchants/delete"
+      class="inline-form"
+      id="mws-del-form"
+      onsubmit="return confirm(this.dataset.confirm)"
+    >
+      <input type="hidden" name="merchant_id" class="mws-mid-input">
+      <button class="btn sm danger">Delete workspace</button>
+    </form>
+  </div>
+</dialog>
+
+<dialog id="dlg-add-member">
+  <div class="modal-head">
+    <div>
+      <h2>Add member</h2>
+      <small id="am-sub"></small>
+    </div>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/members/save" class="fgrid">
+    <input type="hidden" name="merchant_id" id="am-mid">
+    <div class="full row">
+      <label class="tag-chip"><input type="radio" name="am_mode" value="existing" checked onchange="syncAddMemberMode()"> Existing user</label>
+      <label class="tag-chip"><input type="radio" name="am_mode" value="new" onchange="syncAddMemberMode()"> Create new user</label>
+    </div>
+
+    <label class="full" id="am-existing-wrap">
+      User
+      <select name="existing_user_id" id="am-uid" required>
+        {% for u in users %}
+        <option value="{{ u.id }}" data-label="{{ u.display_name or u.username }} (@{{ u.username }})">{{ u.display_name or u.username }} (@{{ u.username }})</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <div class="fgrid full" id="am-new-wrap" hidden>
+      <label>
+        Username
+        <input name="username" id="am-username" placeholder="e.g. alex" disabled>
+      </label>
+      <label>
+        Display name
+        <input name="display_name" id="am-display" placeholder="e.g. Alex" disabled>
+      </label>
+      <label class="full">
+        Password
+        <input name="password" id="am-password" type="password" minlength="4" placeholder="Min 4 chars" disabled>
+      </label>
+    </div>
+
+    <label class="full">
+      Workspace role
+      <select name="role" id="am-role">
+        {% for r in roles %}
+        <option value="{{ r }}"{{ ' selected' if r == 'manager' }}>{{ r|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save member</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-invite">
+  <div class="modal-head">
+    <h2>Generate one-time invite link</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/invites/create" class="fgrid">
+    <label class="full">
+      Target workspace
+      <select name="target_merchant_id" id="inv-target" onchange="syncInviteFields()">
+        <option value="">Create a brand-new workspace (Owner)</option>
+        {% for m in merchants %}
+        <option value="{{ m.id }}">Join: {{ m.name }} (#{{ m.id }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Role
+      <select name="role" id="inv-role">
+        {% for r in roles %}
+        <option value="{{ r }}"{{ ' selected' if r == 'owner' }}>{{ r|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Expires in (days)
+      <input type="number" name="days_valid" value="14" min="1" max="90" required>
+    </label>
+    <label class="full" id="inv-default-name-wrap">
+      Pre-fill workspace name
+      <input name="default_merchant_name" placeholder="e.g. Clover Hill Honey">
+    </label>
+    <label class="full">
+      Note (optional)
+      <input name="note" placeholder="e.g. Market cashier or farm owner">
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Generate link</button>
+    </div>
+  </form>
+</dialog>
+
+{% if stripe_configured %}
+<dialog id="dlg-checkout">
+  <div class="modal-head">
+    <h2>Create Stripe Checkout link</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/billing/checkout-link" class="fgrid">
+    <label class="full">
+      Farm / business name
+      <input name="merchant_name" placeholder="e.g. Willow Creek Farm" required>
+    </label>
+    <label>
+      Farmer email (optional)
+      <input name="email" type="email" placeholder="owner@example.com">
+    </label>
+    <label>
+      Plan
+      <select name="plan_key">
+        {% for key, p in price_catalog.items() %}
+        <option value="{{ key }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Create Checkout link</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
+<dialog id="dlg-new-user">
+  <div class="modal-head">
+    <h2>New user account</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/users/create" class="fgrid">
+    <label>
+      Username
+      <input name="username" placeholder="e.g. sam" required>
+    </label>
+    <label>
+      Display name
+      <input name="display_name" placeholder="e.g. Sam">
+    </label>
+    <label class="full">
+      Password
+      <input name="password" type="password" minlength="4" placeholder="Min 4 chars" required>
+    </label>
+    <label>
+      Initial workspace (optional)
+      <select name="merchant_id">
+        <option value="">None (no workspace yet)</option>
+        {% for m in merchants %}
+        <option value="{{ m.id }}">{{ m.name }} (#{{ m.id }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Workspace role
+      <select name="role">
+        {% for r in roles %}
+        <option value="{{ r }}"{{ ' selected' if r == 'staff' }}>{{ r|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="full check-row">
+      <input type="checkbox" name="is_admin" value="1">
+      <span>Super Admin (can manage all workspaces and users)</span>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Create user</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-edit-user">
+  <div class="modal-head">
+    <div>
+      <h2>Edit user</h2>
+      <small id="eu-sub"></small>
+    </div>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/admin/users/update" class="fgrid">
+    <input type="hidden" name="user_id" id="eu-uid">
+    <label class="full">
+      Display name
+      <input name="display_name" id="eu-display" required>
+    </label>
+    <label class="full">
+      Reset password (optional)
+      <input name="new_password" id="eu-password" type="password" minlength="4" placeholder="Leave blank to keep current password">
+    </label>
+    <label class="full check-row">
+      <input type="checkbox" name="is_admin" id="eu-admin" value="1">
+      <span>Super Admin (full access to all workspaces)</span>
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save changes</button>
+    </div>
+  </form>
+
+  <div class="danger-zone" id="eu-danger-zone">
+    <div>
+      <b class="text-red">Delete user</b>
+      <small>Removes this account, sessions, and workspace memberships.</small>
+    </div>
+    <form
+      method="post"
+      action="/admin/users/delete"
+      class="inline-form"
+      id="eu-del-form"
+      onsubmit="return confirm(this.dataset.confirm)"
+    >
+      <input type="hidden" name="user_id" id="eu-del-uid">
+      <button class="btn sm danger">Delete user</button>
+    </form>
+  </div>
+  <small class="muted mt-sm" id="eu-self-note" hidden>You are signed in as this account and cannot delete it here.</small>
+</dialog>
+
+<script>
+const CURRENT_USER_ID = {{ ctx.user.id|int }};
+
+function switchAdminTab(tab) {
+  document.querySelectorAll('.seg-btn[data-tab]').forEach(btn => {
+    btn.classList.toggle('on', btn.dataset.tab === tab);
+  });
+  ['workspaces', 'users', 'invites'].forEach(name => {
+    const el = document.getElementById('tab-' + name);
+    if (el) el.hidden = (name !== tab);
+  });
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    history.replaceState(null, '', url.toString());
+  } catch (_) {}
+}
+
+function copyFromBtn(btn) {
+  const txt = btn.dataset.copy || '';
+  if (!txt) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1600);
+    });
+  }
+}
+
+function syncNewWsMode() {
+  const mode = (document.querySelector('input[name="nw_owner_mode"]:checked') || {}).value || 'none';
+  const exWrap = document.getElementById('nw-existing-wrap');
+  const newWrap = document.getElementById('nw-new-wrap');
+  const uidSel = document.getElementById('nw-owner-uid');
+  const uIn = document.getElementById('nw-owner-username');
+  const dIn = document.getElementById('nw-owner-display');
+  const pIn = document.getElementById('nw-owner-password');
+  exWrap.hidden = mode !== 'existing';
+  uidSel.disabled = mode !== 'existing';
+  newWrap.hidden = mode !== 'new';
+  [uIn, dIn, pIn].forEach(el => { el.disabled = mode !== 'new'; });
+  uIn.required = mode === 'new';
+  pIn.required = mode === 'new';
+}
+
+function openNewWorkspace() {
+  document.getElementById('nw-name').value = '';
+  const noneRadio = document.querySelector('input[name="nw_owner_mode"][value="none"]');
+  if (noneRadio) noneRadio.checked = true;
+  document.getElementById('nw-owner-username').value = '';
+  document.getElementById('nw-owner-display').value = '';
+  document.getElementById('nw-owner-password').value = '';
+  syncNewWsMode();
+  document.getElementById('dlg-new-ws').showModal();
+}
+
+function openManageWorkspace(btn) {
+  const id = btn.dataset.id;
+  const name = btn.dataset.name || '';
+  const billing = btn.dataset.billing || 'comp';
+  const plan = btn.dataset.plan || '';
+  document.getElementById('mws-title').textContent = name + ' (#' + id + ')';
+  document.getElementById('mws-id').value = id;
+  document.getElementById('mws-name').value = name;
+  document.querySelectorAll('.mws-mid-input').forEach(el => { el.value = id; });
+
+  const pill = document.getElementById('mws-billing-pill');
+  const note = document.getElementById('mws-plan-note');
+  if (billing === 'comp') {
+    pill.textContent = 'Lifetime';
+    pill.className = 'pill green';
+    note.textContent = 'Complimentary lifetime access';
+  } else if (billing === 'active' || billing === 'trialing') {
+    pill.textContent = billing.charAt(0).toUpperCase() + billing.slice(1);
+    pill.className = 'pill green';
+    note.textContent = plan ? ('Plan: ' + plan) : '';
+  } else if (billing === 'past_due') {
+    pill.textContent = 'Past due';
+    pill.className = 'pill amber';
+    note.textContent = plan ? ('Plan: ' + plan) : '';
+  } else {
+    pill.textContent = 'Paused';
+    pill.className = 'pill red';
+    note.textContent = plan ? ('Plan: ' + plan) : '';
+  }
+
+  document.getElementById('mws-form-comp').hidden = (billing === 'comp');
+  document.getElementById('mws-form-grace').hidden = (billing === 'canceled');
+  document.getElementById('mws-form-suspend').hidden = (billing === 'canceled');
+  document.getElementById('mws-form-activate').hidden = (billing !== 'canceled');
+
+  document.getElementById('mws-del-form').dataset.confirm =
+    'Delete workspace "' + name + '" and all its inventory & sales? This cannot be undone.';
+  document.getElementById('dlg-manage-ws').showModal();
+}
+
+function syncAddMemberMode() {
+  const mode = (document.querySelector('input[name="am_mode"]:checked') || {}).value || 'existing';
+  const exWrap = document.getElementById('am-existing-wrap');
+  const newWrap = document.getElementById('am-new-wrap');
+  const uidSel = document.getElementById('am-uid');
+  const uIn = document.getElementById('am-username');
+  const dIn = document.getElementById('am-display');
+  const pIn = document.getElementById('am-password');
+  exWrap.hidden = mode !== 'existing';
+  uidSel.disabled = mode !== 'existing';
+  uidSel.required = mode === 'existing';
+  newWrap.hidden = mode !== 'new';
+  [uIn, dIn, pIn].forEach(el => { el.disabled = mode !== 'new'; });
+  uIn.required = mode === 'new';
+  pIn.required = mode === 'new';
+}
+
+function openAddMember(btn) {
+  const id = btn.dataset.id;
+  const name = btn.dataset.name || '';
+  const memberIds = new Set((btn.dataset.members || '').split(',').filter(Boolean));
+  document.getElementById('am-mid').value = id;
+  document.getElementById('am-sub').textContent = 'Workspace: ' + name + ' (#' + id + ')';
+
+  const uidSel = document.getElementById('am-uid');
+  let firstNonMember = '';
+  Array.from(uidSel.options).forEach(opt => {
+    const base = opt.dataset.label || opt.textContent;
+    if (memberIds.has(opt.value)) {
+      opt.textContent = base + ' · already in workspace';
+    } else {
+      opt.textContent = base;
+      if (!firstNonMember) firstNonMember = opt.value;
+    }
+  });
+  if (firstNonMember) uidSel.value = firstNonMember;
+
+  const hasUsers = uidSel.options.length > 0;
+  const modeVal = (hasUsers && (firstNonMember || uidSel.options.length > 0)) ? 'existing' : 'new';
+  const radio = document.querySelector('input[name="am_mode"][value="' + modeVal + '"]');
+  if (radio) radio.checked = true;
+  document.getElementById('am-username').value = '';
+  document.getElementById('am-display').value = '';
+  document.getElementById('am-password').value = '';
+  document.getElementById('am-role').value = 'manager';
+  syncAddMemberMode();
+  document.getElementById('dlg-add-member').showModal();
+}
+
+function syncInviteFields() {
+  const target = document.getElementById('inv-target').value;
+  const isNew = !target;
+  const roleSel = document.getElementById('inv-role');
+  document.getElementById('inv-default-name-wrap').hidden = !isNew;
+  Array.from(roleSel.options).forEach(opt => {
+    opt.disabled = isNew && opt.value !== 'owner';
+  });
+  if (isNew) roleSel.value = 'owner';
+}
+
+function openInviteModal() {
+  syncInviteFields();
+  document.getElementById('dlg-invite').showModal();
+}
+
+function openNewUser() {
+  document.getElementById('dlg-new-user').showModal();
+}
+
+function openEditUser(btn) {
+  const uid = Number(btn.dataset.id);
+  const username = btn.dataset.username || '';
+  const displayName = btn.dataset.displayName || '';
+  const isAdmin = btn.dataset.admin === '1';
+  document.getElementById('eu-uid').value = String(uid);
+  document.getElementById('eu-sub').textContent = '@' + username + ' · #' + uid;
+  document.getElementById('eu-display').value = displayName || username;
+  document.getElementById('eu-password').value = '';
+  document.getElementById('eu-admin').checked = isAdmin;
+
+  const isSelf = uid === CURRENT_USER_ID;
+  document.getElementById('eu-danger-zone').hidden = isSelf;
+  document.getElementById('eu-self-note').hidden = !isSelf;
+  document.getElementById('eu-del-uid').value = String(uid);
+  document.getElementById('eu-del-form').dataset.confirm =
+    'Delete account @' + username + '? All their sessions and memberships will be removed.';
+  document.getElementById('dlg-edit-user').showModal();
+}
+
+function filterUsers() {
+  const q = (document.getElementById('user-search').value || '').trim().toLowerCase();
+  document.querySelectorAll('#user-list .member-row').forEach(row => {
+    const hay = row.dataset.search || '';
+    row.hidden = Boolean(q) && !hay.includes(q);
+  });
+}
+</script>
 {% endblock %}
