@@ -226,6 +226,287 @@ def void_quick_sale(
         conn.close()
 
 
+def exclude_zettle_sale(
+    merchant_id: int,
+    sale_id: int,
+    restore_stock: bool = True,
+) -> dict:
+    """Exclude a synced Zettle sale from totals & insights without allowing re-import."""
+    conn = get_connection()
+    try:
+        sale = conn.execute(
+            "SELECT id, source, status, created_by FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        ).fetchone()
+        if not sale:
+            raise ValueError("Sale not found.")
+        if sale["source"] != "zettle":
+            raise ValueError("Only synced Zettle transactions can be excluded here.")
+        if sale["status"] == "voided":
+            raise ValueError("This Zettle sale is already excluded.")
+
+        restored_items = 0
+        if restore_stock:
+            now = _now()
+            ledger_rows = conn.execute(
+                """
+                SELECT l.sku_id, l.delta
+                FROM stock_ledger l
+                JOIN sale_items si ON si.id = l.sale_item_id
+                WHERE si.sale_id = ? AND l.merchant_id = ?
+                """,
+                (int(sale_id), int(merchant_id)),
+            ).fetchall()
+            for lr in ledger_rows:
+                comp = -float(lr["delta"] or 0)
+                if abs(comp) < 1e-9:
+                    continue
+                conn.execute(
+                    "INSERT INTO stock_ledger (merchant_id, sku_id, delta, reason, sale_item_id, note, created_by, created_at)"
+                    " VALUES (?, ?, ?, 'adjustment', NULL, ?, ?, ?)",
+                    (
+                        int(merchant_id),
+                        int(lr["sku_id"]),
+                        comp,
+                        f"Excluded Zettle sale #{int(sale_id)}",
+                        sale["created_by"],
+                        now,
+                    ),
+                )
+                restored_items += 1
+
+        conn.execute(
+            "UPDATE sales SET status = 'voided' WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {"sale_id": int(sale_id), "restored_items": restored_items}
+    finally:
+        conn.close()
+
+
+def restore_sale(
+    merchant_id: int,
+    sale_id: int,
+    rededuct_stock: bool = True,
+) -> dict:
+    """Restore a voided Quick sale or excluded Zettle sale back to completed status."""
+    conn = get_connection()
+    try:
+        sale = conn.execute(
+            "SELECT id, source, status FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        ).fetchone()
+        if not sale:
+            raise ValueError("Sale not found.")
+        if sale["status"] != "voided":
+            raise ValueError("Only voided or excluded sales can be restored.")
+
+        removed_adjustments = 0
+        if rededuct_stock:
+            cur = conn.execute(
+                "DELETE FROM stock_ledger"
+                " WHERE merchant_id = ? AND reason = 'adjustment' AND note IN (?, ?)",
+                (
+                    int(merchant_id),
+                    f"Voided Quick sale #{int(sale_id)}",
+                    f"Excluded Zettle sale #{int(sale_id)}",
+                ),
+            )
+            removed_adjustments = int(cur.rowcount or 0)
+
+        conn.execute(
+            "UPDATE sales SET status = 'completed' WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {
+            "sale_id": int(sale_id),
+            "source": sale["source"],
+            "removed_adjustments": removed_adjustments,
+        }
+    finally:
+        conn.close()
+
+
+def update_quick_sale(
+    merchant_id: int,
+    sale_id: int,
+    payment_type: str,
+    occurred_at_utc: str,
+    item_updates: list[dict] | None = None,
+    total_cents: int | None = None,
+    cash_received_cents: int | None = None,
+) -> dict:
+    """Update a completed Quick sale's timestamp, payment method, line items, and linked stock."""
+    clean_pay = (payment_type or "cash").strip().lower()
+    if clean_pay not in PAYMENT_METHODS:
+        raise ValueError(f"Unsupported payment type: {payment_type}")
+    try:
+        occ_clean = datetime.fromisoformat(occurred_at_utc.strip()).isoformat(timespec="seconds")
+    except ValueError as exc:
+        raise ValueError("Invalid sale date/time.") from exc
+
+    conn = get_connection()
+    try:
+        sale = conn.execute(
+            "SELECT id, source, status, total_cents FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        ).fetchone()
+        if not sale:
+            raise ValueError("Sale not found.")
+        if sale["source"] != "cash":
+            raise ValueError("Only Quick sale transactions can be edited here.")
+        if sale["status"] == "voided":
+            raise ValueError("Restore this voided sale before editing it.")
+
+        existing_items = conn.execute(
+            "SELECT si.id, si.sku_id, si.quantity, si.unit_price_cents,"
+            " COALESCE(k.sell_mode, 'unit') AS sell_mode"
+            " FROM sale_items si LEFT JOIN skus k ON k.id = si.sku_id"
+            " WHERE si.sale_id = ? ORDER BY si.id",
+            (int(sale_id),),
+        ).fetchall()
+
+        new_total = int(sale["total_cents"] or 0)
+        if existing_items and item_updates is not None:
+            by_id = {int(r["id"]): dict(r) for r in existing_items}
+            updates_by_id = {}
+            for upd in item_updates:
+                si_id = int(upd["sale_item_id"])
+                if si_id in by_id:
+                    updates_by_id[si_id] = upd
+            remaining_count = 0
+            recomputed_total = 0
+            for si_id, orig in by_id.items():
+                if si_id in updates_by_id:
+                    new_qty = fmt_qty(float(updates_by_id[si_id]["quantity"]))
+                    new_price = int(updates_by_id[si_id]["unit_price_cents"])
+                else:
+                    new_qty = fmt_qty(float(orig["quantity"] or 0))
+                    new_price = int(orig["unit_price_cents"])
+                if float(new_qty) < 0:
+                    raise ValueError("Item quantity cannot be negative.")
+                if new_price < 0:
+                    raise ValueError("Unit price cannot be negative.")
+                if float(new_qty) == 0:
+                    conn.execute("DELETE FROM sale_items WHERE id = ? AND sale_id = ?", (si_id, int(sale_id)))
+                    continue
+                remaining_count += 1
+                recomputed_total += round(float(new_qty) * new_price)
+                old_qty = fmt_qty(float(orig["quantity"] or 0))
+                if float(new_qty) != float(old_qty) or new_price != int(orig["unit_price_cents"] or 0):
+                    conn.execute(
+                        "UPDATE sale_items SET quantity = ?, unit_price_cents = ? WHERE id = ? AND sale_id = ?",
+                        (new_qty, new_price, si_id, int(sale_id)),
+                    )
+                    if float(new_qty) != float(old_qty) and orig["sell_mode"] != "lb_stock_unit":
+                        ledger = conn.execute(
+                            "SELECT id FROM stock_ledger WHERE merchant_id = ? AND sale_item_id = ?",
+                            (int(merchant_id), si_id),
+                        ).fetchone()
+                        if ledger:
+                            new_delta = fmt_qty(-float(new_qty))
+                            conn.execute(
+                                "UPDATE stock_ledger SET delta = ? WHERE id = ? AND merchant_id = ?",
+                                (new_delta, int(ledger["id"]), int(merchant_id)),
+                            )
+            if remaining_count == 0:
+                raise ValueError("A sale must keep at least one item — delete or void it instead.")
+            new_total = recomputed_total
+        elif total_cents is not None:
+            if int(total_cents) < 0:
+                raise ValueError("Total cannot be negative.")
+            new_total = int(total_cents)
+
+        rec_cash = None
+        if clean_pay == "cash" and cash_received_cents is not None:
+            if int(cash_received_cents) < 0:
+                raise ValueError("Cash received cannot be negative.")
+            rec_cash = int(cash_received_cents)
+
+        conn.execute(
+            """
+            UPDATE sales
+            SET payment_type = ?, occurred_at = ?, total_cents = ?, cash_received_cents = ?
+            WHERE id = ? AND merchant_id = ?
+            """,
+            (clean_pay, occ_clean, new_total, rec_cash, int(sale_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {"sale_id": int(sale_id), "total_cents": new_total}
+    finally:
+        conn.close()
+
+
+def delete_quick_sale(
+    merchant_id: int,
+    sale_id: int,
+    restore_stock: bool = True,
+) -> dict:
+    """Permanently delete a Quick sale while keeping stock accurate (no double-restore)."""
+    conn = get_connection()
+    try:
+        sale = conn.execute(
+            "SELECT id, source, status FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        ).fetchone()
+        if not sale:
+            raise ValueError("Sale not found.")
+        if sale["source"] != "cash":
+            raise ValueError("Only Quick sale transactions can be permanently deleted. Exclude Zettle sales instead.")
+
+        void_note = f"Voided Quick sale #{int(sale_id)}"
+        void_adj = conn.execute(
+            "SELECT COUNT(*) AS n FROM stock_ledger WHERE merchant_id = ? AND reason = 'adjustment' AND note = ?",
+            (int(merchant_id), void_note),
+        ).fetchone()
+        had_void_adj = bool(void_adj and int(void_adj["n"] or 0) > 0)
+
+        sale_ledger = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM stock_ledger
+            WHERE merchant_id = ? AND sale_item_id IN (SELECT id FROM sale_items WHERE sale_id = ?)
+            """,
+            (int(merchant_id), int(sale_id)),
+        ).fetchone()
+        linked_ledger_count = int(sale_ledger["n"] or 0) if sale_ledger else 0
+
+        if restore_stock:
+            # Remove any compensating void adjustments first so CASCADE on sale_items restores stock once.
+            if had_void_adj:
+                conn.execute(
+                    "DELETE FROM stock_ledger WHERE merchant_id = ? AND reason = 'adjustment' AND note = ?",
+                    (int(merchant_id), void_note),
+                )
+        else:
+            # Detach original deduction rows BEFORE DELETE CASCADE removes them.
+            if not had_void_adj and linked_ledger_count > 0:
+                conn.execute(
+                    """
+                    UPDATE stock_ledger
+                    SET sale_item_id = NULL, reason = 'adjustment', note = ?
+                    WHERE merchant_id = ? AND sale_item_id IN (SELECT id FROM sale_items WHERE sale_id = ?)
+                    """,
+                    (f"Removed Quick sale #{int(sale_id)}", int(merchant_id), int(sale_id)),
+                )
+
+        conn.execute(
+            "DELETE FROM sales WHERE id = ? AND merchant_id = ?",
+            (int(sale_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {
+            "deleted": True,
+            "sale_id": int(sale_id),
+            "restore_stock": bool(restore_stock),
+            "ledger_entries_affected": linked_ledger_count,
+        }
+    finally:
+        conn.close()
+
+
 def sales_summary(
     merchant_id: int,
     since_iso: str,
@@ -427,7 +708,7 @@ def recent_sales(
             ids = [s["id"] for s in sales]
             marks = ",".join("?" * len(ids))
             items = conn.execute(
-                "SELECT si.sale_id, si.name_snapshot, si.quantity, si.unit_price_cents,"
+                "SELECT si.id, si.sale_id, si.sku_id, si.name_snapshot, si.quantity, si.unit_price_cents,"
                 " COALESCE(k.item_type, 'product') AS item_type"
                 " FROM sale_items si"
                 " LEFT JOIN skus k ON k.id = si.sku_id"

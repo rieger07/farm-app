@@ -176,7 +176,7 @@ def list_sku_history(merchant_id: int, sku_id: int, limit: int = 8) -> list[dict
     try:
         rows = conn.execute(
             """
-            SELECT l.id, l.delta, l.reason, l.note, l.created_at,
+            SELECT l.id, l.delta, l.reason, l.note, l.sale_item_id, l.created_at,
                    COALESCE(u.display_name, u.username, 'Zettle sync') AS actor
             FROM stock_ledger l
             LEFT JOIN users u ON u.id = l.created_by
@@ -190,7 +190,41 @@ def list_sku_history(merchant_id: int, sku_id: int, limit: int = 8) -> list[dict
         for r in rows:
             d = dict(r)
             d["delta"] = fmt_qty(d["delta"])
+            d["can_delete"] = d["sale_item_id"] is None
             out.append(d)
         return out
+    finally:
+        conn.close()
+
+
+def delete_manual_stock_entry(merchant_id: int, entry_id: int) -> dict:
+    """Remove a manual stock_ledger row (never sale-linked deductions)."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, sku_id, delta, reason, sale_item_id, note FROM stock_ledger WHERE id = ? AND merchant_id = ?",
+            (int(entry_id), int(merchant_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("Stock adjustment entry not found.")
+        if row["sale_item_id"] is not None:
+            raise ValueError(
+                "Cannot delete a sale stock deduction directly — void or delete the sale on the Sales page instead."
+            )
+        conn.execute(
+            "UPDATE market_day_items SET closeout_ledger_id = NULL WHERE closeout_ledger_id = ?",
+            (int(entry_id),),
+        )
+        conn.execute(
+            "DELETE FROM stock_ledger WHERE id = ? AND merchant_id = ?",
+            (int(entry_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {
+            "deleted": True,
+            "entry_id": int(entry_id),
+            "sku_id": int(row["sku_id"]),
+            "delta": fmt_qty(row["delta"]),
+        }
     finally:
         conn.close()

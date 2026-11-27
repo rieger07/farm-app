@@ -6,7 +6,7 @@
   <div><h1>Inventory</h1><p class="sub">Know what's on the shelf before you head to market.</p></div>
   <button class="btn primary" onclick="document.getElementById('addp').showModal()">+ Add product</button>
 </div>
-{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
 
 <div class="cards three">
   <div class="card"><small>Units on hand</small><div class="big">{{ units }}</div><small>Across all your products{% if lbs %} · + {{ lbs }} lb{% endif %}</small></div>
@@ -232,10 +232,26 @@ async function loadStockHistory(skuId) {
       const meta = document.createElement('small');
       meta.textContent = e.local_time + ' · ' + e.actor;
       left.append(title, meta);
+      const right = document.createElement('div');
+      right.style.cssText = 'display:flex;align-items:center;gap:10px';
       const delta = document.createElement('b');
       delta.className = e.delta >= 0 ? 'pos' : 'neg';
       delta.textContent = (e.delta >= 0 ? '+' : '') + e.delta;
-      row.append(left, delta);
+      right.append(delta);
+      if (e.can_delete) {
+        const delForm = document.createElement('form');
+        delForm.method = 'post';
+        delForm.action = '/inventory/stock/ledger/' + e.id + '/delete';
+        delForm.style.cssText = 'display:inline;margin:0';
+        delForm.onsubmit = () => confirm('Remove this manual stock entry? Inventory counts will adjust accordingly.');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'link';
+        delBtn.style.cssText = 'color:var(--redink);font-size:12px';
+        delBtn.textContent = 'Remove';
+        delForm.append(delBtn);
+        right.append(delForm);
+      }
+      row.append(left, right);
       box.append(row);
     });
   } catch (_) {

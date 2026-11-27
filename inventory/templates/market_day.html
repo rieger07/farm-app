@@ -19,6 +19,21 @@
     <p class="sub">Pack what goes in the truck, track what's left at the booth, and close out cleanly.</p>
   </div>
   <div class="row" style="flex-wrap:wrap;align-items:center">
+    {% if can_manage and md.market_day %}
+      <button type="button" class="btn sm"
+        data-date="{{ md.market_date }}"
+        data-mp="{{ md.market_day.marketplace_id }}"
+        data-booth="{{ '%.2f'|format((md.market_day.booth_fee_cents or 0) / 100) }}"
+        data-travel="{{ '%.2f'|format((md.market_day.travel_cost_cents or 0) / 100) }}"
+        data-cash="{{ '%.2f'|format((md.market_day.starting_cash_cents or 0) / 100) }}"
+        data-weather="{{ md.market_day.weather or '' }}"
+        data-notes="{{ md.market_day.notes or '' }}"
+        onclick="openEditMday(this)">Edit details</button>
+      <form method="post" action="/market-day/delete" style="display:inline;margin:0" onsubmit="return confirm('Delete Market Day {{ md.market_date }}? Any closeout stock adjustments will be reversed; POS sales remain in Sales.')">
+        <input type="hidden" name="market_date" value="{{ md.market_date }}">
+        <button class="btn sm danger">Delete market day</button>
+      </form>
+    {% endif %}
     {% if md.state == 'live' and not show_pack_editor %}
       {% if zettle_connected %}
       <form method="post" action="/market-day/sync" style="margin:0">
@@ -596,5 +611,116 @@
 })();
 </script>
 {% endif %}
+{% endif %}
+
+{% if all_market_days %}
+<div class="card" style="margin-top:20px">
+  <div class="flex-between mb-sm">
+    <div>
+      <h2 style="margin:0;font-size:18px">All Market Days ({{ all_market_days|length }})</h2>
+      <small class="muted">Select any date to inspect pack-out, edit venue/fees, or remove test days.</small>
+    </div>
+  </div>
+  <div class="member-list">
+  {% for d in all_market_days %}
+    <div class="member-row">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <a href="/market-day?date={{ d.market_date }}"><b>{{ d.market_date }} · {{ d.marketplace_name }}</b></a>
+          {% if d.state == 'closed' %}
+            <span class="pill gray">Closed</span>
+          {% elif d.state == 'planned' %}
+            <span class="pill amber">Planned</span>
+          {% else %}
+            <span class="pill green">Live</span>
+          {% endif %}
+        </div>
+        <small class="muted">
+          {{ d.packed_skus }} SKU{{ '' if d.packed_skus == 1 else 's' }} ·
+          Booth {{ d.booth_fee_cents|money }} + Travel {{ d.travel_cost_cents|money }} ·
+          Drawer float {{ d.starting_cash_cents|money }}{% if d.weather %} · {{ d.weather }}{% endif %}{% if d.notes %} · {{ d.notes }}{% endif %}
+        </small>
+      </div>
+      {% if can_manage %}
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn sm"
+          data-date="{{ d.market_date }}"
+          data-mp="{{ d.marketplace_id }}"
+          data-booth="{{ '%.2f'|format(d.booth_fee_cents / 100) }}"
+          data-travel="{{ '%.2f'|format(d.travel_cost_cents / 100) }}"
+          data-cash="{{ '%.2f'|format(d.starting_cash_cents / 100) }}"
+          data-weather="{{ d.weather }}"
+          data-notes="{{ d.notes }}"
+          onclick="openEditMday(this)">Edit</button>
+        <form method="post" action="/market-day/delete" style="display:inline;margin:0" onsubmit="return confirm('Delete Market Day {{ d.market_date }} ({{ d.marketplace_name }})?')">
+          <input type="hidden" name="market_date" value="{{ d.market_date }}">
+          <button class="btn sm danger">Delete</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if can_manage %}
+<dialog id="dlg-edit-mday" class="card" style="width:100%;max-width:480px">
+  <h2 style="margin-top:0">Edit Market Day Details</h2>
+  <form method="post" action="/market-day/details" style="display:flex;flex-direction:column;gap:12px">
+    <input type="hidden" name="market_date" id="em-orig-date">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Date
+        <input type="date" name="new_market_date" id="em-date" required>
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Marketplace
+        <select name="marketplace_id" id="em-mp" required>
+          {% for mp in marketplaces %}
+          <option value="{{ mp.id }}">{{ mp.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Booth fee ($)
+        <input type="number" step="0.01" min="0" name="booth_fee" id="em-booth">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Travel ($)
+        <input type="number" step="0.01" min="0" name="travel_cost" id="em-travel">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Starting float ($)
+        <input type="number" step="0.01" min="0" name="starting_cash" id="em-cash">
+      </label>
+    </div>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Weather
+      <select name="weather" id="em-weather">
+        <option value="">—</option>
+        {% for w in weather_options %}
+        <option value="{{ w }}">{{ w }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Notes
+      <input name="notes" id="em-notes" placeholder="Crowd, parking, weather...">
+    </label>
+    <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
+      <button type="button" class="btn sm" onclick="document.getElementById('dlg-edit-mday').close()">Cancel</button>
+      <button class="btn sm primary">Save changes</button>
+    </div>
+  </form>
+</dialog>
+<script>
+function openEditMday(btn) {
+  document.getElementById('em-orig-date').value = btn.dataset.date || '';
+  document.getElementById('em-date').value = btn.dataset.date || '';
+  document.getElementById('em-mp').value = btn.dataset.mp || '';
+  document.getElementById('em-booth').value = btn.dataset.booth || '0.00';
+  document.getElementById('em-travel').value = btn.dataset.travel || '0.00';
+  document.getElementById('em-cash').value = btn.dataset.cash || '0.00';
+  document.getElementById('em-weather').value = btn.dataset.weather || '';
+  document.getElementById('em-notes').value = btn.dataset.notes || '';
+  document.getElementById('dlg-edit-mday').showModal();
+}
+</script>
 {% endif %}
 {% endblock %}

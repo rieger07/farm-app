@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from inventory import billing, sync, zettle
-from inventory.marketplaces import archive_marketplace, list_marketplaces, save_marketplace
+from inventory.marketplaces import (
+    archive_marketplace,
+    delete_marketplace,
+    list_marketplaces,
+    save_marketplace,
+)
 from inventory.merchants import (
     ROLES,
     add_member,
@@ -111,8 +116,21 @@ def settings_archive_marketplace(
 ):
     archive_marketplace(ctx.merchant_id, marketplace_id)
     return RedirectResponse(
-        f"/settings?msg={quote_plus('Archived marketplace.')}", status_code=303
+        f"/settings?msg={quote_plus('Archived marketplace.')}#marketplaces", status_code=303
     )
+
+
+@router.post("/settings/marketplaces/{marketplace_id}/delete")
+def settings_delete_marketplace(
+    marketplace_id: int,
+    ctx: Ctx = Depends(require("settings")),
+):
+    try:
+        res = delete_marketplace(ctx.merchant_id, marketplace_id)
+        msg = f"Deleted marketplace {res['name']}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/settings?msg={quote_plus(msg)}#marketplaces", status_code=303)
 
 
 @router.post("/settings/item-type")
