@@ -24,6 +24,18 @@
         <option value="mammal_breeding">Mammal breeding</option>
       </select>
     </label>
+    <label>Sale mode
+      <select name="sale_unit" id="bm-sale-unit" onchange="syncBatchShareFields()">
+        <option value="whole">Whole animals (birds)</option>
+        <option value="shares">Shares — ½ &amp; Whole (pigs, beef · hanging wt)</option>
+      </select>
+    </label>
+    <div id="bm-butcher-wrap" class="full" hidden>
+      <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" name="customer_pays_butcher" id="bm-cpb" value="1" style="width:auto">
+        <span><b>Customer pays butcher directly</b> (exclude customer butcher fee from Schedule F &amp; enable Butcher Release workflow)</span>
+      </label>
+    </div>
     <label class="full">Notes<input name="notes" id="bm-notes" placeholder="Hatchery, breed, pasture notes..."></label>
     <details class="full" style="border-top:1px solid var(--line);padding-top:10px">
       <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--green)">Customize feed &amp; timeline</summary>
@@ -46,6 +58,11 @@
 <script id="sp-catalog" type="application/json">{{ species_catalog|tojson }}</script>
 <script>
 const SP_CATALOG = JSON.parse(document.getElementById('sp-catalog').textContent || '{}');
+function syncBatchShareFields() {
+  const unitEl = document.getElementById('bm-sale-unit');
+  const wrapEl = document.getElementById('bm-butcher-wrap');
+  if (unitEl && wrapEl) wrapEl.hidden = unitEl.value !== 'shares';
+}
 function fillSpeciesDefaults() {
   if (document.getElementById('bm-id').value) return;
   const sp = document.getElementById('bm-species').value;
@@ -62,6 +79,12 @@ function fillSpeciesDefaults() {
   if (cfg.grower_feed_lbs !== undefined) document.getElementById('bm-gf').value = cfg.grower_feed_lbs;
   if (cfg.starter_bag_price !== undefined) document.getElementById('bm-sbp').value = cfg.starter_bag_price;
   if (cfg.grower_bag_price !== undefined) document.getElementById('bm-gbp').value = cfg.grower_bag_price;
+  const isPig = /pig|hog|boar|sow/.test(sp.toLowerCase());
+  const su = document.getElementById('bm-sale-unit');
+  const cpb = document.getElementById('bm-cpb');
+  if (su) su.value = isPig ? 'shares' : 'whole';
+  if (cpb) cpb.checked = isPig;
+  syncBatchShareFields();
 }
 function openNewBatchModal() {
   document.getElementById('bm-title').textContent = 'New batch';
@@ -71,6 +94,7 @@ function openNewBatchModal() {
   document.getElementById('bm-qty').value = '25';
   document.getElementById('bm-notes').value = '';
   fillSpeciesDefaults();
+  syncBatchShareFields();
   document.getElementById('batchm').showModal();
 }
 function openEditBatchModal(b) {
@@ -85,6 +109,9 @@ function openEditBatchModal(b) {
   document.getElementById('bm-sprice').value = b.sale_price_per_lb;
   document.getElementById('bm-pcost').value = b.processing_cost;
   document.getElementById('bm-life').value = b.lifecycle_type || 'direct_arrival';
+  document.getElementById('bm-sale-unit').value = b.sale_unit || 'whole';
+  document.getElementById('bm-cpb').checked = !!b.customer_pays_butcher;
+  syncBatchShareFields();
   document.getElementById('bm-birth').value = b.days_to_birth ?? 0;
   document.getElementById('bm-swks').value = b.starter_weeks ?? 3;
   document.getElementById('bm-gwks').value = b.grower_weeks ?? 5;

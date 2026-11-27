@@ -8,6 +8,12 @@ from homestead.db.core import (
     get_text_setting,
     set_text_setting,
 )
+from homestead.db.shares import (
+    backfill_batch_harvest_shares,
+    effective_share_weight,
+    normalize_sale_unit,
+    share_slot_label,
+)
 from shared.bridge import HOMESTEAD_PAYMENT_METHODS, normalize_homestead_payment_method
 from shared.merchants import clean_payment_handle as _clean_payment_handle
 
@@ -30,12 +36,26 @@ def list_customers(user_id: int, search: str = "") -> list[dict]:
         rows = conn.execute(
             """
             SELECT c.*,
-                   COUNT(bh.id) AS bird_count,
-                   COALESCE(SUM(bh.dressed_lbs), 0) AS total_lbs
+                   COALESCE((
+                       SELECT COUNT(*) FROM batch_harvests bh
+                       WHERE bh.customer_id = c.id
+                         AND NOT EXISTS (SELECT 1 FROM harvest_shares hs0 WHERE hs0.harvest_id = bh.id)
+                   ), 0) + COALESCE((
+                       SELECT COUNT(*) FROM harvest_shares hs
+                       WHERE hs.customer_id = c.id
+                   ), 0) AS bird_count,
+                   COALESCE((
+                       SELECT SUM(bh.dressed_lbs) FROM batch_harvests bh
+                       WHERE bh.customer_id = c.id
+                         AND NOT EXISTS (SELECT 1 FROM harvest_shares hs0 WHERE hs0.harvest_id = bh.id)
+                   ), 0) + COALESCE((
+                       SELECT SUM(COALESCE(hs.share_weight_lbs, bh2.dressed_lbs * COALESCE(hs.share_fraction, 1.0)))
+                       FROM harvest_shares hs
+                       JOIN batch_harvests bh2 ON bh2.id = hs.harvest_id
+                       WHERE hs.customer_id = c.id
+                   ), 0) AS total_lbs
             FROM customers c
-            LEFT JOIN batch_harvests bh ON bh.customer_id = c.id
             WHERE c.user_id = ?
-            GROUP BY c.id
             ORDER BY LOWER(c.name) ASC, c.id ASC
             """,
             (int(user_id),),
@@ -117,6 +137,11 @@ def delete_customer(user_id: int, customer_id: int) -> None:
     with get_db_connection() as conn:
         conn.execute(
             "UPDATE batch_harvests SET customer_id = NULL, pickup_status = 'unassigned'"
+            " WHERE customer_id = ? AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)",
+            (int(customer_id), int(user_id)),
+        )
+        conn.execute(
+            "UPDATE harvest_shares SET customer_id = NULL, pickup_status = 'unassigned'"
             " WHERE customer_id = ? AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)",
             (int(customer_id), int(user_id)),
         )
@@ -205,6 +230,11 @@ def merge_customers(user_id: int, source_id: int, target_id: int) -> bool:
             (int(target_id), int(source_id), int(user_id)),
         )
         conn.execute(
+            "UPDATE harvest_shares SET customer_id = ?"
+            " WHERE customer_id = ? AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)",
+            (int(target_id), int(source_id), int(user_id)),
+        )
+        conn.execute(
             "UPDATE batch_preorders SET customer_id = ?"
             " WHERE customer_id = ? AND user_id = ?",
             (int(target_id), int(source_id), int(user_id)),
@@ -221,19 +251,95 @@ def merge_customers(user_id: int, source_id: int, target_id: int) -> bool:
     return True
 
 
+def _query_assigned_harvest_items(
+    conn, user_id: int, customer_id: int | None = None
+) -> list[dict]:
+    """Fetch customer-assigned harvests and individual harvest shares cleanly without duplication."""
+    cust_clause_bh = "AND bh.customer_id = ?" if customer_id is not None else "AND bh.customer_id IS NOT NULL"
+    cust_clause_hs = "AND hs.customer_id = ?" if customer_id is not None else "AND hs.customer_id IS NOT NULL"
+    params_bh: list[object] = [int(user_id)] + ([int(customer_id)] if customer_id is not None else [])
+    params_hs: list[object] = [int(user_id)] + ([int(customer_id)] if customer_id is not None else [])
+
+    bird_rows = conn.execute(
+        f"""
+        SELECT bh.*, b.name AS batch_name, b.species, b.sale_price_per_lb
+        FROM batch_harvests bh
+        JOIN batches b ON b.id = bh.batch_id
+        WHERE b.user_id = ? {cust_clause_bh}
+          AND NOT EXISTS (SELECT 1 FROM harvest_shares hs0 WHERE hs0.harvest_id = bh.id)
+        ORDER BY bh.harvest_date DESC, bh.id DESC
+        """,
+        tuple(params_bh),
+    ).fetchall()
+
+    share_rows = conn.execute(
+        f"""
+        SELECT hs.*,
+               bh.harvest_date, bh.dressed_lbs AS carcass_lbs,
+               COALESCE(bh.animal_label, '') AS animal_label,
+               COALESCE(bh.weight_basis, 'dressed') AS weight_basis,
+               b.name AS batch_name, b.species, b.sale_price_per_lb
+        FROM harvest_shares hs
+        JOIN batch_harvests bh ON bh.id = hs.harvest_id
+        JOIN batches b ON b.id = hs.batch_id
+        WHERE b.user_id = ? {cust_clause_hs}
+        ORDER BY bh.harvest_date DESC, hs.id DESC
+        """,
+        tuple(params_hs),
+    ).fetchall()
+
+    items: list[dict] = []
+    for r in bird_rows:
+        d = dict(r)
+        d["is_share"] = False
+        d["share_fraction"] = 1.0
+        d["share_slot"] = "whole"
+        d["share_label"] = ""
+        d["butcher_notified_at"] = ""
+        d["weight_basis"] = str(d.get("weight_basis") or "dressed")
+        items.append(d)
+
+    for r in share_rows:
+        d = dict(r)
+        carcass_lbs = float(d.get("carcass_lbs") or 0.0)
+        eff_lbs = effective_share_weight(d, carcass_lbs)
+        carcass_name = (d.get("animal_label") or "").strip() or f"Carcass #{d['harvest_id']}"
+        slot_lbl = share_slot_label(d.get("share_slot"))
+        items.append(
+            {
+                "id": int(d["id"]),
+                "batch_id": int(d["batch_id"]),
+                "harvest_id": int(d["harvest_id"]),
+                "customer_id": int(d["customer_id"]),
+                "harvest_date": d["harvest_date"],
+                "head_count": 1,
+                "dressed_lbs": eff_lbs,
+                "actual_sale_price": d.get("actual_sale_price"),
+                "deposit_paid": float(d.get("deposit_paid") or 0.0),
+                "payment_status": d.get("payment_status") or "unpaid",
+                "payment_method": d.get("payment_method") or "",
+                "pickup_status": d.get("pickup_status") or "assigned",
+                "customer_butcher_fee": float(d.get("customer_butcher_fee") or 0.0),
+                "butcher_notified_at": d.get("butcher_notified_at") or "",
+                "notes": d.get("cut_sheet_notes") or "",
+                "batch_name": d["batch_name"],
+                "species": d["species"],
+                "sale_price_per_lb": d["sale_price_per_lb"],
+                "is_share": True,
+                "share_fraction": float(d.get("share_fraction") or 1.0),
+                "share_slot": d.get("share_slot") or "whole",
+                "share_label": f"{carcass_name} · {slot_lbl}",
+                "weight_basis": str(d.get("weight_basis") or "hanging"),
+            }
+        )
+
+    items.sort(key=lambda x: (str(x.get("harvest_date") or ""), int(x.get("id") or 0)), reverse=True)
+    return items
+
+
 def list_customer_birds(user_id: int, customer_id: int) -> list[dict]:
     with get_db_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT bh.*, b.name AS batch_name, b.species, b.sale_price_per_lb
-            FROM batch_harvests bh
-            JOIN batches b ON b.id = bh.batch_id
-            WHERE b.user_id = ? AND bh.customer_id = ?
-            ORDER BY bh.harvest_date DESC, bh.id DESC
-            """,
-            (int(user_id), int(customer_id)),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return _query_assigned_harvest_items(conn, user_id, customer_id=customer_id)
 
 
 def update_harvest_assignment(
@@ -481,20 +587,11 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
     """Compute per-customer species counts, calculated vs actual paid, tips/overpayments, and overall KPIs."""
     customers = list_customers(user_id, search=search)
     with get_db_connection() as conn:
-        bird_rows = conn.execute(
-            """
-            SELECT bh.*, b.name AS batch_name, b.species, b.sale_price_per_lb
-            FROM batch_harvests bh
-            JOIN batches b ON b.id = bh.batch_id
-            WHERE b.user_id = ? AND bh.customer_id IS NOT NULL
-            ORDER BY bh.harvest_date DESC, bh.id DESC
-            """,
-            (int(user_id),),
-        ).fetchall()
+        bird_rows = _query_assigned_harvest_items(conn, user_id, customer_id=None)
 
     by_cust: dict[int, list[dict]] = {}
     for r in bird_rows:
-        by_cust.setdefault(int(r["customer_id"]), []).append(dict(r))
+        by_cust.setdefault(int(r["customer_id"]), []).append(r)
 
     total_birds = 0
     total_lbs = 0.0
@@ -600,17 +697,38 @@ def update_batch_preorder_settings(
     pickup_date: str = "",
     pickup_window: str = "",
     pickup_location: str = "",
+    sale_unit: str | None = None,
+    customer_pays_butcher: bool | None = None,
+    butcher_name: str | None = None,
+    butcher_phone: str | None = None,
+    butcher_email: str | None = None,
 ) -> dict | None:
     cap_val = int(preorder_cap) if preorder_cap is not None and int(preorder_cap) > 0 else None
     dep_val = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
     with get_db_connection() as conn:
         row = conn.execute(
-            "SELECT picking_slug FROM batches WHERE id = ? AND user_id = ?",
+            """
+            SELECT picking_slug, COALESCE(sale_unit, 'whole') AS sale_unit,
+                   COALESCE(customer_pays_butcher, 0) AS customer_pays_butcher,
+                   COALESCE(butcher_name, '') AS butcher_name,
+                   COALESCE(butcher_phone, '') AS butcher_phone,
+                   COALESCE(butcher_email, '') AS butcher_email
+            FROM batches WHERE id = ? AND user_id = ?
+            """,
             (int(batch_id), int(user_id)),
         ).fetchone()
         if not row:
             return None
         slug = row["picking_slug"] or secrets.token_urlsafe(10)
+        new_unit = normalize_sale_unit(sale_unit) if sale_unit is not None else str(row["sale_unit"] or "whole")
+        new_cpb = (
+            (1 if customer_pays_butcher else 0)
+            if customer_pays_butcher is not None
+            else int(row["customer_pays_butcher"] or 0)
+        )
+        new_bn = str(butcher_name).strip()[:120] if butcher_name is not None else str(row["butcher_name"] or "")
+        new_bp = str(butcher_phone).strip()[:60] if butcher_phone is not None else str(row["butcher_phone"] or "")
+        new_be = str(butcher_email).strip()[:120] if butcher_email is not None else str(row["butcher_email"] or "")
         conn.execute(
             """
             UPDATE batches
@@ -621,7 +739,12 @@ def update_batch_preorder_settings(
                 pickup_date = ?,
                 pickup_window = ?,
                 pickup_location = ?,
-                picking_slug = ?
+                picking_slug = ?,
+                sale_unit = ?,
+                customer_pays_butcher = ?,
+                butcher_name = ?,
+                butcher_phone = ?,
+                butcher_email = ?
             WHERE id = ? AND user_id = ?
             """,
             (
@@ -633,10 +756,17 @@ def update_batch_preorder_settings(
                 str(pickup_window or "").strip(),
                 str(pickup_location or "").strip(),
                 slug,
+                new_unit,
+                new_cpb,
+                new_bn,
+                new_bp,
+                new_be,
                 int(batch_id),
                 int(user_id),
             ),
         )
+        if new_unit == "shares":
+            backfill_batch_harvest_shares(int(batch_id), conn=conn)
         conn.commit()
         updated = conn.execute(
             "SELECT * FROM batches WHERE id = ? AND user_id = ?",
@@ -669,35 +799,63 @@ def get_customer_batch_preorder_summary(batch_id: int, customer_id: int) -> dict
     with get_db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT status, quantity, deposit_per_bird, deposit_paid
+            SELECT status, quantity, COALESCE(share_fraction, 1.0) AS share_fraction,
+                   deposit_per_bird, deposit_paid
             FROM batch_preorders
             WHERE batch_id = ? AND customer_id = ? AND status IN ('reserved', 'waitlist')
             """,
             (int(batch_id), int(customer_id)),
         ).fetchall()
-        applied_row = conn.execute(
+        applied_bh = conn.execute(
             """
             SELECT COUNT(*) AS claimed_cnt, COALESCE(SUM(deposit_paid), 0) AS applied_dep
-            FROM batch_harvests
+            FROM batch_harvests bh
+            WHERE bh.batch_id = ? AND bh.customer_id = ? AND COALESCE(bh.for_sale, 1) = 1
+              AND NOT EXISTS (SELECT 1 FROM harvest_shares hs0 WHERE hs0.harvest_id = bh.id)
+            """,
+            (int(batch_id), int(customer_id)),
+        ).fetchone()
+        applied_hs = conn.execute(
+            """
+            SELECT COUNT(*) AS claimed_cnt,
+                   COALESCE(SUM(COALESCE(share_fraction, 1.0)), 0.0) AS claimed_equiv,
+                   COALESCE(SUM(deposit_paid), 0) AS applied_dep
+            FROM harvest_shares
             WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
             """,
             (int(batch_id), int(customer_id)),
         ).fetchone()
     reserved_qty = sum(int(r["quantity"] or 0) for r in rows if r["status"] == "reserved")
     waitlist_qty = sum(int(r["quantity"] or 0) for r in rows if r["status"] == "waitlist")
+    reserved_equiv = round(
+        sum(int(r["quantity"] or 0) * float(r["share_fraction"] or 1.0) for r in rows if r["status"] == "reserved"),
+        2,
+    )
+    waitlist_equiv = round(
+        sum(int(r["quantity"] or 0) * float(r["share_fraction"] or 1.0) for r in rows if r["status"] == "waitlist"),
+        2,
+    )
     total_paid = round(sum(float(r["deposit_paid"] or 0.0) for r in rows if r["status"] == "reserved"), 2)
     per_bird = max((float(r["deposit_per_bird"] or 0.0) for r in rows if r["status"] == "reserved"), default=0.0)
-    applied_dep = round(float(applied_row["applied_dep"] or 0.0), 2)
-    claimed_cnt = int(applied_row["claimed_cnt"] or 0)
+    applied_dep = round(
+        float(applied_bh["applied_dep"] or 0.0) + float(applied_hs["applied_dep"] or 0.0), 2
+    )
+    claimed_cnt = int(applied_bh["claimed_cnt"] or 0) + int(applied_hs["claimed_cnt"] or 0)
+    claimed_equiv = round(
+        float(applied_bh["claimed_cnt"] or 0) + float(applied_hs["claimed_equiv"] or 0.0), 2
+    )
     return {
         "has_reservation": reserved_qty > 0,
         "reserved_qty": reserved_qty,
         "waitlist_qty": waitlist_qty,
+        "reserved_equiv": reserved_equiv,
+        "waitlist_equiv": waitlist_equiv,
         "deposit_per_bird": round(per_bird, 2),
         "total_deposit_paid": total_paid,
         "already_applied_deposit": applied_dep,
         "remaining_unapplied_deposit": round(max(0.0, total_paid - applied_dep), 2),
         "claimed_count": claimed_cnt,
+        "claimed_equiv": claimed_equiv,
     }
 
 
@@ -711,24 +869,30 @@ def create_batch_preorder(
     deposit_paid: float = 0.0,
     deposit_status: str = "unpaid",
     notes: str = "",
+    share_fraction: float = 1.0,
+    share_label: str = "",
 ) -> dict:
     qty = max(1, int(quantity or 1))
     st = status if status in ("reserved", "waitlist", "cancelled") else "reserved"
+    frac = round(max(0.25, float(share_fraction or 1.0)), 2)
+    s_lbl = str(share_label or "").strip().lower()
     dpb = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
     dp = round(max(0.0, float(deposit_paid or 0.0)), 2)
-    dst = "paid" if (deposit_status == "paid" or (dpb > 0 and dp >= round(dpb * qty, 2) and dp > 0)) else "unpaid"
+    expected_dep = round(dpb * qty * frac, 2)
+    dst = "paid" if (deposit_status == "paid" or (expected_dep > 0 and dp >= expected_dep and dp > 0)) else "unpaid"
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO batch_preorders (
                 batch_id, user_id, customer_id, quantity, status,
-                deposit_per_bird, deposit_paid, deposit_status, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                deposit_per_bird, deposit_paid, deposit_status, notes,
+                share_fraction, share_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(batch_id), int(user_id), int(customer_id), qty, st,
-                dpb, dp, dst, str(notes or "").strip(), now_iso,
+                dpb, dp, dst, str(notes or "").strip(), frac, s_lbl, now_iso,
             ),
         )
         pid = int(cur.lastrowid)
@@ -745,21 +909,25 @@ def create_public_preorder_atomic(
     cap: int | None,
     deposit_per_bird: float = 0.0,
     notes: str = "",
+    share_fraction: float = 1.0,
+    share_label: str = "",
 ) -> dict:
-    """Atomically reserve quantity if under cap, else place on waitlist."""
+    """Atomically reserve quantity if under cap (in animal equivalents), else place on waitlist."""
     qty = max(1, min(50, int(quantity or 1)))
+    frac = round(max(0.25, float(share_fraction or 1.0)), 2)
+    s_lbl = str(share_label or "").strip().lower()
     dpb = round(max(0.0, float(deposit_per_bird or 0.0)), 2)
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        reserved_now = int(
+        reserved_equiv = float(
             conn.execute(
-                "SELECT COALESCE(SUM(quantity), 0) FROM batch_preorders"
-                " WHERE batch_id = ? AND status = 'reserved'",
+                "SELECT COALESCE(SUM(quantity * COALESCE(share_fraction, 1.0)), 0.0)"
+                " FROM batch_preorders WHERE batch_id = ? AND status = 'reserved'",
                 (int(batch_id),),
             ).fetchone()[0]
         )
-        if cap is not None and int(cap) > 0 and (reserved_now + qty) > int(cap):
+        if cap is not None and int(cap) > 0 and (reserved_equiv + (qty * frac)) > (float(cap) + 1e-6):
             status = "waitlist"
         else:
             status = "reserved"
@@ -767,12 +935,13 @@ def create_public_preorder_atomic(
             """
             INSERT INTO batch_preorders (
                 batch_id, user_id, customer_id, quantity, status,
-                deposit_per_bird, deposit_paid, deposit_status, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 0.0, 'unpaid', ?, ?)
+                deposit_per_bird, deposit_paid, deposit_status, notes,
+                share_fraction, share_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 0.0, 'unpaid', ?, ?, ?, ?)
             """,
             (
                 int(batch_id), int(user_id), int(customer_id), qty, status,
-                dpb, str(notes or "").strip(), now_iso,
+                dpb, str(notes or "").strip(), frac, s_lbl, now_iso,
             ),
         )
         pid = int(cur.lastrowid)
@@ -790,6 +959,8 @@ def update_batch_preorder(
     deposit_paid: float | None = None,
     deposit_status: str | None = None,
     notes: str | None = None,
+    share_fraction: float | None = None,
+    share_label: str | None = None,
 ) -> dict | None:
     with get_db_connection() as conn:
         existing = conn.execute(
@@ -807,14 +978,26 @@ def update_batch_preorder(
             else existing["deposit_status"]
         )
         new_notes = str(notes).strip() if notes is not None else (existing["notes"] or "")
+        new_frac = (
+            round(max(0.25, float(share_fraction)), 2)
+            if share_fraction is not None
+            else float(existing["share_fraction"] or 1.0)
+        )
+        new_slabel = (
+            str(share_label).strip().lower()
+            if share_label is not None
+            else str(existing["share_label"] or "")
+        )
         conn.execute(
             """
             UPDATE batch_preorders
-            SET status = ?, quantity = ?, deposit_paid = ?, deposit_status = ?, notes = ?
+            SET status = ?, quantity = ?, deposit_paid = ?, deposit_status = ?, notes = ?,
+                share_fraction = ?, share_label = ?
             WHERE id = ? AND batch_id = ? AND user_id = ?
             """,
             (
                 new_status, new_qty, new_dp, new_dst, new_notes,
+                new_frac, new_slabel,
                 int(preorder_id), int(batch_id), int(user_id),
             ),
         )
@@ -842,6 +1025,8 @@ def batch_preorder_counts(user_id: int) -> dict[int, dict]:
             SELECT batch_id,
                    SUM(CASE WHEN status = 'reserved' THEN quantity ELSE 0 END) AS reserved_qty,
                    SUM(CASE WHEN status = 'waitlist' THEN quantity ELSE 0 END) AS waitlist_qty,
+                   SUM(CASE WHEN status = 'reserved' THEN quantity * COALESCE(share_fraction, 1.0) ELSE 0 END) AS reserved_equiv,
+                   SUM(CASE WHEN status = 'waitlist' THEN quantity * COALESCE(share_fraction, 1.0) ELSE 0 END) AS waitlist_equiv,
                    SUM(CASE WHEN status = 'reserved' THEN deposit_paid ELSE 0 END) AS deposits_paid
             FROM batch_preorders
             WHERE user_id = ?
@@ -853,6 +1038,8 @@ def batch_preorder_counts(user_id: int) -> dict[int, dict]:
         int(r["batch_id"]): {
             "reserved_qty": int(r["reserved_qty"] or 0),
             "waitlist_qty": int(r["waitlist_qty"] or 0),
+            "reserved_equiv": round(float(r["reserved_equiv"] or 0.0), 2),
+            "waitlist_equiv": round(float(r["waitlist_equiv"] or 0.0), 2),
             "deposits_paid": round(float(r["deposits_paid"] or 0.0), 2),
         }
         for r in rows

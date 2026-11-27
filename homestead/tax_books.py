@@ -13,6 +13,7 @@ from homestead.db.batches import (
 from homestead.db.eggs import list_layer_feed_logs
 from homestead.db.expenses import list_farm_expenses, schedule_f_line_for
 from homestead.db.herds import list_herd_feed_logs
+from homestead.db.shares import effective_share_weight, list_batch_harvest_shares
 from shared.bridge import (
     get_ledger_sales_summary_by_year,
     list_ledger_market_day_costs,
@@ -171,6 +172,10 @@ def build_unified_tax_books(
 
     # 4. Harvest processing fees
     all_harvests = list_batch_harvests(user_id=uid)
+    all_shares = list_batch_harvest_shares(user_id=uid)
+    shares_by_harvest: dict[int, list[dict]] = {}
+    for sh in all_shares:
+        shares_by_harvest.setdefault(int(sh["harvest_id"]), []).append(sh)
     for hv in all_harvests:
         proc = float(hv.get("processing_cost_total") or 0.0)
         if proc <= 0:
@@ -248,6 +253,10 @@ def build_unified_tax_books(
         yr = _year_of(hv.get("harvest_date"))
         if yr is not None:
             years.add(yr)
+    for sh in all_shares:
+        yr = _year_of(sh.get("paid_at"))
+        if yr is not None:
+            years.add(yr)
     years.update(ledger_all["years"])
     available_years = sorted(years, reverse=True)
 
@@ -295,6 +304,27 @@ def build_unified_tax_books(
         homestead_income += float(sa.get("revenue") or 0.0)
 
     for hv in all_harvests:
+        child_shares = shares_by_harvest.get(int(hv["id"]))
+        if child_shares:
+            carcass_lbs = float(hv.get("dressed_lbs") or 0.0)
+            b = batches_by_id.get(int(hv["batch_id"]), {})
+            sp = float(b.get("sale_price_per_lb") or 0.0)
+            for sh in child_shares:
+                if not bool(sh.get("for_sale", 1)):
+                    continue
+                pay_stat = str(sh.get("payment_status") or "").lower()
+                pick_stat = str(sh.get("pickup_status") or "").lower()
+                if not (pay_stat == "paid" or pick_stat == "picked_up"):
+                    continue
+                cash_yr = _year_of(sh.get("paid_at")) or _year_of(hv.get("harvest_date"))
+                if tax_year is not None and cash_yr != tax_year:
+                    continue
+                actual_p = sh.get("actual_sale_price")
+                if actual_p is not None:
+                    homestead_income += float(actual_p)
+                else:
+                    homestead_income += round(effective_share_weight(sh, carcass_lbs) * sp, 2)
+            continue
         if tax_year is not None and _year_of(hv.get("harvest_date")) != tax_year:
             continue
         if not bool(hv.get("for_sale", 1)):
@@ -341,13 +371,28 @@ def build_unified_tax_books(
         bs = sales_by_batch.get(bid, [])
         if tax_year is not None and not bh and not bs:
             continue
+        hv_freezer_lbs = 0.0
+        hv_total_lbs = 0.0
+        for h in bh:
+            carcass_lbs = float(h.get("dressed_lbs") or 0.0)
+            child_shares = shares_by_harvest.get(int(h["id"]))
+            if child_shares:
+                for sh in child_shares:
+                    sw = effective_share_weight(sh, carcass_lbs)
+                    hv_total_lbs += sw
+                    if not bool(sh.get("for_sale", 1)):
+                        hv_freezer_lbs += sw
+            else:
+                hv_total_lbs += carcass_lbs
+                if not bool(h.get("for_sale", 1)):
+                    hv_freezer_lbs += carcass_lbs
         freezer_lbs = round(
-            sum(float(h.get("dressed_lbs") or 0.0) for h in bh if not bool(h.get("for_sale", 1)))
+            hv_freezer_lbs
             + sum(float(s.get("weight_lbs") or 0.0) for s in bs if s.get("allocation_type") == "Home Freezer"),
             2,
         )
         total_lbs = round(
-            sum(float(h.get("dressed_lbs") or 0.0) for h in bh)
+            hv_total_lbs
             + sum(float(s.get("weight_lbs") or 0.0) for s in bs),
             2,
         )

@@ -5,7 +5,7 @@
   <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--line)">
     <div class="brand" style="display:flex;align-items:center;gap:10px">
       <img src="/static/logo.png" alt="Homestead Planner" style="width:32px;height:32px;border-radius:8px">
-      <div>{{ batch_name }}<small>{{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb</small></div>
+      <div>{{ batch_name }}<small>{{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
     </div>
     {% if picking_enabled %}
     <span class="pill green" id="live-pill">● Live</span>
@@ -17,7 +17,7 @@
   {% if not picking_enabled %}
   <div class="card empty">
     <h2>Picking is currently closed</h2>
-    <p class="sub">Please check back with the farm when bird picking opens.</p>
+    <p class="sub">Please check back with the farm when {{ 'share' if is_share_mode else 'bird' }} picking opens.</p>
   </div>
   {% else %}
 
@@ -26,15 +26,15 @@
     <h2 style="margin-bottom:4px">Step 1: Enter your details</h2>
     <p class="sub" style="margin-bottom:12px">
       {% if picking_preorder_only %}
-        <b>Early access for pre-order customers:</b> enter the name and phone or email from your reservation to pick your reserved bird(s).
+        <b>Early access for pre-order customers:</b> enter the name and phone or email from your reservation to pick your reserved {{ 'share(s)' if is_share_mode else 'bird(s)' }}.
       {% else %}
-        Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} bird per customer.{% endif %}
+        Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} {{ 'whole-animal eq.' if is_share_mode else 'bird' }} per customer.{% endif %}
       {% endif %}
     </p>
     <form class="fgrid" onsubmit="identifyCustomer(event)">
       <label>Your name<input id="p-name" required placeholder="e.g. Sarah Miller"></label>
       <label>Phone or email<input id="p-contact" required placeholder="(555) 123-4567 or email"></label>
-      <div class="full"><button type="submit" class="btn primary wide" id="ident-btn">Continue to pick a bird →</button></div>
+      <div class="full"><button type="submit" class="btn primary wide" id="ident-btn">Continue to pick a {{ 'share' if is_share_mode else 'bird' }} →</button></div>
     </form>
   </div>
 
@@ -47,9 +47,9 @@
     <div id="my-claims"></div>
   </div>
 
-  <!-- Available & claimed birds grid -->
+  <!-- Available & claimed birds/shares grid -->
   <div class="row" style="justify-content:space-between;align-items:baseline;margin:16px 0 10px">
-    <h2 style="margin:0">Available birds</h2>
+    <h2 style="margin:0">Available {{ 'shares' if is_share_mode else 'birds' }}</h2>
     <small id="avail-summary" class="muted"></small>
   </div>
   <div id="bird-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px"></div>
@@ -57,10 +57,20 @@
   <script id="pick-birds-init" type="application/json">{{ birds|tojson }}</script>
   <script>
   const SLUG = {{ slug|tojson }};
+  const IS_SHARE_MODE = {{ is_share_mode|tojson }};
   const PRICE = {{ sale_price_per_lb }};
   const MAX_BIRDS = {{ max_birds_per_customer|tojson }};
   let BIRDS = JSON.parse(document.getElementById('pick-birds-init').textContent);
   let CUSTOMER = null; // { customer_id, name, my_birds: [] }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
   function showToast(msg, isErr) {
     const el = document.getElementById('toast');
@@ -78,17 +88,22 @@
     document.getElementById('confirm-who').textContent = `Picking as ${CUSTOMER.name}`;
     const box = document.getElementById('my-claims');
     if (!CUSTOMER.my_birds.length) {
-      box.innerHTML = '<small class="muted">Tap any available bird below to claim it.</small>';
+      box.innerHTML = `<small class="muted">Tap any available ${IS_SHARE_MODE ? 'share' : 'bird'} below to claim it.</small>`;
       return;
     }
     box.innerHTML = CUSTOMER.my_birds.map(b => {
+      const label = escapeHtml(b.label || ('Bird #' + b.num));
+      const wtPart = b.weight_pending
+        ? '<small class="inline muted">Pending hanging wt</small>'
+        : `${Number(b.dressed_lbs).toFixed(2)} lb <small class="inline">(${IS_SHARE_MODE ? 'hanging' : escapeHtml(b.lb_oz)})</small>`;
       const dep = Number(b.deposit_paid || 0);
       const depLine = dep > 0
-        ? `<small class="muted" style="display:block;color:var(--green)">Deposit -$${dep.toFixed(2)} applied · Balance $${Math.max(0, Number(b.est_price) - dep).toFixed(2)}</small>`
+        ? `<small class="muted" style="display:block;color:var(--green)">Deposit -$${dep.toFixed(2)} applied${b.weight_pending ? '' : (' · Balance $' + Math.max(0, Number(b.est_price) - dep).toFixed(2))}</small>`
         : '';
+      const priceStr = b.weight_pending ? 'TBD' : `$${Number(b.est_price).toFixed(2)}`;
       return `<div style="padding:8px 10px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:6px;display:flex;justify-content:space-between;align-items:center">
-        <div><b>✓ Bird #${b.num}</b> · ${Number(b.dressed_lbs).toFixed(2)} lb <small class="inline">(${b.lb_oz})</small>${depLine}</div>
-        <b>$${Number(b.est_price).toFixed(2)}</b>
+        <div><b>✓ ${label}</b> · ${wtPart}${depLine}</div>
+        <b>${priceStr}</b>
       </div>`;
     }).join('');
   }
@@ -96,15 +111,18 @@
   function renderBirds() {
     const grid = document.getElementById('bird-grid');
     grid.innerHTML = '';
-    const sorted = [...BIRDS].sort((a, b) => (a.status === 'claimed' ? 1 : 0) - (b.status === 'claimed' ? 1 : 0) || a.dressed_lbs - b.dressed_lbs);
+    const sorted = [...BIRDS].sort((a, b) => (a.status === 'claimed' ? 1 : 0) - (b.status === 'claimed' ? 1 : 0) || (IS_SHARE_MODE ? a.num - b.num : a.dressed_lbs - b.dressed_lbs));
     const avail = sorted.filter(b => b.status === 'available').length;
     document.getElementById('avail-summary').textContent = `${avail} of ${sorted.length} available`;
     if (!sorted.length) {
-      grid.innerHTML = '<div class="card empty" style="grid-column:1/-1">No birds listed yet.</div>';
+      grid.innerHTML = `<div class="card empty" style="grid-column:1/-1">No ${IS_SHARE_MODE ? 'shares' : 'birds'} listed yet.</div>`;
       return;
     }
     const effMax = (CUSTOMER && CUSTOMER.effective_max_birds !== undefined) ? CUSTOMER.effective_max_birds : MAX_BIRDS;
-    const atLimit = CUSTOMER && effMax && CUSTOMER.my_birds.length >= effMax;
+    const claimedEquiv = CUSTOMER
+      ? CUSTOMER.my_birds.reduce((s, x) => s + (IS_SHARE_MODE ? Number(x.share_fraction || 1) : 1), 0)
+      : 0;
+    const atLimit = CUSTOMER && effMax && claimedEquiv >= (effMax - 1e-6);
     sorted.forEach(b => {
       const card = document.createElement('div');
       const claimed = b.status === 'claimed';
@@ -115,13 +133,19 @@
         card.style.opacity = '0.5';
         card.style.background = '#f3f1e7';
       }
+      const shareTooBig = CUSTOMER && effMax && IS_SHARE_MODE && (claimedEquiv + Number(b.share_fraction || 1) > effMax + 1e-6);
+      const disabled = !CUSTOMER || atLimit || shareTooBig;
+      const btnText = !CUSTOMER ? 'Enter info above' : ((atLimit || shareTooBig) ? 'Limit reached' : (IS_SHARE_MODE ? 'Claim share' : 'Claim bird'));
       const btnHtml = claimed
         ? '<span class="pill" style="background:#e5e2d5;color:var(--muted)">Claimed</span>'
-        : `<button type="button" class="btn sm primary wide" ${(!CUSTOMER || atLimit) ? 'disabled' : ''} onclick="claimBird(${b.id})">${!CUSTOMER ? 'Enter info above' : (atLimit ? 'Limit reached' : 'Claim bird')}</button>`;
+        : `<button type="button" class="btn sm primary wide" ${disabled ? 'disabled' : ''} onclick="claimBird(${b.id})">${btnText}</button>`;
+      const titleLbl = escapeHtml(b.label || ('Bird #' + b.num));
+      const wtHtml = b.weight_pending
+        ? `<div style="font:600 18px Georgia,serif;margin:4px 0">Pending wt</div><small style="margin-bottom:8px">$${Number(PRICE).toFixed(2)}/lb hanging</small>`
+        : `<div style="font:600 22px Georgia,serif;margin:4px 0">${Number(b.dressed_lbs).toFixed(2)} lb</div><small style="margin-bottom:8px">${IS_SHARE_MODE ? 'hanging' : escapeHtml(b.lb_oz)} · <b>$${Number(b.est_price).toFixed(2)}</b></small>`;
       card.innerHTML = `
-        <small>Bird #${b.num}</small>
-        <div style="font:600 22px Georgia,serif;margin:4px 0">${Number(b.dressed_lbs).toFixed(2)} lb</div>
-        <small style="margin-bottom:8px">${b.lb_oz} · <b>$${Number(b.est_price).toFixed(2)}</b></small>
+        <small>${titleLbl}</small>
+        ${wtHtml}
         ${btnHtml}
       `;
       grid.appendChild(card);
@@ -185,7 +209,9 @@
     if (data.bird && !CUSTOMER.my_birds.some(x => x.id === data.bird.id)) {
       CUSTOMER.my_birds.push(data.bird);
     }
-    showToast(`Confirmed! You claimed Bird #${data.bird.num} (${Number(data.bird.dressed_lbs).toFixed(2)} lb).`, false);
+    const claimedLbl = data.bird.label || ('Bird #' + data.bird.num);
+    const claimedWt = data.bird.weight_pending ? 'Pending hanging wt' : `${Number(data.bird.dressed_lbs).toFixed(2)} lb`;
+    showToast(`Confirmed! You claimed ${claimedLbl} (${claimedWt}).`, false);
     renderMyClaims();
     renderBirds();
   }

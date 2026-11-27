@@ -16,6 +16,7 @@ from homestead.database import (
     list_batch_losses,
     list_batch_sales,
 )
+from homestead.db.shares import effective_share_weight, list_batch_harvest_shares
 
 
 def get_batch_status_badge(schedule: dict) -> str:
@@ -434,15 +435,18 @@ def compute_batch_schedule(
     )
 
     # Processing cost uses logged actual harvest processing fees + estimated fee for any remaining unharvested head
-    reconciled_processing_cost = (
-        round(
-            actual_harvest_proc_cost
-            + (unharvested_surviving_head * processing_cost),
-            2,
+    if batch.get("customer_pays_butcher"):
+        reconciled_processing_cost = round(actual_harvest_proc_cost, 2)
+    else:
+        reconciled_processing_cost = (
+            round(
+                actual_harvest_proc_cost
+                + (unharvested_surviving_head * processing_cost),
+                2,
+            )
+            if parsed_harvests
+            else total_processing_cost
         )
-        if parsed_harvests
-        else total_processing_cost
-    )
     reconciled_total_cost = round(
         acquisition_cost + reconciled_feed_cost + reconciled_processing_cost, 2
     )
@@ -463,60 +467,117 @@ def compute_batch_schedule(
         else 0.0
     )
 
-    harvest_freezer_head = 0
+    shares_by_harvest: dict[int, list[dict]] = {}
+    if parsed_harvests:
+        for sh in list_batch_harvest_shares(batch_id):
+            shares_by_harvest.setdefault(int(sh["harvest_id"]), []).append(sh)
+
+    harvest_freezer_head = 0.0
     harvest_freezer_lbs = 0.0
-    harvest_available_head = 0
+    harvest_available_head = 0.0
     harvest_available_lbs = 0.0
-    harvest_assigned_head = 0
+    harvest_assigned_head = 0.0
     harvest_assigned_lbs = 0.0
     harvest_assigned_value = 0.0
-    harvest_picked_up_head = 0
+    harvest_picked_up_head = 0.0
     harvest_picked_up_lbs = 0.0
-    harvest_paid_head = 0
-    harvest_sold_head = 0
+    harvest_paid_head = 0.0
+    harvest_sold_head = 0.0
     harvest_sold_lbs = 0.0
     harvest_sales_revenue = 0.0
     harvest_deposits_paid = 0.0
     harvest_balance_due = 0.0
-    for h in parsed_harvests:
-        hc = h["head_count"]
-        dl = h["dressed_lbs"]
-        if not h["for_sale"]:
-            harvest_freezer_head += hc
+
+    def _tally_unit(
+        unit_count: float,
+        dl: float,
+        for_sale_flag: bool,
+        actual_p: float | None,
+        dep: float,
+        pay_stat: str,
+        pick_stat: str,
+        has_cust: bool,
+    ) -> None:
+        nonlocal harvest_freezer_head, harvest_freezer_lbs
+        nonlocal harvest_available_head, harvest_available_lbs
+        nonlocal harvest_assigned_head, harvest_assigned_lbs, harvest_assigned_value
+        nonlocal harvest_picked_up_head, harvest_picked_up_lbs
+        nonlocal harvest_paid_head, harvest_sold_head, harvest_sold_lbs
+        nonlocal harvest_sales_revenue, harvest_deposits_paid, harvest_balance_due
+
+        if not for_sale_flag:
+            harvest_freezer_head += unit_count
             harvest_freezer_lbs += dl
-            continue
+            return
         eff_price = (
-            h["actual_sale_price"]
-            if h["actual_sale_price"] is not None
+            actual_p
+            if actual_p is not None
             else round(dl * sale_price_per_lb, 2)
         )
-        dep = h["deposit_paid"]
         harvest_deposits_paid += dep
-        is_paid = h["payment_status"] == "paid"
-        is_picked = h["pickup_status"] == "picked_up"
-        has_cust = h["customer_id"] is not None
-        is_sold = is_paid or is_picked or h["actual_sale_price"] is not None
+        is_paid = pay_stat == "paid"
+        is_picked = pick_stat == "picked_up"
+        is_sold = is_paid or is_picked or actual_p is not None
 
         if is_paid:
-            harvest_paid_head += hc
+            harvest_paid_head += unit_count
         if is_picked:
-            harvest_picked_up_head += hc
+            harvest_picked_up_head += unit_count
             harvest_picked_up_lbs += dl
         elif has_cust:
-            harvest_assigned_head += hc
+            harvest_assigned_head += unit_count
             harvest_assigned_lbs += dl
             harvest_assigned_value += eff_price
         elif not is_sold:
-            harvest_available_head += hc
+            harvest_available_head += unit_count
             harvest_available_lbs += dl
 
         if is_sold:
-            harvest_sold_head += hc
+            harvest_sold_head += unit_count
             harvest_sold_lbs += dl
             harvest_sales_revenue += eff_price
 
         if (has_cust or is_picked) and not is_paid:
             harvest_balance_due += max(0.0, eff_price - dep)
+
+    for h in parsed_harvests:
+        child_shares = shares_by_harvest.get(int(h["id"]))
+        if child_shares:
+            for sh in child_shares:
+                _tally_unit(
+                    float(sh.get("share_fraction") or 1.0),
+                    effective_share_weight(sh, h["dressed_lbs"]),
+                    bool(1 if sh.get("for_sale") is None else sh.get("for_sale")),
+                    float(sh["actual_sale_price"])
+                    if sh.get("actual_sale_price") is not None
+                    else None,
+                    max(0.0, float(sh.get("deposit_paid") or 0.0)),
+                    str(sh.get("payment_status") or "unpaid"),
+                    str(sh.get("pickup_status") or "unassigned"),
+                    sh.get("customer_id") is not None,
+                )
+        else:
+            _tally_unit(
+                h["head_count"],
+                h["dressed_lbs"],
+                bool(h["for_sale"]),
+                h["actual_sale_price"],
+                h["deposit_paid"],
+                h["payment_status"],
+                h["pickup_status"],
+                h["customer_id"] is not None,
+            )
+
+    def _norm_head(val: float) -> int | float:
+        r = round(float(val), 2)
+        return int(round(r)) if abs(r - round(r)) < 1e-6 else r
+
+    harvest_freezer_head = _norm_head(harvest_freezer_head)
+    harvest_available_head = _norm_head(harvest_available_head)
+    harvest_assigned_head = _norm_head(harvest_assigned_head)
+    harvest_picked_up_head = _norm_head(harvest_picked_up_head)
+    harvest_paid_head = _norm_head(harvest_paid_head)
+    harvest_sold_head = _norm_head(harvest_sold_head)
 
     sold_lbs = round(
         sum(

@@ -77,6 +77,8 @@ def batches_page(
                 "lifecycle_type": "mammal_breeding" if herd["species"] == "pig" else "direct_arrival",
                 "quantity": default_qty,
                 "unit_cost": suggested_unit,
+                "sale_unit": "shares" if herd["species"] == "pig" else "whole",
+                "customer_pays_butcher": herd["species"] == "pig",
                 "notes": f"From {herd['name']} (trailing 12m upkeep: ${t12:,.2f})",
             }
     return _render(
@@ -118,7 +120,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         enriched_harvests.append(row)
 
     tally_allocations = []
-    for e in tally["entries"]:
+    alloc_items = tally["shares"] if tally.get("is_share_mode") else tally["entries"]
+    for e in alloc_items:
         if not e["for_sale"]:
             tally_allocations.append({**e, "alloc_kind": "freezer"})
         else:
@@ -191,17 +194,52 @@ def batch_harvest_csv(batch_id: int, user: dict = Depends(current_user)):
     tally = _harvest_tally_payload(b, user["id"])
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["#", "Date", "Head", "Dressed (lb)", "Lb + Oz", "Notes"])
-    for e in reversed(tally["entries"]):
+
+    def _safe(val: object) -> str:
+        s = str(val if val is not None else "")
+        return "'" + s if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s
+
+    if tally.get("is_share_mode"):
         writer.writerow([
-            e["num"], e["harvest_date"], e["head_count"],
-            f"{e['dressed_lbs']:.2f}", e["lb_oz"], e["notes"],
+            "Carcass", "Date", "Share", "Weight (lb)", "Customer",
+            "Price ($)", "Deposit ($)", "Payment", "Butcher Released",
+            "Pickup", "Farm Proc Fee ($)", "Cut Sheet / Notes",
         ])
-    writer.writerow([
-        "TOTAL", "", tally["harvested_head"],
-        f"{tally['total_lbs']:.2f}", _fmt_lb_oz(tally["total_lbs"]),
-        f"Avg {tally['avg_lbs']:.2f} lb/bird",
-    ])
+        for entry in reversed(tally["entries"]):
+            shares = entry.get("shares") or []
+            for idx_s, sh in enumerate(shares):
+                wt_str = f"{sh['effective_lbs']:.2f}" if sh["effective_lbs"] > 0 else "Pending"
+                writer.writerow([
+                    _safe(entry["animal_label"]),
+                    sh["harvest_date"],
+                    sh["slot_label"],
+                    wt_str,
+                    _safe("Freezer / Keep" if not sh["for_sale"] else (sh["customer_name"] or "Available")),
+                    f"{sh['effective_price']:.2f}" if sh["for_sale"] else "0.00",
+                    f"{sh['deposit_paid']:.2f}",
+                    sh["payment_status"],
+                    sh["butcher_notified_at"] or "No",
+                    sh["pickup_status"],
+                    f"{entry['processing_cost_total']:.2f}" if idx_s == 0 else "0.00",
+                    _safe(sh["cut_sheet_notes"] or entry["notes"]),
+                ])
+        writer.writerow([
+            "TOTAL", "", f"{tally['harvested_head']} carcasses",
+            f"{tally['total_lbs']:.2f}", "", f"{tally['est_value']:.2f}",
+            "", "", "", "", "", "",
+        ])
+    else:
+        writer.writerow(["#", "Date", "Head", "Dressed (lb)", "Lb + Oz", "Notes"])
+        for e in reversed(tally["entries"]):
+            writer.writerow([
+                e["num"], e["harvest_date"], e["head_count"],
+                f"{e['dressed_lbs']:.2f}", e["lb_oz"], _safe(e["notes"]),
+            ])
+        writer.writerow([
+            "TOTAL", "", tally["harvested_head"],
+            f"{tally['total_lbs']:.2f}", _fmt_lb_oz(tally["total_lbs"]),
+            f"Avg {tally['avg_lbs']:.2f} lb/bird",
+        ])
     slug = "".join(ch if ch.isalnum() else "-" for ch in b["name"].lower()).strip("-") or f"batch-{batch_id}"
     return Response(
         buf.getvalue(),
@@ -222,6 +260,8 @@ def batch_save_submit(
     sale_price_per_lb: float = Form(0.0),
     processing_cost: float = Form(0.0),
     lifecycle_type: str = Form("direct_arrival"),
+    sale_unit: str = Form(""),
+    customer_pays_butcher: str = Form(""),
     days_to_birth: str = Form(""),
     starter_weeks: str = Form(""),
     grower_weeks: str = Form(""),
@@ -250,6 +290,9 @@ def batch_save_submit(
         "lifecycle_type": lifecycle_type,
         "notes": notes.strip(),
     }
+    if sale_unit.strip():
+        payload["sale_unit"] = sale_unit.strip()
+        payload["customer_pays_butcher"] = customer_pays_butcher.strip() in ("1", "true", "on", "yes")
     for k, raw, cast in (
         ("days_to_birth", days_to_birth, int),
         ("starter_weeks", starter_weeks, int),

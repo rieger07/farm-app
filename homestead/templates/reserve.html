@@ -5,11 +5,13 @@
   <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--line)">
     <div class="brand" style="display:flex;align-items:center;gap:10px">
       <img src="/static/logo.png" alt="{{ farm_name }}" style="width:32px;height:32px;border-radius:8px">
-      <div>{{ batch_name }}<small>{{ farm_name }} · {{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb</small></div>
+      <div>{{ batch_name }}<small>{{ farm_name }} · {{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
     </div>
     {% if preorder_enabled %}
       {% if is_waitlist_mode %}
         <span class="pill amber">Waitlist Open</span>
+      {% elif is_share_mode %}
+        <span class="pill green">{{ '%g'|format(spots_left_equiv) }} animal{{ '' if spots_left_equiv == 1 else 's' }} ({{ '%g'|format(spots_left_equiv * 2) }} halves) left</span>
       {% else %}
         <span class="pill green">{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left</span>
       {% endif %}
@@ -29,13 +31,18 @@
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px">
       <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
         <small>Price</small>
-        <div style="font:700 18px Georgia,serif">${{ '%.2f'|format(sale_price_per_lb) }}/lb</div>
-        {% if avg_dressed_weight > 0 %}<small class="muted">~{{ '%.1f'|format(avg_dressed_weight) }} lb avg</small>{% endif %}
+        <div style="font:700 18px Georgia,serif">${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging' if is_share_mode else '' }}</div>
+        {% if avg_dressed_weight > 0 %}<small class="muted">~{{ '%.0f'|format(avg_dressed_weight) }} lb avg{{ ' whole' if is_share_mode else '' }}</small>{% endif %}
       </div>
       <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
         <small>Deposit</small>
+        {% if is_share_mode and deposit_per_bird > 0 %}
+        <div style="font:700 17px Georgia,serif">${{ '%.2f'|format(deposit_per_bird * 0.5) }}/half · ${{ '%.2f'|format(deposit_per_bird) }}/whole</div>
+        <small class="muted">Credited toward final balance</small>
+        {% else %}
         <div style="font:700 18px Georgia,serif">{% if deposit_per_bird > 0 %}${{ '%.2f'|format(deposit_per_bird) }}/bird{% else %}None{% endif %}</div>
         <small class="muted">{% if deposit_per_bird > 0 %}Credited at pickup{% else %}Pay at pickup{% endif %}</small>
+        {% endif %}
       </div>
       {% if pickup_date or pickup_window %}
       <div style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
@@ -45,6 +52,11 @@
       </div>
       {% endif %}
     </div>
+    {% if is_share_mode and customer_pays_butcher %}
+      <div class="notice mb-sm" style="font-size:13px">
+        <b>How hanging-weight shares work:</b> Meat is priced by final hanging weight at the butcher. Processing &amp; cut-wrap fees are paid directly to the butcher at pickup once your farm balance is settled.
+      </div>
+    {% endif %}
     {% if preorder_notes %}
       <p style="margin:6px 0 0;font-size:14px;line-height:1.45">{{ preorder_notes }}</p>
     {% endif %}
@@ -67,13 +79,21 @@
       <label>Quantity
         <input id="r-qty" type="number" min="1" max="25" value="1" required oninput="updateDepPreview()">
       </label>
-      <label>Notes (optional)
-        <input id="r-notes" placeholder="Preferred size, pickup note...">
+      {% if is_share_mode %}
+      <label>Share Size
+        <select id="r-share-size" onchange="updateDepPreview()">
+          <option value="half">Half Share (½ animal)</option>
+          <option value="whole">Whole Share (1 animal)</option>
+        </select>
+      </label>
+      {% endif %}
+      <label{{ '' if is_share_mode else '' }}>Notes (optional)
+        <input id="r-notes" placeholder="Preferred cuts, pickup note...">
       </label>
       {% if deposit_per_bird > 0 and not is_waitlist_mode %}
       <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
         <span>Deposit to hold reservation</span>
-        <b id="r-dep-preview" style="font-size:18px;color:var(--green)">${{ '%.2f'|format(deposit_per_bird) }}</b>
+        <b id="r-dep-preview" style="font-size:18px;color:var(--green)">${{ '%.2f'|format(deposit_per_bird * (0.5 if is_share_mode else 1.0)) }}</b>
       </div>
       {% endif %}
       <div class="full">
@@ -110,13 +130,20 @@
   <script>
   const SLUG = {{ slug|tojson }};
   const BATCH_NAME = {{ batch_name|tojson }};
+  const IS_SHARE_MODE = {{ is_share_mode|tojson }};
   const DEP_PER_BIRD = {{ deposit_per_bird }};
+
+  function getSelectedShareFrac() {
+    const el = document.getElementById('r-share-size');
+    if (!el) return 1.0;
+    return el.value === 'half' ? 0.5 : 1.0;
+  }
 
   function updateDepPreview() {
     const el = document.getElementById('r-dep-preview');
     if (!el) return;
     const q = Math.max(1, parseInt(document.getElementById('r-qty').value || '1', 10) || 1);
-    el.textContent = '$' + (q * DEP_PER_BIRD).toFixed(2);
+    el.textContent = '$' + (q * DEP_PER_BIRD * getSelectedShareFrac()).toFixed(2);
   }
 
   async function submitReserve(ev) {
@@ -126,6 +153,7 @@
     toast.hidden = true;
     btn.disabled = true;
     try {
+      const shareSel = document.getElementById('r-share-size');
       const resp = await fetch(`/api/reserve/${SLUG}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -133,6 +161,7 @@
           name: document.getElementById('r-name').value.trim(),
           contact: document.getElementById('r-contact').value.trim(),
           quantity: parseInt(document.getElementById('r-qty').value || '1', 10) || 1,
+          share_size: shareSel ? shareSel.value : 'whole',
           notes: document.getElementById('r-notes').value.trim(),
         }),
       });
@@ -143,14 +172,18 @@
       const cc = document.getElementById('reserve-confirm-card');
       cc.hidden = false;
 
+      const qtyLabel = data.share_label
+        ? `${data.quantity} × ${data.share_label} share (${BATCH_NAME})`
+        : `${data.quantity} × ${BATCH_NAME}`;
       if (data.status === 'waitlist') {
         document.getElementById('rc-title').textContent = 'You are on the Waitlist!';
         document.getElementById('rc-sub').textContent =
-          `Thanks, ${data.customer_name}! We saved your request for ${data.quantity} × ${BATCH_NAME} on the waitlist and will reach out if a spot opens.`;
+          `Thanks, ${data.customer_name}! We saved your request for ${qtyLabel} on the waitlist and will reach out if a spot opens.`;
       } else {
         document.getElementById('rc-title').textContent = '✓ Spot Reserved!';
-        document.getElementById('rc-sub').textContent =
-          `Thanks, ${data.customer_name}! You reserved ${data.quantity} × ${BATCH_NAME}. We'll send you the live bird-picking link once harvest weighing is complete.`;
+        document.getElementById('rc-sub').textContent = IS_SHARE_MODE
+          ? `Thanks, ${data.customer_name}! You reserved ${qtyLabel}. We'll reach out after drop-off with final hanging weights and pickup release info.`
+          : `Thanks, ${data.customer_name}! You reserved ${qtyLabel}. We'll send you the live bird-picking link once harvest weighing is complete.`;
 
         if (data.deposit_total > 0) {
           const box = document.getElementById('rc-deposit-box');

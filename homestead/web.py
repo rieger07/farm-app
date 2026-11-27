@@ -18,6 +18,12 @@ from homestead.db.core import (
     get_user_by_session_token,
 )
 from homestead.db.customers import batch_preorder_counts, list_customers
+from homestead.db.shares import (
+    effective_share_weight,
+    list_batch_harvest_shares,
+    normalize_sale_unit,
+    share_slot_label,
+)
 from homestead.db.workspaces import (
     can_access_homestead_page,
     resolve_homestead_workspace,
@@ -153,10 +159,12 @@ def _batch_stage_info(b: dict, s: dict, user_id: int, tally: dict | None = None)
     if tally is None:
         tally = _harvest_tally_payload(b, user_id)
     po_summary = batch_preorder_counts(user_id).get(
-        int(b["id"]), {"reserved_qty": 0, "waitlist_qty": 0, "deposits_paid": 0.0}
+        int(b["id"]),
+        {"reserved_qty": 0, "waitlist_qty": 0, "reserved_equiv": 0.0, "waitlist_equiv": 0.0, "deposits_paid": 0.0},
     )
+    items_for_pickup = tally["shares"] if tally.get("is_share_mode") else tally["entries"]
     by_cust_stat: dict[int, bool] = {}
-    for e in tally["entries"]:
+    for e in items_for_pickup:
         if not e["for_sale"] or not e["customer_id"]:
             continue
         cid = int(e["customer_id"])
@@ -203,11 +211,17 @@ def _fmt_lb_oz(lbs: float) -> str:
 def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     bag_weight = get_bag_weight(user_id=user_id)
     s = compute_batch_schedule(batch, bag_weight=bag_weight)
+    sale_unit = normalize_sale_unit(batch.get("sale_unit"))
+    is_share_mode = sale_unit == "shares"
     harvests = sorted(
         list_batch_harvests(batch["id"]),
         key=lambda h: int(h.get("id") or 0),
         reverse=True,
     )
+    shares_by_harvest: dict[int, list[dict]] = {}
+    if is_share_mode or harvests:
+        for sh in list_batch_harvest_shares(batch["id"]):
+            shares_by_harvest.setdefault(int(sh["harvest_id"]), []).append(sh)
     customers = list_customers(user_id)
     cust_by_id = {int(c["id"]): c for c in customers}
 
@@ -233,6 +247,10 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     assigned_count = 0
     picked_up_count = 0
     not_for_sale_count = 0
+    paid_unnotified_count = 0
+    released_count = 0
+    pending_weight_count = 0
+    all_shares_flat: list[dict] = []
     entries = []
     for idx, h in enumerate(harvests):
         hc = max(1, int(h.get("head_count") or 1))
@@ -253,7 +271,94 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         tip_diff = round(effective_price - est_price, 2) if for_sale else 0.0
         bal_due = round(max(0.0, effective_price - dep), 2) if for_sale else 0.0
 
-        if for_sale:
+        carcass_num = len(harvests) - idx
+        carcass_label = str(h.get("animal_label") or "").strip() or f"Carcass #{carcass_num}"
+        weight_basis = str(h.get("weight_basis") or ("hanging" if is_share_mode else "dressed")).strip().lower()
+        live_wt = round(float(h["live_weight_lbs"]), 2) if h.get("live_weight_lbs") is not None else None
+        proc_cost = round(float(h.get("processing_cost_total") or 0.0), 2)
+
+        entry_shares: list[dict] = []
+        raw_entry_shares = shares_by_harvest.get(int(h["id"]), [])
+        for sh in raw_entry_shares:
+            sh_eff_lbs = effective_share_weight(sh, dl)
+            sh_wt_pending = sh_eff_lbs <= 0.0
+            sh_for_sale = bool(1 if sh.get("for_sale") is None else sh.get("for_sale"))
+            sh_cid = int(sh["customer_id"]) if sh.get("customer_id") else None
+            sh_cust = cust_by_id.get(sh_cid) if sh_cid else None
+            sh_dep = round(float(sh.get("deposit_paid") or 0.0), 2)
+            sh_pay = str(sh.get("payment_status") or "unpaid")
+            sh_pick = str(sh.get("pickup_status") or ("assigned" if sh_cid else "unassigned"))
+            sh_est = round(sh_eff_lbs * sale_price, 2) if sh_for_sale else 0.0
+            sh_act = (
+                round(float(sh["actual_sale_price"]), 2)
+                if sh.get("actual_sale_price") is not None and sh_for_sale
+                else None
+            )
+            sh_eff_price = sh_act if sh_act is not None else sh_est
+            sh_tip = round(sh_eff_price - sh_est, 2) if sh_for_sale else 0.0
+            sh_bal = round(max(0.0, sh_eff_price - sh_dep), 2) if sh_for_sale else 0.0
+            sh_bnot_at = str(sh.get("butcher_notified_at") or "").strip()
+            sh_dict = {
+                "id": int(sh["id"]),
+                "harvest_id": int(h["id"]),
+                "batch_id": int(batch["id"]),
+                "carcass_num": carcass_num,
+                "carcass_label": carcass_label,
+                "harvest_date": h["harvest_date"],
+                "weight_basis": weight_basis,
+                "share_slot": str(sh.get("share_slot") or "whole"),
+                "slot_label": share_slot_label(sh.get("share_slot")),
+                "share_fraction": float(sh.get("share_fraction") or 1.0),
+                "share_weight_lbs": round(float(sh["share_weight_lbs"]), 2)
+                if sh.get("share_weight_lbs") is not None
+                else None,
+                "effective_lbs": sh_eff_lbs,
+                "weight_pending": sh_wt_pending,
+                "for_sale": sh_for_sale,
+                "customer_id": sh_cid,
+                "customer_name": sh_cust["name"] if sh_cust else "",
+                "customer_phone": sh_cust["phone"] if sh_cust else "",
+                "customer_email": sh_cust["email"] if sh_cust else "",
+                "customer_pref": sh_cust["preferred_contact"] if sh_cust else "sms",
+                "deposit_paid": sh_dep,
+                "est_price": sh_est,
+                "actual_sale_price": sh_act,
+                "effective_price": sh_eff_price,
+                "tip_diff": sh_tip,
+                "balance_due": sh_bal,
+                "customer_butcher_fee": round(float(sh.get("customer_butcher_fee") or 0.0), 2),
+                "payment_status": sh_pay,
+                "payment_method": str(sh.get("payment_method") or ""),
+                "paid_at": str(sh.get("paid_at") or ""),
+                "butcher_notified_at": sh_bnot_at,
+                "butcher_notified": bool(sh_bnot_at),
+                "pickup_status": sh_pick,
+                "cut_sheet_notes": str(sh.get("cut_sheet_notes") or ""),
+                "claimed_at": str(sh.get("claimed_at") or ""),
+            }
+            entry_shares.append(sh_dict)
+            all_shares_flat.append(sh_dict)
+
+        if is_share_mode and entry_shares:
+            if dl <= 0.0:
+                pending_weight_count += 1
+            for sh_dict in entry_shares:
+                if sh_dict["for_sale"]:
+                    for_sale_lbs += sh_dict["effective_lbs"]
+                    for_sale_value += sh_dict["effective_price"]
+                    if not sh_dict["customer_id"]:
+                        available_count += 1
+                    elif sh_dict["pickup_status"] == "picked_up":
+                        picked_up_count += 1
+                    else:
+                        assigned_count += 1
+                    if sh_dict["payment_status"] == "paid" and not sh_dict["butcher_notified"]:
+                        paid_unnotified_count += 1
+                    if sh_dict["butcher_notified"]:
+                        released_count += 1
+                else:
+                    not_for_sale_count += 1
+        elif for_sale:
             for_sale_lbs += dl
             for_sale_value += effective_price
             if not cid:
@@ -267,7 +372,13 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
 
         entries.append({
             "id": int(h["id"]),
-            "num": len(harvests) - idx,
+            "num": carcass_num,
+            "animal_label": carcass_label,
+            "live_weight_lbs": live_wt,
+            "weight_basis": weight_basis,
+            "processing_cost_total": proc_cost,
+            "shares": entry_shares,
+            "split_mode": "halves" if len(entry_shares) >= 2 else "whole",
             "harvest_date": h["harvest_date"],
             "head_count": hc,
             "dressed_lbs": dl,
@@ -297,6 +408,12 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     return {
         "batch_id": int(batch["id"]),
         "batch_name": batch["name"],
+        "sale_unit": sale_unit,
+        "is_share_mode": is_share_mode,
+        "customer_pays_butcher": bool(batch.get("customer_pays_butcher")),
+        "butcher_name": str(batch.get("butcher_name") or ""),
+        "butcher_phone": str(batch.get("butcher_phone") or ""),
+        "butcher_email": str(batch.get("butcher_email") or ""),
         "harvested_head": harvested_head,
         "surviving_quantity": surviving,
         "remaining_head": remaining,
@@ -313,11 +430,15 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         "assigned_count": assigned_count,
         "picked_up_count": picked_up_count,
         "not_for_sale_count": not_for_sale_count,
+        "paid_unnotified_count": paid_unnotified_count,
+        "released_count": released_count,
+        "pending_weight_count": pending_weight_count,
         "picking_enabled": bool(batch.get("picking_enabled")),
         "picking_preorder_only": bool(batch.get("picking_preorder_only")),
         "picking_slug": batch.get("picking_slug") or "",
         "max_birds_per_customer": batch.get("max_birds_per_customer"),
         "entries": entries,
+        "shares": all_shares_flat,
     }
 
 
