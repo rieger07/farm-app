@@ -37,6 +37,7 @@ from homestead.db.eggs import (
     normalize_egg_species,
 )
 from homestead.db.expenses import get_google_drive_connection
+from homestead.db.herds import get_herd
 from homestead.scheduling import compute_batch_schedule, get_batch_status_badge
 from homestead.web import (
     _batch_stage_info,
@@ -53,14 +54,37 @@ router = APIRouter()
 
 
 @router.get("/batches")
-def batches_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
+def batches_page(
+    request: Request,
+    msg: str = "",
+    from_herd: str = "",
+    user: dict = Depends(current_user),
+):
     schedules = _schedules_for_user(user["id"], include_archived=True)
     po_counts = batch_preorder_counts(user["id"])
+    species_catalog = get_species_catalog(user_id=user["id"])
+    litter_preset = None
+    if from_herd.strip().isdigit():
+        herd = get_herd(user["id"], int(from_herd.strip()))
+        if herd:
+            default_qty = 6
+            sp_key = "kunekune pigs" if (herd["species"] == "pig" and "kunekune pigs" in species_catalog) else next(iter(species_catalog), "chicken chicks")
+            t12 = float(herd.get("trailing_12m_cost") or 0.0)
+            suggested_unit = round(t12 / default_qty, 2) if t12 > 0 else float(species_catalog.get(sp_key, {}).get("unit_cost") or 0.0)
+            litter_preset = {
+                "name": f"{herd['name']} Litter ({date.today().strftime('%b %Y')})",
+                "species": sp_key,
+                "lifecycle_type": "mammal_breeding" if herd["species"] == "pig" else "direct_arrival",
+                "quantity": default_qty,
+                "unit_cost": suggested_unit,
+                "notes": f"From {herd['name']} (trailing 12m upkeep: ${t12:,.2f})",
+            }
     return _render(
         request, "batches.html", user, "batches",
         schedules=schedules,
         po_counts=po_counts,
-        species_catalog=get_species_catalog(user_id=user["id"]),
+        species_catalog=species_catalog,
+        litter_preset=litter_preset,
         msg=msg,
     )
 

@@ -12,6 +12,7 @@ from homestead.db.batches import (
 )
 from homestead.db.eggs import list_layer_feed_logs
 from homestead.db.expenses import list_farm_expenses, schedule_f_line_for
+from homestead.db.herds import list_herd_feed_logs
 from shared.bridge import (
     get_ledger_sales_summary_by_year,
     list_ledger_market_day_costs,
@@ -138,6 +139,31 @@ def build_unified_tax_books(
                 receipt_url=fl.get("receipt_url") or "",
                 receipt_group_id=fl.get("receipt_group_id") or "",
                 source_url="/eggs?tab=flock",
+                can_delete=True,
+                can_attach_receipt=True,
+            )
+        )
+
+    # 3b. Perennial herd feed & hay purchases
+    for fl in list_herd_feed_logs(uid, limit=5000):
+        qty_val = float(fl.get("quantity") or 0.0)
+        unit_lbl = str(fl.get("unit") or "bags")
+        cat_lbl = str(fl.get("feed_category") or "grain").title()
+        qty_str = f" ({qty_val:g} {unit_lbl})" if qty_val else ""
+        all_entries.append(
+            _make_entry(
+                entry_id=int(fl["id"]),
+                date_str=fl["feed_date"],
+                source_key="herd_feed",
+                source_label="Herd Feed",
+                category="Feed",
+                vendor=fl.get("vendor") or "",
+                allocation_label=f"{fl.get('herd_name') or 'Herd'} · {cat_lbl}{qty_str}",
+                amount=float(fl.get("cost_total") or 0.0),
+                notes=fl.get("notes") or "",
+                receipt_url=fl.get("receipt_url") or "",
+                receipt_group_id=fl.get("receipt_group_id") or "",
+                source_url=f"/herds?herd_id={int(fl['herd_id'])}",
                 can_delete=True,
                 can_attach_receipt=True,
             )

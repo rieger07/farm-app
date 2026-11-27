@@ -5,6 +5,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from homestead.db.herds import (
+    normalize_herd_feed_category,
+    normalize_herd_feed_unit,
+)
+
 
 class BatchOwnershipError(LookupError):
     """Raised when a receipt line references a batch not owned by the active user."""
@@ -99,13 +104,27 @@ def _parse_owned_batch_id(raw_bid: Any, owned_batch_ids: set[int]) -> int:
     return bid
 
 
+def _parse_owned_herd_id(raw_hid: Any, owned_herd_ids: set[int]) -> int:
+    s = str(raw_hid or "").strip()
+    if not s.isdigit():
+        raise BatchOwnershipError("Herd not found.")
+    hid = int(s)
+    if hid not in owned_herd_ids:
+        raise BatchOwnershipError("Herd not found.")
+    return hid
+
+
 def expand_receipt_lines(
-    raw_lines: list[dict], *, owned_batch_ids: set[int]
+    raw_lines: list[dict],
+    *,
+    owned_batch_ids: set[int],
+    owned_herd_ids: set[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Validate and expand raw modal lines (including multi-batch allocations) into DB rows."""
+    """Validate and expand raw modal lines (including multi-batch & multi-herd allocations) into DB rows."""
     if not isinstance(raw_lines, list):
         raise ValueError("Invalid receipt line data.")
 
+    herd_ids_set = owned_herd_ids if owned_herd_ids is not None else set()
     expanded: list[dict[str, Any]] = []
     for item in raw_lines:
         if not isinstance(item, dict):
@@ -118,7 +137,7 @@ def expand_receipt_lines(
             continue
 
         kind = str(item.get("kind") or "general").strip()
-        if kind not in ("batch_feed", "layer_feed", "general"):
+        if kind not in ("batch_feed", "layer_feed", "herd_feed", "general"):
             kind = "general"
         notes = str(item.get("notes") or "").strip()
 
@@ -139,6 +158,78 @@ def expand_receipt_lines(
                     "notes": notes,
                 }
             )
+            continue
+
+        if kind == "herd_feed":
+            fcat = normalize_herd_feed_category(item.get("feed_category"))
+            funit = normalize_herd_feed_unit(item.get("unit"), fcat)
+            try:
+                raw_qty = float(item.get("quantity") or 0.0)
+                raw_lbs_val = item.get("weight_lbs") if item.get("weight_lbs") is not None else item.get("feed_lbs")
+                raw_lbs = float(raw_lbs_val or 0.0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid quantity on Herd Feed / Hay line.") from exc
+
+            raw_h_allocs = item.get("allocations")
+            if isinstance(raw_h_allocs, list) and len(raw_h_allocs) > 0:
+                merged_h: dict[int, float] = {}
+                for alloc in raw_h_allocs:
+                    if not isinstance(alloc, dict):
+                        continue
+                    hid = _parse_owned_herd_id(alloc.get("herd_id"), herd_ids_set)
+                    try:
+                        wt = float(alloc.get("weight") or 0.0)
+                    except (TypeError, ValueError):
+                        wt = 0.0
+                    if wt > 0 and math.isfinite(wt):
+                        merged_h[hid] = merged_h.get(hid, 0.0) + wt
+                if not merged_h:
+                    raise ValueError(
+                        "Enter a positive split weight for at least one selected herd."
+                    )
+                h_ids = list(merged_h.keys())
+                h_weights = [merged_h[hid] for hid in h_ids]
+                amt_shares = allocate_signed_total(amt, h_weights, decimals=2)
+                qty_shares = allocate_signed_total(
+                    _align_signed_qty(raw_qty, amt, 2), h_weights, decimals=2
+                )
+                lb_shares = allocate_signed_total(
+                    _align_signed_qty(raw_lbs, amt, 1), h_weights, decimals=1
+                )
+                for hid, a_sh, q_sh, l_sh in zip(
+                    h_ids, amt_shares, qty_shares, lb_shares
+                ):
+                    if a_sh == 0.0:
+                        continue
+                    expanded.append(
+                        {
+                            "kind": "herd_feed",
+                            "herd_id": hid,
+                            "feed_category": fcat,
+                            "unit": funit,
+                            "quantity": q_sh,
+                            "weight_lbs": l_sh,
+                            "amount": a_sh,
+                            "notes": notes,
+                        }
+                    )
+            else:
+                raw_hid = str(item.get("herd_id") or "").strip()
+                if not raw_hid.isdigit():
+                    raise ValueError("Choose a herd for each Herd Feed / Hay line.")
+                hid = _parse_owned_herd_id(raw_hid, herd_ids_set)
+                expanded.append(
+                    {
+                        "kind": "herd_feed",
+                        "herd_id": hid,
+                        "feed_category": fcat,
+                        "unit": funit,
+                        "quantity": _align_signed_qty(raw_qty, amt, 2),
+                        "weight_lbs": _align_signed_qty(raw_lbs, amt, 1),
+                        "amount": amt,
+                        "notes": notes,
+                    }
+                )
             continue
 
         raw_allocs = item.get("allocations")

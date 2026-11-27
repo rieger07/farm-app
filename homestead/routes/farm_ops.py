@@ -43,6 +43,12 @@ from homestead.db.expenses import (
     list_recent_vendors,
     replace_receipt_entries,
 )
+from homestead.db.herds import (
+    add_herd_feed_log,
+    attach_herd_feed_receipt,
+    delete_herd_feed_log,
+    list_herds,
+)
 from homestead.db.workspaces import can_access_homestead_page
 from homestead.financials import (
     compute_purchasing_schedule,
@@ -150,6 +156,7 @@ def financials_page(
     new: int = 0,
     preset: str = "",
     batch_id: str = "",
+    herd_id: str = "",
     species: str = "",
     user: dict = Depends(current_user),
 ):
@@ -238,12 +245,14 @@ def financials_page(
             else [s["batch"] for s in schedules]
         ),
         receipt_batches=receipt_batches,
+        all_herds=list_herds(user["id"], include_inactive=True),
         bag_weight=get_bag_weight(user_id=user["id"]),
         layer_cfg=get_layer_settings(user["id"]),
         recent_vendors=list_recent_vendors(user["id"]),
         auto_open_receipt=bool(new),
         preset_mode=preset,
         preset_batch_id=batch_id,
+        preset_herd_id=herd_id,
         preset_species=species,
         schedules=schedules,
         include_planned=include_planned_flag,
@@ -335,9 +344,12 @@ async def expense_receipt_submit(
         return _tax_redirect(yr, "Error: Invalid receipt line data.")
 
     owned_batch_ids = {int(b["id"]) for b in list_batches(user_id=user["id"])}
+    owned_herd_ids = {int(h["id"]) for h in list_herds(user["id"], include_inactive=True)}
     try:
         expanded_lines = expand_receipt_lines(
-            raw_lines, owned_batch_ids=owned_batch_ids
+            raw_lines,
+            owned_batch_ids=owned_batch_ids,
+            owned_herd_ids=owned_herd_ids,
         )
     except BatchOwnershipError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -433,6 +445,22 @@ async def expense_receipt_submit(
                     vendor=clean_vendor,
                     receipt_group_id=group_id,
                 )
+            elif kind == "herd_feed":
+                add_herd_feed_log(
+                    user["id"],
+                    herd_id=line["herd_id"],
+                    feed_date=rdate,
+                    feed_category=line["feed_category"],
+                    quantity=line["quantity"],
+                    unit=line["unit"],
+                    weight_lbs=line["weight_lbs"],
+                    cost_total=line["amount"],
+                    vendor=clean_vendor,
+                    notes=notes,
+                    receipt_url=r_url,
+                    drive_file_id=drive_id,
+                    receipt_group_id=group_id,
+                )
             else:
                 add_farm_expense(
                     user["id"],
@@ -513,6 +541,8 @@ def expense_entry_delete_submit(
         delete_batch_feed_log_for_user(entry_id, user["id"])
     elif key == "layer_feed":
         delete_layer_feed_log(user["id"], entry_id)
+    elif key == "herd_feed":
+        delete_herd_feed_log(user["id"], entry_id)
     else:
         return _tax_redirect(year, "Error: This entry cannot be deleted from Tax Books.")
     return _tax_redirect(year, "Removed expense entry.")
@@ -567,6 +597,8 @@ async def expense_attach_receipt_submit(
         updated = attach_batch_feed_receipt(entry_id, user["id"], r_url, drive_id)
     elif key == "layer_feed":
         updated = attach_layer_feed_receipt(entry_id, user["id"], r_url, drive_id)
+    elif key == "herd_feed":
+        updated = attach_herd_feed_receipt(entry_id, user["id"], r_url, drive_id)
     elif key == "processing":
         updated = attach_batch_harvest_receipt(entry_id, user["id"], r_url, drive_id)
     if not updated:
