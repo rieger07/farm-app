@@ -339,8 +339,13 @@
     </div>
 
     <div class="card">
-      <h2>Shared Layer &amp; Scratch Feed Log</h2>
-      <p class="sub" style="margin-bottom:10px">
+      <div class="flex-between mb-sm">
+        <h2 class="mb-0">Shared Layer &amp; Scratch Feed Log</h2>
+        {% if (user.role or 'owner') in ('owner', 'manager') %}
+        <a href="/financials?tab=taxes&amp;new=1&amp;preset=layers&amp;species={{ dash.active_species }}" class="btn sm primary">+ Log feed receipt</a>
+        {% endif %}
+      </div>
+      <p class="sub mb-md">
         Total daily burn: <b>{{ '%.1f'|format(dash.total_daily_feed_burn_lbs) }} lb/d</b> ({{ '%.1f'|format(dash.monthly_bags) }} bags/mo)
         · Total spent: <b>${{ '%.2f'|format(dash.logged_feed_cost) }} ({{ '%.1f'|format(dash.logged_feed_lbs) }} lb)</b>
       </p>
@@ -364,35 +369,7 @@
       </div>
       {% endif %}
 
-      <form method="post" action="/eggs/feed" enctype="multipart/form-data" class="fgrid" style="margin-bottom:14px">
-        <input type="hidden" name="species" value="{{ dash.active_species }}">
-        <label>Date<input type="date" name="feed_date" value="{{ dash.today_iso }}" required></label>
-        <label>Feed Type
-          <select name="feed_type" id="lf-type" onchange="syncLfFeed()">
-            <option value="layer">Layer / Waterfowl Feed</option>
-            <option value="scratch">Scratch Grains</option>
-            <option value="supplement">Grit / Oyster Shell / Supplement</option>
-          </select>
-        </label>
-        <div class="full">
-          <small style="margin-bottom:5px;font-size:13px;color:var(--ink)">Allocate feed cost to</small>
-          <div class="row" id="feed-tag-chips" style="gap:6px">
-            <label class="tag-chip"><input type="checkbox" name="species_tags" value="all" checked onchange="syncFeedTags(this)"> All</label>
-            <label class="tag-chip"><input type="checkbox" name="species_tags" value="chicken" onchange="syncFeedTags(this)"> Chickens</label>
-            <label class="tag-chip"><input type="checkbox" name="species_tags" value="waterfowl" onchange="syncFeedTags(this)"> Waterfowl</label>
-            {% if 'duck' in dash.enabled_species and 'goose' in dash.enabled_species %}
-            <label class="tag-chip"><input type="checkbox" name="species_tags" value="duck" onchange="syncFeedTags(this)"> Ducks</label>
-            <label class="tag-chip"><input type="checkbox" name="species_tags" value="goose" onchange="syncFeedTags(this)"> Geese</label>
-            {% endif %}
-          </div>
-        </div>
-        <label>Bags ({{ bag_weight }} lb)<input type="number" id="lf-bags" name="bags" step="0.5" min="0.5" value="1" oninput="syncLfFeed()"></label>
-        <label>Total feed (lb)<input type="number" id="lf-lbs" name="feed_lbs" step="0.1" min="1" value="{{ bag_weight }}" required></label>
-        <label>Total cost ($)<input type="number" id="lf-cost" name="cost_total" step="0.01" min="0" value="{{ '%.2f'|format(dash.settings.bag_price) }}" required></label>
-        <label>Notes<input name="notes" placeholder="16% Layer Pellets, waterfowl ration..."></label>
-        <label class="full">{% if gdrive_connected %}Receipt (→ Drive){% else %}Receipt photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment"></label>
-        <div class="full"><button class="btn sm primary">+ Log feed purchase</button></div>
-      </form>
+      <p class="sub mb-md"><small class="inline muted">Feed purchases logged via Tax Books automatically update your barn balance and Schedule F Line 16.</small></p>
 
       {% if dash.feed_logs %}
       <div class="hist-list">

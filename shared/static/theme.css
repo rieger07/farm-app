@@ -157,6 +157,17 @@ details.hist-row[open] .hist-chev{transform:rotate(180deg)}
 .copy-row input{flex:1;min-width:220px;background:#fff}
 .search-input{min-width:220px;max-width:320px;width:100%}
 
+/* Split-receipt & Schedule F tax primitives */
+.split-line{background:var(--surface-soft);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.split-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.alloc-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:9px;background:var(--surface-muted);font-size:13px;margin-top:10px}
+.vendor-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.vendor-chip{border:1px solid var(--line);background:var(--surface-soft);border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer;color:var(--ink)}
+.vendor-chip:hover{background:var(--sage);border-color:var(--green)}
+.tax-cat-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.tax-cat-row:first-child{border-top:0;padding-top:2px}
+.tax-callout{background:var(--amber);color:var(--amberink);padding:10px 14px;border-radius:10px;font-size:13px;margin-top:12px}
+
 /* Responsive breakpoint (shared across both apps) */
 @media(max-width:860px){
   .sidebar,.topbar{display:none}
@@ -169,6 +180,7 @@ details.hist-row[open] .hist-chev{transform:rotate(180deg)}
   .cards.three .big,.kpi-strip-3 .big{font-size:22px;margin:2px 0}
   .cards.three small,.kpi-strip-3 small{font-size:11px;line-height:1.2}
   .cards.two,.cards.two.even,.cards.two.split-3-2,.fgrid{grid-template-columns:1fr}
+  dialog input,dialog select,dialog textarea{font-size:16px}
   td,th{padding:10px 12px}
   .ws-head,.ws-body{padding:12px 14px}
   .member-row{flex-wrap:wrap;gap:8px}

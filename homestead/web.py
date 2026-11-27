@@ -54,13 +54,10 @@ class _LoginRedirect(Exception):
 
 
 def current_user(request: Request) -> dict:
-    tok = request.cookies.get(COOKIE)
-    user = get_user_by_session_token(tok) if tok else None
+    user = optional_user(request)
     if not user:
         raise _LoginRedirect()
-    raw_mid = (request.cookies.get(MERCHANT_COOKIE) or "").strip()
-    pref_mid = int(raw_mid) if raw_mid.isdigit() else None
-    return resolve_homestead_workspace(user, preferred_merchant_id=pref_mid)
+    return user
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -125,7 +122,12 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
 
 def optional_user(request: Request) -> dict | None:
     tok = request.cookies.get(COOKIE)
-    return get_user_by_session_token(tok) if tok else None
+    user = get_user_by_session_token(tok) if tok else None
+    if not user:
+        return None
+    raw_mid = (request.cookies.get(MERCHANT_COOKIE) or "").strip()
+    pref_mid = int(raw_mid) if raw_mid.isdigit() else None
+    return resolve_homestead_workspace(user, preferred_merchant_id=pref_mid)
 
 
 def _batch_stage_info(b: dict, s: dict, user_id: int, tally: dict | None = None) -> dict:

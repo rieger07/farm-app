@@ -556,6 +556,8 @@ def add_layer_feed_log(
     drive_file_id: str = "",
     feed_type: str = "layer",
     species_tags: str | list[str] | None = "all",
+    vendor: str = "",
+    receipt_group_id: str = "",
 ) -> int:
     clean_date = (feed_date or date.today().isoformat()).strip()[:10]
     ftype = feed_type if feed_type in ("layer", "scratch", "supplement") else "layer"
@@ -566,8 +568,8 @@ def add_layer_feed_log(
             """
             INSERT INTO layer_feed_logs (
                 user_id, feed_date, feed_type, species_tags, bags, feed_lbs, cost_total,
-                notes, receipt_url, drive_file_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                notes, receipt_url, drive_file_id, vendor, receipt_group_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user_id),
@@ -580,11 +582,36 @@ def add_layer_feed_log(
                 str(notes or "").strip(),
                 str(receipt_url or "").strip(),
                 str(drive_file_id or "").strip(),
+                str(vendor or "").strip(),
+                str(receipt_group_id or "").strip(),
                 now_iso,
             ),
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def attach_layer_feed_receipt(
+    feed_id: int,
+    user_id: int,
+    receipt_url: str,
+    drive_file_id: str = "",
+) -> bool:
+    clean_url = str(receipt_url or "").strip()
+    if not clean_url:
+        return False
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE layer_feed_logs
+            SET receipt_url = ?,
+                drive_file_id = COALESCE(NULLIF(?, ''), drive_file_id)
+            WHERE id = ? AND user_id = ?
+            """,
+            (clean_url, str(drive_file_id or "").strip(), int(feed_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_layer_feed_log(user_id: int, feed_id: int) -> bool:
