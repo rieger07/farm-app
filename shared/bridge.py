@@ -87,19 +87,26 @@ def _resolve_harvest_timestamp(
     )
 
 
-def list_active_ledger_skus() -> list[dict]:
-    """List active non-fee Iron Ledger SKUs ordered with egg products first."""
+def list_active_ledger_skus(
+    merchant_id: int | None = None,
+    prefer_keywords: tuple[str, ...] = ("egg",),
+) -> list[dict]:
+    """List active non-fee Iron Ledger SKUs ordered with keyword-matching products first."""
+    m_clause = " AND k.merchant_id = ?" if merchant_id is not None else ""
+    params: list[object] = [int(merchant_id)] if merchant_id is not None else []
+    kws = tuple(str(kw).strip().lower() for kw in (prefer_keywords or ()) if str(kw).strip())
     with get_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT k.id, k.merchant_id, k.name, k.variant_name, k.price_cents,
                    COALESCE(m.name, 'Merchant #' || k.merchant_id) AS merchant_name,
                    COALESCE((SELECT SUM(delta) FROM stock_ledger l WHERE l.sku_id = k.id), 0) AS on_hand
             FROM skus k
             LEFT JOIN merchants m ON m.id = k.merchant_id
-            WHERE k.active = 1 AND COALESCE(k.item_type, 'product') != 'fee'
-            ORDER BY CASE WHEN LOWER(k.name) LIKE '%egg%' THEN 0 ELSE 1 END, k.name ASC, k.id ASC
-            """
+            WHERE k.active = 1 AND COALESCE(k.item_type, 'product') != 'fee'{m_clause}
+            ORDER BY k.name ASC, k.id ASC
+            """,
+            tuple(params),
         ).fetchall()
         out = []
         for r in rows:
@@ -116,6 +123,15 @@ def list_active_ledger_skus() -> list[dict]:
                     "on_hand": float(r["on_hand"] or 0.0),
                 }
             )
+        out.sort(
+            key=lambda item: (
+                0
+                if any(kw in f"{item['name']} {item['variant_name']}".lower() for kw in kws)
+                else 1,
+                item["name"].lower(),
+                item["id"],
+            )
+        )
         return out
 
 

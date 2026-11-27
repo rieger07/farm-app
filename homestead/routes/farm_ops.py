@@ -43,6 +43,7 @@ from homestead.db.expenses import (
     list_recent_vendors,
     replace_receipt_entries,
 )
+from homestead.db.fiber import attach_fiber_mill_lot_receipt
 from homestead.db.herds import (
     add_herd_feed_log,
     attach_herd_feed_receipt,
@@ -601,6 +602,8 @@ async def expense_attach_receipt_submit(
         updated = attach_herd_feed_receipt(entry_id, user["id"], r_url, drive_id)
     elif key == "processing":
         updated = attach_batch_harvest_receipt(entry_id, user["id"], r_url, drive_id)
+    elif key == "fiber_mill":
+        updated = attach_fiber_mill_lot_receipt(entry_id, user["id"], r_url, drive_id)
     if not updated:
         return _tax_redirect(year, "Error: Expense entry not found.")
     return _tax_redirect(year, "Attached receipt.")

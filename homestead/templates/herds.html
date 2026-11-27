@@ -5,7 +5,7 @@
 <div class="pagehead">
   <div>
     <h1>Perennial Herds</h1>
-    <p class="sub">Track breeding pairs, named alpacas, grain bags, and hay bales without creating endless batches.</p>
+    <p class="sub">Track breeding pairs, named alpacas, grain &amp; hay feed, annual shearings, mill lots, and finished yarn inventory.</p>
   </div>
   {% if can_manage %}
   <div class="row">
@@ -32,6 +32,460 @@
 </div>
 
 {% if selected_herd %}
+{% if is_fiber_herd and fiber_dash %}
+<div class="tab-bar">
+  <div class="seg-group" role="tablist" aria-label="Fiber herd workspace">
+    <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=overview" class="seg-btn{{ ' on' if active_tab == 'overview' }}">
+      <span>Overview &amp; Feed</span>
+    </a>
+    <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=shearing" class="seg-btn{{ ' on' if active_tab == 'shearing' }}">
+      <span>Shearing &amp; Raw Fiber</span>
+      <span class="seg-badge">{{ '%.1f'|format(fiber_dash.on_hand_raw_lbs) }} lb</span>
+    </a>
+    <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=mill" class="seg-btn{{ ' on' if active_tab == 'mill' }}">
+      <span>Mill Lots &amp; Yarn</span>
+      <span class="seg-badge">{{ fiber_dash.mill_lots|length }}</span>
+    </a>
+  </div>
+</div>
+{% endif %}
+
+{% if active_tab == 'shearing' and is_fiber_herd and fiber_dash %}
+<div class="cards four">
+  <div class="card">
+    <small>YTD Raw Fiber</small>
+    <div class="big">{{ '%.1f'|format(fiber_dash.ytd_raw_lbs) }} lb</div>
+    <small>{{ '%.1f'|format(fiber_dash.total_raw_lbs) }} lb all-time harvested</small>
+  </div>
+  <div class="card">
+    <small>Unmilled On Hand</small>
+    <div class="big">{{ '%.1f'|format(fiber_dash.on_hand_raw_lbs) }} lb</div>
+    <small>{{ fiber_dash.by_color|length }} fleece color group{{ '' if fiber_dash.by_color|length == 1 else 's' }}</small>
+  </div>
+  <div class="card">
+    <small>Avg Clip / Shearing</small>
+    <div class="big">{{ '%.2f'|format(fiber_dash.avg_lbs_per_shearing) }} lb</div>
+    <small>{{ fiber_dash.shearings|length }} total shearing{{ '' if fiber_dash.shearings|length == 1 else 's' }}</small>
+  </div>
+  <div class="card">
+    <small>YTD Shearing Fees</small>
+    <div class="big">{{ fiber_dash.ytd_shearing_fees|money }}</div>
+    <small>Deducted under Schedule F Processing</small>
+  </div>
+</div>
+
+<div class="card mb-md">
+  <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+    <div>
+      <h2 class="mb-0">Raw Fiber Inventory by Color</h2>
+      <small>Separated by fleece shade so white, fawn, rose grey, and chocolate never get mixed accidentally before milling.</small>
+    </div>
+    <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=mill" class="btn sm primary">Box &amp; Send Mill Lot →</a>
+  </div>
+  {% if fiber_dash.by_color %}
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    {% for bc in fiber_dash.by_color %}
+    <div style="background:var(--surface-soft);border:1px solid var(--line);border-radius:10px;padding:8px 12px">
+      <b>{{ bc.color }}</b>
+      <small class="inline muted">· {{ bc.clip_count }} clip{{ '' if bc.clip_count == 1 else 's' }}</small>
+      <div style="font:600 17px Georgia,serif;color:var(--green)">{{ '%.1f'|format(bc.remaining_lbs) }} lb <small class="inline muted">avail</small></div>
+      <small class="muted">{{ '%.1f'|format(bc.total_lbs) }} lb total shorn</small>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">No shearings logged yet. Log each named alpaca's annual fleece weights below.</div>
+  {% endif %}
+</div>
+
+<div class="cards two">
+  {% if can_manage %}
+  <div class="card">
+    <h2 class="mb-0">Log Annual Shearing</h2>
+    <p class="sub mb-md">Record fleece weights per named alpaca (color auto-fills from the roster).</p>
+    <form method="post" action="/herds/{{ selected_herd.id }}/shearings/add" class="fgrid">
+      <label>Named Alpaca
+        <select name="animal_id" id="sh-animal" onchange="onShearingAnimalChange()">
+          <option value="" data-color="">— Herd clip / Unspecified —</option>
+          {% for a in animals %}
+          <option value="{{ a.id }}" data-color="{{ a.color }}">{{ a.name }}{% if a.color %} ({{ a.color }}){% endif %}{% if not a.active %} [Retired]{% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Shear Date
+        <input type="date" name="shear_date" value="{{ today_iso }}" required>
+      </label>
+      <label>Fleece Color / Grade
+        <input name="fleece_color" id="sh-color" placeholder="e.g. White, Dark Chocolate, Fawn">
+      </label>
+      <label>Shearing Fee ($)
+        <input type="number" name="shearing_fee" step="0.01" min="0" value="0" placeholder="e.g. 35.00">
+      </label>
+      <label>Prime Blanket (lb)
+        <input type="number" name="prime_lbs" step="0.01" min="0" value="0" placeholder="e.g. 4.8">
+      </label>
+      <label>Seconds / Neck (lb)
+        <input type="number" name="seconds_lbs" step="0.01" min="0" value="0" placeholder="e.g. 1.2">
+      </label>
+      <label class="full">Notes
+        <input name="notes" placeholder="Micron test, clean skirting, bagged for mill…">
+      </label>
+      <div class="full row" style="justify-content:flex-end">
+        <button type="submit" class="btn primary">+ Save Shearing</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2 class="mb-sm">Shearing History ({{ fiber_dash.shearings|length }})</h2>
+    {% if fiber_dash.shearings %}
+    <div class="hist-list">
+      {% for sh in fiber_dash.shearings %}
+      <details class="hist-row">
+        <summary>
+          <div class="hist-left">
+            <b>{{ sh.shear_date }} · {{ sh.animal_name or 'Herd Clip' }}</b>
+            <small>
+              {% if sh.fleece_color %}{{ sh.fleece_color }} · {% endif %}
+              {{ '%.2f'|format(sh.total_lbs) }} lb total
+              {% if sh.prime_lbs or sh.seconds_lbs %} ({{ '%.2f'|format(sh.prime_lbs) }} prime + {{ '%.2f'|format(sh.seconds_lbs) }} 2nds){% endif %}
+            </small>
+          </div>
+          <div class="hist-right">
+            <span class="pill {{ 'green' if sh.remaining_lbs > 0 else 'gray' }}">{{ '%.1f'|format(sh.remaining_lbs) }} lb avail</span>
+            {% if sh.shearing_fee > 0 %}<small class="muted">{{ sh.shearing_fee|money }}</small>{% endif %}
+            <span class="hist-chev" aria-hidden="true">▾</span>
+          </div>
+        </summary>
+        <div class="hist-body">
+          <div>
+            Color: <b>{{ sh.fleece_color or 'Unspecified' }}</b> · Allocated to mill: {{ '%.2f'|format(sh.allocated_lbs) }} lb
+            {% if sh.shearing_fee > 0 %} · Shearer fee: {{ sh.shearing_fee|money }}{% endif %}
+            {% if sh.notes %}<br>{{ sh.notes }}{% endif %}
+          </div>
+          {% if can_manage %}
+          <form method="post" action="/herds/{{ selected_herd.id }}/shearings/{{ sh.id }}/delete" class="inline-form"
+                onsubmit="return confirm('Remove this shearing record?')">
+            <button class="btn sm danger">Remove</button>
+          </form>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No annual shearings recorded for {{ selected_herd.name }} yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% elif active_tab == 'mill' and is_fiber_herd and fiber_dash %}
+<div class="cards four">
+  <div class="card">
+    <small>Lots At Mill / Draft</small>
+    <div class="big">{{ fiber_dash.lots_at_mill }}</div>
+    <small>{{ fiber_dash.mill_lots|length }} total mill lot{{ '' if fiber_dash.mill_lots|length == 1 else 's' }}</small>
+  </div>
+  <div class="card">
+    <small>Finished Products Logged</small>
+    <div class="big">{{ '%g'|format(fiber_dash.total_finished_units) }}</div>
+    <small>Skeins, roving &amp; goods across lots</small>
+  </div>
+  <div class="card">
+    <small>Total Mill &amp; Shipping Fees</small>
+    <div class="big">{{ fiber_dash.total_mill_fees|money }}</div>
+    <small>Outbound, milling, return &amp; handling</small>
+  </div>
+  <div class="card">
+    <small>Avg Direct COGS / Unit</small>
+    <div class="big">{{ fiber_dash.avg_direct_cost_per_unit|money }}</div>
+    <small>Mill + shipping + proportional shearing</small>
+  </div>
+</div>
+
+{% if can_manage %}
+<details class="card mb-md"{{ ' open' if fiber_dash.available_shearings and not fiber_dash.mill_lots }}>
+  <summary style="cursor:pointer;font-weight:600;font-size:15px">+ Create Mill Lot (Box Raw Fleeces &amp; Track Milling / Shipping)</summary>
+  <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/save" enctype="multipart/form-data" class="fgrid mt-md">
+    <input type="hidden" name="inputs_submitted" value="1">
+    <label>Lot Name
+      <input name="lot_name" placeholder="e.g. 2026 Luna White DK Yarn" required>
+    </label>
+    <label>Mill / Processor Name
+      <input name="mill_name" placeholder="e.g. Battenkill Fibers">
+    </label>
+    <label>Color Group
+      <input name="color_group" id="ml-color-group" placeholder="Auto-filled from selected fleeces">
+    </label>
+    <label>Status
+      <select name="status">
+        <option value="draft">Draft (Boxing on farm)</option>
+        <option value="sent_to_mill" selected>Sent to Mill</option>
+        <option value="received">Received Finished Goods</option>
+      </select>
+    </label>
+    <label>Sent Date
+      <input type="date" name="sent_date" value="{{ today_iso }}">
+    </label>
+    <label>Received Date (optional)
+      <input type="date" name="received_date">
+    </label>
+
+    <div class="full" style="background:var(--surface-soft);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <div class="flex-between mb-sm">
+        <b>Select Raw Fleeces to Box</b>
+        <small class="muted">{{ fiber_dash.available_shearings|length }} fleece{{ '' if fiber_dash.available_shearings|length == 1 else 's' }} with unmilled weight</small>
+      </div>
+      <div id="ml-color-warn" class="notice warn mb-sm" hidden>
+        Heads up: you selected multiple fleece colors in the same mill lot. Keep distinct colors in separate lots unless blending intentionally.
+      </div>
+      {% if fiber_dash.available_shearings %}
+      <div class="stack" style="gap:6px">
+        {% for sh in fiber_dash.available_shearings %}
+        <div class="flex-between" style="gap:8px;flex-wrap:wrap;padding:6px 8px;background:var(--card);border:1px solid var(--line);border-radius:8px">
+          <label style="display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1">
+            <input type="checkbox" name="shearing_ids" value="{{ sh.id }}" class="ml-fleece-cb"
+                   data-color="{{ sh.fleece_color }}" style="width:auto" onchange="syncMillLotColorCheck()">
+            <span>
+              <b>{{ sh.animal_name or 'Herd Clip' }}</b>
+              {% if sh.fleece_color %}<span class="pill blue">{{ sh.fleece_color }}</span>{% endif %}
+              <small class="inline muted">· {{ sh.shear_date }} · {{ '%.2f'|format(sh.remaining_lbs) }} lb available</small>
+            </span>
+          </label>
+          <label style="margin:0;font-size:12px;display:inline-flex;align-items:center;gap:6px">
+            <span>Lbs boxed:</span>
+            <input type="number" name="raw_lbs_{{ sh.id }}" step="0.01" min="0.01" max="{{ '%.2f'|format(sh.remaining_lbs) }}"
+                   value="{{ '%.2f'|format(sh.remaining_lbs) }}" style="width:88px;margin:0">
+          </label>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <small class="muted">All logged raw fiber is already allocated to mill lots. Log shearings under <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=shearing">Shearing &amp; Raw Fiber</a> first.</small>
+      {% endif %}
+    </div>
+
+    <label>Outbound Shipping ($)<input type="number" name="shipping_out_cost" step="0.01" min="0" value="0"></label>
+    <label>Milling Fee ($)<input type="number" name="milling_fee" step="0.01" min="0" value="0"></label>
+    <label>Return Shipping ($)<input type="number" name="shipping_back_cost" step="0.01" min="0" value="0"></label>
+    <label>Other Handling / Labels ($)<input type="number" name="other_handling_fee" step="0.01" min="0" value="0"></label>
+
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
+      <input type="checkbox" name="include_in_tax_books" value="1" checked style="width:auto">
+      <span>Include milling &amp; shipping fees on Schedule F (Processing) — uncheck if already logged via Financials Receipts</span>
+    </label>
+    <label>{% if gdrive_connected %}Mill Invoice (→ Drive){% else %}Mill Invoice Photo / PDF{% endif %}<input type="file" name="receipt_file" accept="image/*,.pdf"></label>
+    <label>Or Invoice URL<input type="url" name="receipt_url" placeholder="https://..."></label>
+    <label class="full">Notes<input name="notes" placeholder="2-ply DK weight, 200 yd/skein specs…"></label>
+    <div class="full row" style="justify-content:flex-end">
+      <button type="submit" class="btn primary">+ Save Mill Lot</button>
+    </div>
+  </form>
+</details>
+{% endif %}
+
+{% if fiber_dash.mill_lots %}
+<div class="stack">
+  {% for lot in fiber_dash.mill_lots %}
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <b style="font-size:17px">{{ lot.lot_name }}</b>
+        {% if lot.color_group %}<span class="pill blue" style="margin-left:4px">{{ lot.color_group }}</span>{% endif %}
+        <span class="pill {{ 'green' if lot.status == 'received' else ('amber' if lot.status == 'sent_to_mill' else 'gray') }}" style="margin-left:4px">
+          {{ 'Received' if lot.status == 'received' else ('At Mill' if lot.status == 'sent_to_mill' else 'Draft') }}
+        </span>
+        {% if lot.mixed_color_warning %}<span class="pill amber" style="margin-left:4px">Mixed Colors</span>{% endif %}
+        <small class="muted" style="display:block;margin-top:2px">
+          {% if lot.mill_name %}{{ lot.mill_name }} · {% endif %}
+          {% if lot.sent_date %}Sent {{ lot.sent_date }}{% endif %}
+          {% if lot.received_date %} · Received {{ lot.received_date }}{% endif %}
+          {% if lot.receipt_url %} · <a href="{{ lot.receipt_url }}" target="_blank" rel="noopener">Invoice ↗</a>{% endif %}
+        </small>
+      </div>
+      {% if can_manage %}
+      <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/{{ lot.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Remove this mill lot and reverse any linked Iron Ledger restocks?')">
+        <button class="btn sm danger">Remove lot</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <div class="kpi-strip-3 mb-sm">
+      <div style="background:var(--surface-soft);border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <small>Raw Fiber In</small>
+        <div><b>{{ '%.2f'|format(lot.total_raw_lbs) }} lb</b></div>
+        <small class="muted">{{ lot.inputs|length }} fleece input{{ '' if lot.inputs|length == 1 else 's' }}</small>
+      </div>
+      <div style="background:var(--surface-soft);border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <small>Direct Mill + Shearing COGS</small>
+        <div><b>{{ lot.total_direct_cogs|money }}</b></div>
+        <small class="muted">Mill/Ship {{ lot.total_mill_cost|money }} + Shear {{ lot.allocated_shearing_cost|money }}</small>
+      </div>
+      <div style="background:var(--surface-soft);border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <small>Finished Yield</small>
+        <div><b>{{ '%g'|format(lot.total_output_units) }} units</b>{% if lot.yield_pct %} <small class="inline">({{ '%.1f'|format(lot.yield_pct) }}%)</small>{% endif %}</div>
+        <small class="muted">{% if lot.total_finished_oz %}{{ '%.1f'|format(lot.total_finished_oz) }} oz ({{ '%.2f'|format(lot.total_finished_lbs) }} lb){% else %}No weight logged yet{% endif %}</small>
+      </div>
+    </div>
+
+    {% if lot.inputs %}
+    <div class="row mb-sm" style="gap:6px;flex-wrap:wrap">
+      {% for inp in lot.inputs %}
+      <span class="pill gray">{{ inp.animal_name or 'Clip' }}{% if inp.fleece_color %} ({{ inp.fleece_color }}){% endif %}: {{ '%.2f'|format(inp.raw_lbs_used) }} lb</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if can_manage %}
+    <details class="mb-md" style="background:var(--surface-soft);border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600">Update Status, Milling / Return Shipping Fees, or Invoice</summary>
+      <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/save" enctype="multipart/form-data" class="fgrid mt-sm">
+        <input type="hidden" name="lot_id" value="{{ lot.id }}">
+        <label>Lot Name<input name="lot_name" value="{{ lot.lot_name }}" required></label>
+        <label>Mill Name<input name="mill_name" value="{{ lot.mill_name }}"></label>
+        <label>Color Group<input name="color_group" value="{{ lot.color_group }}"></label>
+        <label>Status
+          <select name="status">
+            <option value="draft" {{ 'selected' if lot.status == 'draft' }}>Draft</option>
+            <option value="sent_to_mill" {{ 'selected' if lot.status == 'sent_to_mill' }}>Sent to Mill</option>
+            <option value="received" {{ 'selected' if lot.status == 'received' }}>Received</option>
+          </select>
+        </label>
+        <label>Sent Date<input type="date" name="sent_date" value="{{ lot.sent_date }}"></label>
+        <label>Received Date<input type="date" name="received_date" value="{{ lot.received_date }}"></label>
+        <label>Outbound Ship ($)<input type="number" name="shipping_out_cost" step="0.01" min="0" value="{{ '%.2f'|format(lot.shipping_out_cost) }}"></label>
+        <label>Milling Fee ($)<input type="number" name="milling_fee" step="0.01" min="0" value="{{ '%.2f'|format(lot.milling_fee) }}"></label>
+        <label>Return Ship ($)<input type="number" name="shipping_back_cost" step="0.01" min="0" value="{{ '%.2f'|format(lot.shipping_back_cost) }}"></label>
+        <label>Handling Fee ($)<input type="number" name="other_handling_fee" step="0.01" min="0" value="{{ '%.2f'|format(lot.other_handling_fee) }}"></label>
+        <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
+          <input type="checkbox" name="include_in_tax_books" value="1" {{ 'checked' if lot.include_in_tax_books }} style="width:auto">
+          <span>Include mill &amp; shipping fees on Schedule F Processing</span>
+        </label>
+        <label>Invoice URL<input type="url" name="receipt_url" value="{{ lot.receipt_url }}"></label>
+        <label>Notes<input name="notes" value="{{ lot.notes }}"></label>
+        <div class="full row" style="justify-content:flex-end">
+          <button type="submit" class="btn sm primary">Save Lot Updates</button>
+        </div>
+      </form>
+    </details>
+    {% endif %}
+
+    {% if lot.outputs %}
+    <div class="mb-md">
+      <table>
+        <thead>
+          <tr><th>Finished Product</th><th class="num">Qty</th><th class="num">Direct COGS / Unit</th><th>Iron Ledger Sync / Sales</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for o in lot.outputs %}
+          <tr>
+            <td>
+              <b>{{ o.product_name }}</b>
+              <span class="pill gray">{{ o.product_type_label }}</span>
+              {% if o.notes %}<small class="muted" style="display:block">{{ o.notes }}</small>{% endif %}
+            </td>
+            <td class="num">
+              <b>{{ '%g'|format(o.quantity) }} {{ o.unit }}</b>
+              {% if o.finished_weight_oz %}<small class="muted" style="display:block">{{ '%.1f'|format(o.finished_weight_oz) }} oz</small>{% endif %}
+            </td>
+            <td class="num">
+              <b>{{ o.cost_per_unit|money }}</b>
+              <small class="muted" style="display:block">Lot share {{ o.allocated_cogs|money }}</small>
+            </td>
+            <td>
+              {% if o.synced %}
+                <span class="pill green">Synced · {{ o.sku_label }}</span>
+                {% if o.sku_price_dollars is not none %}
+                <small class="muted" style="display:block">
+                  POS ${{ '%.2f'|format(o.sku_price_dollars) }} · Margin {{ o.margin_per_unit|money }}/unit · Sold {{ '%g'|format(o.units_sold) }} ({{ o.sales_revenue|money }})
+                </small>
+                {% endif %}
+              {% elif can_manage and fiber_dash.ledger_skus %}
+                <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/{{ lot.id }}/outputs/{{ o.id }}/sync-ledger" class="row" style="gap:6px;align-items:center">
+                  <select name="ledger_sku_id" style="padding:4px 6px;font-size:12px">
+                    {% for sku in fiber_dash.ledger_skus %}
+                    <option value="{{ sku.id }}" {{ 'selected' if o.ledger_sku_id == sku.id }}>{{ sku.label }} (${{ '%.2f'|format(sku.price_cents / 100.0) }})</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn sm">Restock POS</button>
+                </form>
+              {% else %}
+                <span class="pill gray">Not linked to POS</span>
+              {% endif %}
+            </td>
+            <td class="num">
+              {% if can_manage %}
+              <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/{{ lot.id }}/outputs/{{ o.id }}/delete" class="inline-form"
+                    onsubmit="return confirm('Remove this finished output and reverse any Iron Ledger restock?')">
+                <button class="link text-red">Remove</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if can_manage %}
+    <details style="border-top:1px solid var(--line);padding-top:10px"{{ ' open' if not lot.outputs }}>
+      <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--green)">+ Log Returned / Finished Product (Yarn Skeins, Roving, Felt…)</summary>
+      <form method="post" action="/herds/{{ selected_herd.id }}/mill-lots/{{ lot.id }}/outputs/add" class="fgrid mt-sm">
+        <label>Product Type
+          <select name="product_type">
+            {% for val, lbl in product_types %}
+            <option value="{{ val }}">{{ lbl }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Product Name
+          <input name="product_name" placeholder="e.g. {{ lot.color_group or 'Alpaca' }} DK Yarn (200 yd)" required>
+        </label>
+        <label>Quantity
+          <input type="number" name="quantity" step="0.1" min="0.1" value="1" required>
+        </label>
+        <label>Unit
+          <select name="unit">
+            {% for u in output_units %}
+            <option value="{{ u }}">{{ u }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Finished Weight (oz optional)
+          <input type="number" name="finished_weight_oz" step="0.1" min="0" value="0" placeholder="e.g. 70.0">
+        </label>
+        <label>Iron Ledger SKU (optional restock)
+          <select name="ledger_sku_id">
+            <option value="">— Homestead tracking only —</option>
+            {% for sku in fiber_dash.ledger_skus %}
+            <option value="{{ sku.id }}">{{ sku.label }} · Stock {{ '%g'|format(sku.on_hand) }} (${{ '%.2f'|format(sku.price_cents / 100.0) }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
+          <input type="checkbox" name="sync_to_ledger" value="1" checked style="width:auto">
+          <span>Restock selected Iron Ledger SKU automatically on save</span>
+        </label>
+        <label class="full">Notes<input name="notes" placeholder="Needle size, yardage, batch notes…"></label>
+        <div class="full row" style="justify-content:flex-end">
+          <button type="submit" class="btn sm primary">+ Add Finished Output</button>
+        </div>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">
+  No mill lots created yet. Use <b>+ Create Mill Lot</b> above to box raw fleece by color and track shipping &amp; milling fees.
+</div>
+{% endif %}
+
+{% else %}
 <div class="cards four">
   <div class="card">
     <small>Active Animals</small>
@@ -66,6 +520,9 @@
     <a href="/financials?tab=taxes&amp;new=1&amp;preset=herd&amp;herd_id={{ selected_herd.id }}" class="btn sm primary">+ Log feed / hay receipt</a>
     {% if selected_herd.herd_type == 'breeding' %}
     <a href="/batches?from_herd={{ selected_herd.id }}" class="btn sm">Start Pig Litter Batch →</a>
+    {% endif %}
+    {% if is_fiber_herd %}
+    <a href="/herds?herd_id={{ selected_herd.id }}&amp;tab=shearing" class="btn sm">Log Shearing →</a>
     {% endif %}
     <button type="button" class="btn sm" onclick='openEditHerdModal({{ selected_herd|tojson }})'>Edit herd</button>
     <form method="post" action="/herds/{{ selected_herd.id }}/delete" class="inline-form"
@@ -192,7 +649,7 @@
           </div>
           {% if can_manage %}
           <form method="post" action="/herds/{{ selected_herd.id }}/feed/{{ fl.id }}/delete" class="inline-form"
-                onsubmit="return confirm('Remove feed log ({{ fl.cost_total|money }})?')">
+                onsubmit="return confirm('Remove this feed entry?')">
             <button class="btn sm danger">Remove</button>
           </form>
           {% endif %}
@@ -205,6 +662,7 @@
     {% endif %}
   </div>
 </div>
+{% endif %}
 {% endif %}
 
 {% else %}
@@ -304,6 +762,36 @@ function resetAnimalForm() {
   document.getElementById('anm-notes').value = '';
   document.getElementById('anm-submit').textContent = '+ Add animal';
   document.getElementById('anm-cancel').hidden = true;
+}
+function onShearingAnimalChange() {
+  const sel = document.getElementById('sh-animal');
+  const colIn = document.getElementById('sh-color');
+  if (!sel || !colIn) return;
+  const opt = sel.options[sel.selectedIndex];
+  const color = opt ? (opt.dataset.color || '') : '';
+  if (color) colIn.value = color;
+}
+function syncMillLotColorCheck() {
+  const checked = Array.from(document.querySelectorAll('.ml-fleece-cb:checked'));
+  const colors = [];
+  const seen = new Set();
+  checked.forEach(cb => {
+    const c = (cb.dataset.color || '').trim();
+    if (c && !seen.has(c.toLowerCase())) {
+      seen.add(c.toLowerCase());
+      colors.push(c);
+    }
+  });
+  const warn = document.getElementById('ml-color-warn');
+  if (warn) warn.hidden = colors.length <= 1;
+  const grpIn = document.getElementById('ml-color-group');
+  if (grpIn && !grpIn.dataset.manual && colors.length) {
+    grpIn.value = colors.join(', ');
+  }
+}
+const mlColorEl = document.getElementById('ml-color-group');
+if (mlColorEl) {
+  mlColorEl.addEventListener('input', () => { mlColorEl.dataset.manual = mlColorEl.value.trim() ? '1' : ''; });
 }
 </script>
 {% endblock %}
