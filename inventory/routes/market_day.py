@@ -11,10 +11,13 @@ from inventory.insights import recommend_cash_drawer, suggest_pack_list
 from inventory.market_day import (
     close_market_day,
     compute_market_day_status,
+    delete_market_day_safely,
+    list_all_market_days,
     list_recent_and_upcoming_market_days,
     reopen_market_day,
     restock_market_day_item,
     save_market_day_pack,
+    update_market_day_details,
 )
 from inventory.marketplaces import (
     WEATHER_OPTIONS,
@@ -90,6 +93,8 @@ def market_day_page(
         md=mday_status,
         marketplaces=marketplaces,
         recent_days=recent_days,
+        all_market_days=list_all_market_days(ctx.merchant_id, today_iso),
+        can_manage=ctx.role in ("owner", "manager"),
         suggested_by_mp=suggested_by_mp,
         recommended_cash_cents=drawer["recommended_total_cents"],
         categories=categories,
@@ -274,3 +279,56 @@ def market_day_reopen_submit(
         f"/market-day?date={quote_plus(market_date)}&msg={quote_plus(msg)}",
         status_code=303,
     )
+
+
+@router.post("/market-day/details")
+def market_day_update_details(
+    market_date: str = Form(...),
+    new_market_date: str = Form(""),
+    marketplace_id: int = Form(...),
+    booth_fee: str = Form(""),
+    travel_cost: str = Form(""),
+    starting_cash: str = Form(""),
+    weather: str = Form(""),
+    notes: str = Form(""),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        res = update_market_day_details(
+            ctx.merchant_id,
+            market_date=market_date,
+            marketplace_id=int(marketplace_id),
+            booth_fee_cents=_parse_dollars_to_cents(booth_fee) or 0,
+            travel_cost_cents=_parse_dollars_to_cents(travel_cost) or 0,
+            starting_cash_cents=_parse_dollars_to_cents(starting_cash) or 0,
+            weather=weather,
+            notes=notes,
+            new_market_date=new_market_date or market_date,
+        )
+        target_date = res["market_date"]
+        msg = f"Updated Market Day details ({target_date})."
+    except ValueError as exc:
+        target_date = market_date
+        msg = f"Error: {exc}"
+    return RedirectResponse(
+        f"/market-day?date={quote_plus(target_date)}&msg={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.post("/market-day/delete")
+def market_day_delete_route(
+    market_date: str = Form(...),
+    next_url: str = Form("/market-day"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    res = delete_market_day_safely(ctx.merchant_id, market_date)
+    if res["deleted"]:
+        rev = int(res.get("reversed_adjustments") or 0)
+        suffix = f" and reversed {rev} closeout stock adjustment(s)" if rev else ""
+        msg = f"Deleted Market Day ({market_date}){suffix}."
+    else:
+        msg = f"No Market Day found for {market_date}."
+    target = next_url if (next_url.startswith("/") and not next_url.startswith("//")) else "/market-day"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)

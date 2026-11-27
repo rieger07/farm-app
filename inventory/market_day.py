@@ -753,3 +753,172 @@ def reopen_market_day(
         return {"market_day_id": mday_id, "reversed_adjustments": reversed_count}
     finally:
         conn.close()
+
+
+def list_all_market_days(
+    merchant_id: int,
+    today_iso: str,
+    limit: int = 100,
+) -> list[dict]:
+    """Return full Market Day history (planned, live, and closed), newest first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT md.id, md.market_date, md.marketplace_id,
+                   COALESCE(md.status, 'open') AS status,
+                   md.booth_fee_cents, md.travel_cost_cents,
+                   md.starting_cash_cents, md.counted_cash_cents,
+                   md.weather, md.notes, md.closed_at,
+                   m.name AS marketplace_name,
+                   COUNT(CASE WHEN mdi.brought_qty > 0 THEN 1 END) AS packed_skus,
+                   COALESCE(SUM(mdi.brought_qty), 0) AS packed_units
+            FROM market_days md
+            JOIN marketplaces m ON m.id = md.marketplace_id
+            LEFT JOIN market_day_items mdi ON mdi.market_day_id = md.id
+            WHERE md.merchant_id = ?
+            GROUP BY md.id
+            ORDER BY md.market_date DESC, md.id DESC
+            LIMIT ?
+            """,
+            (int(merchant_id), int(limit)),
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d_str = r["market_date"]
+        status = r["status"] or "open"
+        state = "closed" if status == "closed" else ("planned" if d_str > today_iso else "live")
+        out.append(
+            {
+                "id": int(r["id"]),
+                "market_date": d_str,
+                "marketplace_id": int(r["marketplace_id"]),
+                "marketplace_name": r["marketplace_name"],
+                "status": status,
+                "state": state,
+                "booth_fee_cents": int(r["booth_fee_cents"] or 0),
+                "travel_cost_cents": int(r["travel_cost_cents"] or 0),
+                "starting_cash_cents": int(r["starting_cash_cents"] or 0),
+                "counted_cash_cents": (
+                    int(r["counted_cash_cents"]) if r["counted_cash_cents"] is not None else None
+                ),
+                "weather": r["weather"] or "",
+                "notes": r["notes"] or "",
+                "closed_at": r["closed_at"],
+                "packed_skus": int(r["packed_skus"] or 0),
+                "packed_units": float(r["packed_units"] or 0),
+            }
+        )
+    return out
+
+
+def update_market_day_details(
+    merchant_id: int,
+    market_date: str,
+    marketplace_id: int,
+    booth_fee_cents: int,
+    travel_cost_cents: int,
+    starting_cash_cents: int,
+    weather: str = "",
+    notes: str = "",
+    new_market_date: str | None = None,
+) -> dict:
+    """Update venue, date, booth/travel expenses, starting drawer, weather, and notes."""
+    try:
+        date.fromisoformat(market_date)
+    except ValueError as exc:
+        raise ValueError("Invalid market date.") from exc
+
+    target_date = (new_market_date or market_date).strip()
+    try:
+        date.fromisoformat(target_date)
+    except ValueError as exc:
+        raise ValueError("Invalid new market date.") from exc
+
+    for label, val in (
+        ("Booth fee", booth_fee_cents),
+        ("Travel cost", travel_cost_cents),
+        ("Starting drawer cash", starting_cash_cents),
+    ):
+        if int(val) < 0:
+            raise ValueError(f"{label} cannot be negative.")
+
+    mp = get_marketplace(merchant_id, int(marketplace_id))
+    if not mp:
+        raise ValueError("Selected marketplace was not found.")
+
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM market_days WHERE merchant_id = ? AND market_date = ?",
+            (int(merchant_id), market_date),
+        ).fetchone()
+        if not existing:
+            raise ValueError("Market Day not found.")
+        if target_date != market_date:
+            conflict = conn.execute(
+                "SELECT id FROM market_days WHERE merchant_id = ? AND market_date = ?",
+                (int(merchant_id), target_date),
+            ).fetchone()
+            if conflict:
+                raise ValueError(f"Another Market Day already exists on {target_date}.")
+        conn.execute(
+            """
+            UPDATE market_days
+            SET market_date = ?, marketplace_id = ?, booth_fee_cents = ?,
+                travel_cost_cents = ?, starting_cash_cents = ?, weather = ?, notes = ?
+            WHERE id = ? AND merchant_id = ?
+            """,
+            (
+                target_date,
+                int(marketplace_id),
+                int(booth_fee_cents),
+                int(travel_cost_cents),
+                int(starting_cash_cents),
+                (weather or "").strip(),
+                (notes or "").strip(),
+                int(existing["id"]),
+                int(merchant_id),
+            ),
+        )
+        conn.commit()
+        return {"market_day_id": int(existing["id"]), "market_date": target_date}
+    finally:
+        conn.close()
+
+
+def delete_market_day_safely(merchant_id: int, market_date: str) -> dict:
+    """Reverse any closeout stock adjustments (if closed) and delete the Market Day record."""
+    conn = get_connection()
+    try:
+        md = conn.execute(
+            "SELECT id, status FROM market_days WHERE merchant_id = ? AND market_date = ?",
+            (int(merchant_id), market_date),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not md:
+        return {"deleted": False, "market_date": market_date, "reversed_adjustments": 0}
+
+    reversed_count = 0
+    if (md["status"] or "open") == "closed":
+        res = reopen_market_day(merchant_id, market_date)
+        reversed_count = int(res.get("reversed_adjustments") or 0)
+
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "DELETE FROM market_days WHERE merchant_id = ? AND market_date = ?",
+            (int(merchant_id), market_date),
+        )
+        conn.commit()
+        return {
+            "deleted": cur.rowcount > 0,
+            "market_date": market_date,
+            "reversed_adjustments": reversed_count,
+        }
+    finally:
+        conn.close()

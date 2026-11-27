@@ -1251,6 +1251,384 @@ class WebTest(unittest.TestCase):
             "owner",
         )
 
+    def test_market_day_edit_delete_closeout_reversal_and_staff_block(self):
+        from datetime import datetime, timedelta
+        from inventory.market_day import compute_market_day_status, list_all_market_days
+        from inventory.marketplaces import save_marketplace
+        from inventory.stock import list_stock
+        from inventory.web import local_tz
+
+        owner = self.client("zach")
+        staff_user = owner.post(
+            "/settings/members",
+            data={"username": "booth_helper", "role": "staff", "display_name": "Booth Helper", "password": "honey1234"},
+        )
+        self.assertEqual(staff_user.status_code, 303)
+        staff = self.client("booth_helper")
+
+        mp1_id = save_marketplace(1, name="Test Stand", location="Oak St", booth_fee_cents=3500, travel_cost_cents=1500)
+        mp2_id = save_marketplace(1, name="Moved Stand", location="Elm Ave", booth_fee_cents=2500, travel_cost_cents=500)
+
+        skus = [s for s in list_stock(1) if s["sell_mode"] == "unit" and s["item_type"] == "product"]
+        sku = skus[0]
+        pre_on_hand = sku["on_hand"]
+
+        today_d = datetime.now(local_tz()).date()
+        d1 = (today_d - timedelta(days=2)).isoformat()
+        d2 = (today_d - timedelta(days=1)).isoformat()
+
+        r_pack1 = owner.post(
+            "/market-day/pack",
+            data={
+                "market_date": d1,
+                "marketplace_id": str(mp1_id),
+                "booth_fee": "35.00",
+                "travel_cost": "15.00",
+                "starting_cash": "100.00",
+                f"brought_{sku['id']}": "5",
+            },
+        )
+        self.assertEqual(r_pack1.status_code, 303)
+        r_pack2 = owner.post(
+            "/market-day/pack",
+            data={
+                "market_date": d2,
+                "marketplace_id": str(mp2_id),
+                "booth_fee": "25.00",
+                f"brought_{sku['id']}": "2",
+            },
+        )
+        self.assertEqual(r_pack2.status_code, 303)
+
+        page_html = owner.get(f"/market-day?date={d1}").text
+        self.assertIn("All Market Days", page_html)
+        self.assertIn("Edit details", page_html)
+        self.assertIn("Delete market day", page_html)
+
+        # Staff cannot update details or delete Market Days
+        r_staff_edit = staff.post(
+            "/market-day/details",
+            data={"market_date": d1, "marketplace_id": str(mp2_id)},
+        )
+        self.assertEqual(r_staff_edit.status_code, 303)
+        self.assertEqual(r_staff_edit.headers["location"], "/quick-sale")
+        r_staff_del = staff.post("/market-day/delete", data={"market_date": d1})
+        self.assertEqual(r_staff_del.status_code, 303)
+        self.assertEqual(r_staff_del.headers["location"], "/quick-sale")
+
+        # Date collision check returns Error flash cleanly
+        r_conflict = owner.post(
+            "/market-day/details",
+            data={"market_date": d1, "new_market_date": d2, "marketplace_id": str(mp1_id)},
+        )
+        self.assertIn("Another+Market+Day+already+exists", r_conflict.headers["location"])
+
+        # Edit details + move date to non-conflicting date d3
+        d3 = (today_d - timedelta(days=3)).isoformat()
+        r_upd = owner.post(
+            "/market-day/details",
+            data={
+                "market_date": d1,
+                "new_market_date": d3,
+                "marketplace_id": str(mp2_id),
+                "booth_fee": "42.50",
+                "travel_cost": "12.25",
+                "starting_cash": "75.00",
+                "weather": "Sunny",
+                "notes": "Updated test market notes",
+            },
+        )
+        self.assertIn(f"date={d3}", r_upd.headers["location"])
+        md3 = compute_market_day_status(1, d3, local_tz())
+        self.assertEqual(md3["market_day"]["marketplace_id"], mp2_id)
+        self.assertEqual(md3["booth_fee_cents"], 4250)
+        self.assertEqual(md3["travel_cost_cents"], 1225)
+        self.assertEqual(md3["starting_cash_cents"], 7500)
+        self.assertEqual(md3["market_day"]["weather"], "Sunny")
+        self.assertEqual(md3["market_day"]["notes"], "Updated test market notes")
+
+        # Close out d3 with a write-off (-2 units), verify on_hand dropped by 2, then delete d3 and verify reversal
+        r_close = owner.post(
+            "/market-day/close",
+            data={"market_date": d3, f"writeoff_{sku['id']}": "2"},
+        )
+        self.assertEqual(r_close.status_code, 303)
+        after_close = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"])
+        self.assertEqual(after_close, pre_on_hand - 2)
+
+        r_del3 = owner.post("/market-day/delete", data={"market_date": d3})
+        self.assertIn("reversed+1+closeout+stock+adjustment", r_del3.headers["location"])
+        after_del3 = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"])
+        self.assertEqual(after_del3, pre_on_hand)
+        self.assertNotIn(d3, [x["market_date"] for x in list_all_market_days(1, today_d.isoformat())])
+
+        # /market-days/delete (Insights route) also safely reverses closeout adjustments
+        r_close2 = owner.post("/market-day/close", data={"market_date": d2, f"writeoff_{sku['id']}": "1"})
+        self.assertEqual(r_close2.status_code, 303)
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), pre_on_hand - 1)
+        r_del2 = owner.post("/market-days/delete", data={"market_date": d2, "next_url": "/insights"})
+        self.assertEqual(r_del2.status_code, 303)
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), pre_on_hand)
+        self.assertNotIn(d2, [x["market_date"] for x in list_all_market_days(1, today_d.isoformat())])
+
+    def test_marketplace_edit_and_delete_guard(self):
+        from datetime import datetime
+        from inventory.marketplaces import list_marketplaces, save_market_day
+        from inventory.web import local_tz
+
+        owner = self.client("zach")
+        owner.post(
+            "/settings/marketplaces",
+            data={"name": "Unused Venue", "location": "North Lot", "booth_fee": "10.00", "travel_cost": "5.00"},
+        )
+        owner.post(
+            "/settings/marketplaces",
+            data={"name": "Busy Venue", "location": "Fairgrounds", "booth_fee": "50.00", "travel_cost": "20.00"},
+        )
+        mps = {m["name"]: m for m in list_marketplaces(1, include_inactive=True)}
+        unused_id = mps["Unused Venue"]["id"]
+        busy_id = mps["Busy Venue"]["id"]
+
+        # Edit Unused Venue in place
+        r_edit = owner.post(
+            "/settings/marketplaces",
+            data={
+                "marketplace_id": str(unused_id),
+                "name": "Unused Venue Edited",
+                "location": "South Lot",
+                "booth_fee": "15.50",
+                "travel_cost": "7.25",
+            },
+        )
+        self.assertEqual(r_edit.status_code, 303)
+        mps_after = {m["id"]: m for m in list_marketplaces(1, include_inactive=True)}
+        self.assertEqual(mps_after[unused_id]["name"], "Unused Venue Edited")
+        self.assertEqual(mps_after[unused_id]["booth_fee_cents"], 1550)
+
+        # Link a Market Day to Busy Venue -> hard delete must refuse
+        save_market_day(1, datetime.now(local_tz()).date().isoformat(), busy_id)
+        r_blk = owner.post(f"/settings/marketplaces/{busy_id}/delete")
+        self.assertIn("Error%3A+Cannot+delete", r_blk.headers["location"])
+        self.assertIn(busy_id, {m["id"] for m in list_marketplaces(1, include_inactive=True)})
+
+        # Delete Unused Venue Edited -> allowed and removed
+        r_del = owner.post(f"/settings/marketplaces/{unused_id}/delete")
+        self.assertIn("Deleted+marketplace", r_del.headers["location"])
+        self.assertNotIn(unused_id, {m["id"] for m in list_marketplaces(1, include_inactive=True)})
+
+    def test_quick_sale_edit_delete_void_then_delete_and_stock_integrity(self):
+        from datetime import datetime
+        from inventory.stock import list_stock
+        from inventory.web import local_tz
+
+        owner = self.client("zach")
+        sku = next(s for s in list_stock(1) if s["sell_mode"] == "unit" and s["item_type"] == "product")
+        start_hand = sku["on_hand"]
+
+        # 1. Create a Quick sale of qty 2 -> stock drops by 2
+        res = owner.post(
+            "/api/cash-sale",
+            json={
+                "client_uuid": "tx-crud-edit-1",
+                "payment_type": "cash",
+                "items": [{"sku_id": sku["id"], "quantity": 2}],
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        conn = get_connection()
+        try:
+            sale1_id = conn.execute(
+                "SELECT id FROM sales WHERE merchant_id = 1 AND external_id = 'tx-crud-edit-1'"
+            ).fetchone()["id"]
+            si1_id = conn.execute(
+                "SELECT id FROM sale_items WHERE sale_id = ?", (sale1_id,)
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 2)
+
+        # Verify /sales page renders cleanly with Edit & Delete controls
+        sales_html = owner.get("/sales?period=today").text
+        self.assertIn(f'data-sale-id="{sale1_id}"', sales_html)
+        self.assertIn("Voided / Excluded", sales_html)
+
+        # 2. Edit Quick sale -> qty 2 -> 4, price $9.50, payment_type venmo, timestamp
+        dt_local = datetime.now(local_tz()).replace(hour=10, minute=15, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M")
+        r_edit = owner.post(
+            f"/sales/{sale1_id}/edit",
+            data={
+                "next_url": "/sales?period=today&msg=Stale",
+                "occurred_at_local": dt_local,
+                "payment_type": "venmo",
+                f"qty_{si1_id}": "4",
+                f"price_{si1_id}": "9.50",
+            },
+        )
+        self.assertEqual(r_edit.status_code, 303)
+        self.assertNotIn("Stale", r_edit.headers["location"])
+        self.assertIn("Updated+Quick+sale", r_edit.headers["location"])
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 4)
+        conn = get_connection()
+        try:
+            s1_row = conn.execute("SELECT total_cents, payment_type FROM sales WHERE id = ?", (sale1_id,)).fetchone()
+            self.assertEqual(s1_row["total_cents"], 3800)
+            self.assertEqual(s1_row["payment_type"], "venmo")
+        finally:
+            conn.close()
+
+        # 3. Void sale1 (restore stock) -> stock returns to start_hand; then permanently delete it -> NO double-restore!
+        owner.post(f"/sales/{sale1_id}/void", data={"restore_stock": "1", "next_url": "/sales"})
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand)
+        r_del1 = owner.post(f"/sales/{sale1_id}/delete", data={"restore_stock": "1", "next_url": "/sales"})
+        self.assertEqual(r_del1.status_code, 303)
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand)
+        conn = get_connection()
+        try:
+            self.assertIsNone(conn.execute("SELECT id FROM sales WHERE id = ?", (sale1_id,)).fetchone())
+        finally:
+            conn.close()
+
+        # 4. Direct delete with restore_stock=1 restores once
+        owner.post(
+            "/api/cash-sale",
+            json={"client_uuid": "tx-crud-del-restore", "items": [{"sku_id": sku["id"], "quantity": 3}]},
+        )
+        conn = get_connection()
+        try:
+            sale2_id = conn.execute(
+                "SELECT id FROM sales WHERE merchant_id = 1 AND external_id = 'tx-crud-del-restore'"
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 3)
+        owner.post(f"/sales/{sale2_id}/delete", data={"restore_stock": "1", "next_url": "/sales"})
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand)
+
+        # 5. Direct delete with restore_stock="" preserves stock deduction as adjustment
+        owner.post(
+            "/api/cash-sale",
+            json={"client_uuid": "tx-crud-del-keep", "items": [{"sku_id": sku["id"], "quantity": 2}]},
+        )
+        conn = get_connection()
+        try:
+            sale3_id = conn.execute(
+                "SELECT id FROM sales WHERE merchant_id = 1 AND external_id = 'tx-crud-del-keep'"
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+        owner.post(f"/sales/{sale3_id}/delete", data={"restore_stock": "", "next_url": "/sales"})
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 2)
+        conn = get_connection()
+        try:
+            self.assertIsNone(conn.execute("SELECT id FROM sales WHERE id = ?", (sale3_id,)).fetchone())
+        finally:
+            conn.close()
+
+    def test_zettle_sale_exclude_blocks_reimport_and_restore(self):
+        from datetime import datetime, timezone
+        from inventory.sales import sales_summary
+        from inventory.stock import list_stock
+        from inventory.sync import import_purchase
+
+        owner = self.client("zach")
+        before_summ = sales_summary(1, "2000-01-01T00:00:00", "2099-01-01T00:00:00")
+        conn = get_connection()
+        try:
+            sku = conn.execute(
+                "SELECT id, zettle_product_uuid, zettle_variant_uuid, name"
+                " FROM skus WHERE merchant_id = 1 AND zettle_product_uuid != ''"
+                " AND sell_mode = 'unit' AND item_type = 'product' LIMIT 1"
+            ).fetchone()
+            sku_id = sku["id"]
+            p_uuid = sku["zettle_product_uuid"]
+            v_uuid = sku["zettle_variant_uuid"]
+            p_name = sku["name"]
+            start_hand = next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id)
+
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            purchase = {
+                "purchaseUUID": "z-test-exclude-1",
+                "timestamp": now_iso + "+00:00",
+                "amount": 2400,
+                "payments": [{"type": "IZETTLE_CARD"}],
+                "products": [
+                    {"productUuid": p_uuid, "variantUuid": v_uuid, "name": p_name, "quantity": "2", "unitPrice": 1200}
+                ],
+            }
+            import_purchase(conn, 1, purchase, "2020-01-01T00:00:00")
+            conn.commit()
+            z_id = conn.execute(
+                "SELECT id FROM sales WHERE merchant_id = 1 AND source = 'zettle' AND external_id = 'z-test-exclude-1'"
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id), start_hand - 2)
+
+        # /void still rejects Zettle sales
+        r_void = owner.post(f"/sales/{z_id}/void", data={"restore_stock": "1", "next_url": "/sales"})
+        self.assertIn("Only+Quick+sale+transactions", r_void.headers["location"])
+
+        # /exclude voids Zettle sale, restores stock, excludes from summary, and prevents re-import
+        r_exc = owner.post(f"/sales/{z_id}/exclude", data={"restore_stock": "1", "next_url": "/sales"})
+        self.assertIn("Excluded+Zettle+sale", r_exc.headers["location"])
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id), start_hand)
+
+        conn = get_connection()
+        try:
+            inserted_again = import_purchase(conn, 1, purchase, "2020-01-01T00:00:00")
+            conn.commit()
+            self.assertFalse(inserted_again)
+            row = conn.execute("SELECT status FROM sales WHERE id = ?", (z_id,)).fetchone()
+            self.assertEqual(row["status"], "voided")
+        finally:
+            conn.close()
+
+        summ_exc = sales_summary(1, "2000-01-01T00:00:00", "2099-01-01T00:00:00")
+        self.assertEqual(summ_exc["count"], before_summ["count"])
+
+        # Restore Zettle sale -> status returns to completed and stock deduction is re-applied
+        r_res = owner.post(f"/sales/{z_id}/restore", data={"rededuct_stock": "1", "next_url": "/sales"})
+        self.assertIn("Restored+sale", r_res.headers["location"])
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku_id), start_hand - 2)
+        summ_res = sales_summary(1, "2000-01-01T00:00:00", "2099-01-01T00:00:00")
+        self.assertEqual(summ_res["count"], before_summ["count"] + 1)
+        self.assertEqual(summ_res["total_cents"], before_summ["total_cents"] + 2400)
+
+    def test_manual_stock_ledger_entry_delete_and_sale_guard(self):
+        from inventory.stock import list_stock
+
+        owner = self.client("zach")
+        sku = next(s for s in list_stock(1) if s["sell_mode"] == "unit" and s["item_type"] == "product")
+        start_hand = sku["on_hand"]
+
+        # Create a manual adjustment (+7) and a Quick sale (-1)
+        owner.post(
+            "/inventory/stock",
+            data={"sku_id": str(sku["id"]), "mode": "restock", "quantity": "7", "note": "Mistyped restock"},
+        )
+        owner.post(
+            "/api/cash-sale",
+            json={"client_uuid": "tx-ledger-guard", "items": [{"sku_id": sku["id"], "quantity": 1}]},
+        )
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand + 6)
+
+        hist = owner.get(f"/api/stock/{sku['id']}/history").json()["entries"]
+        sale_entry = next(e for e in hist if e["reason"] == "sale")
+        manual_entry = next(e for e in hist if e["note"] == "Mistyped restock")
+        self.assertFalse(sale_entry["can_delete"])
+        self.assertTrue(manual_entry["can_delete"])
+
+        # Deleting sale-linked ledger entry must fail
+        r_fail = owner.post(f"/inventory/stock/ledger/{sale_entry['id']}/delete")
+        self.assertIn("Error%3A+Cannot+delete+a+sale+stock+deduction", r_fail.headers["location"])
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand + 6)
+
+        # Deleting manual entry succeeds and restores on_hand
+        r_ok = owner.post(f"/inventory/stock/ledger/{manual_entry['id']}/delete")
+        self.assertIn("Removed+stock+ledger+entry", r_ok.headers["location"])
+        self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == sku["id"]), start_hand - 1)
+
 
 if __name__ == "__main__":
     unittest.main()

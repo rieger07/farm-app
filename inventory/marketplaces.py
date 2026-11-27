@@ -23,14 +23,24 @@ def _now() -> str:
 
 
 def list_marketplaces(merchant_id: int, include_inactive: bool = False) -> list[dict]:
-    sql = "SELECT * FROM marketplaces WHERE merchant_id = ?"
+    sql = (
+        "SELECT m.*, COUNT(md.id) AS day_count"
+        " FROM marketplaces m"
+        " LEFT JOIN market_days md ON md.marketplace_id = m.id AND md.merchant_id = m.merchant_id"
+        " WHERE m.merchant_id = ?"
+    )
     if not include_inactive:
-        sql += " AND active = 1"
-    sql += " ORDER BY name ASC, id ASC"
+        sql += " AND m.active = 1"
+    sql += " GROUP BY m.id ORDER BY m.name ASC, m.id ASC"
     conn = get_connection()
     try:
         rows = conn.execute(sql, (int(merchant_id),)).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["day_count"] = int(d.get("day_count") or 0)
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -91,6 +101,35 @@ def archive_marketplace(merchant_id: int, marketplace_id: int) -> None:
             (int(marketplace_id), int(merchant_id)),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_marketplace(merchant_id: int, marketplace_id: int) -> dict:
+    """Hard-delete a marketplace only if it has zero linked Market Days."""
+    conn = get_connection()
+    try:
+        mp = conn.execute(
+            "SELECT id, name FROM marketplaces WHERE merchant_id = ? AND id = ?",
+            (int(merchant_id), int(marketplace_id)),
+        ).fetchone()
+        if not mp:
+            raise ValueError("Marketplace not found.")
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM market_days WHERE merchant_id = ? AND marketplace_id = ?",
+            (int(merchant_id), int(marketplace_id)),
+        ).fetchone()
+        used = int(row["n"] or 0) if row else 0
+        if used > 0:
+            raise ValueError(
+                f"Cannot delete {mp['name']}: it has {used} recorded market day(s). Archive it instead or delete those market days first."
+            )
+        conn.execute(
+            "DELETE FROM marketplaces WHERE id = ? AND merchant_id = ?",
+            (int(marketplace_id), int(merchant_id)),
+        )
+        conn.commit()
+        return {"deleted": True, "id": int(mp["id"]), "name": mp["name"]}
     finally:
         conn.close()
 

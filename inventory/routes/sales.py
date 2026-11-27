@@ -3,7 +3,7 @@
 import csv
 from datetime import datetime, timedelta
 import io
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse, Response
@@ -14,22 +14,27 @@ from inventory.insights import (
     recommend_cash_drawer,
     suggest_pack_list,
 )
+from inventory.market_day import delete_market_day_safely
 from inventory.marketplaces import (
     WEATHER_OPTIONS,
-    delete_market_day,
     get_market_day,
     list_marketplaces,
     save_market_day,
 )
 from inventory.sales import (
     count_sales,
+    delete_quick_sale,
+    exclude_zettle_sale,
     export_rows,
     market_insights,
     recent_sales,
+    restore_sale,
     sales_summary,
+    update_quick_sale,
     update_sale_payment_type,
     void_quick_sale,
 )
+from inventory.web import local_input_to_utc_iso
 from inventory.stock import fmt_qty
 from inventory.web import (
     Ctx,
@@ -100,6 +105,7 @@ def sales_page(
         )
         t["time_label"] = local.strftime("%-I:%M %p").lower()
         t["full_label"] = local.strftime("%a %b %-d, %Y · %-I:%M %p").replace("AM", "am").replace("PM", "pm")
+        t["local_dt_input"] = local.strftime("%Y-%m-%dT%H:%M")
 
     active_day_str = rng["date_from"] if rng["period"] in ("today", "yesterday", "day") else ""
     active_market_day = get_market_day(ctx.merchant_id, active_day_str) if active_day_str else None
@@ -224,7 +230,7 @@ def market_day_delete(
     next_url: str = Form("/insights"),
     ctx: Ctx = Depends(require("sales")),
 ):
-    delete_market_day(ctx.merchant_id, market_date)
+    delete_market_day_safely(ctx.merchant_id, market_date)
     target = next_url if next_url.startswith("/") else "/insights"
     sep = "&" if "?" in target else "?"
     return RedirectResponse(
@@ -248,6 +254,122 @@ def sales_retag_payment_type(
     target = next_url if next_url.startswith("/") else "/sales"
     sep = "&" if "?" in target else "?"
     return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+
+
+def _redirect_sales_msg(next_url: str, msg: str, fallback: str = "/sales") -> RedirectResponse:
+    clean = (next_url or "").strip()
+    if not clean.startswith("/") or clean.startswith("//"):
+        clean = fallback
+    parts = urlsplit(clean)
+    params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "msg"]
+    params.append(("msg", msg))
+    target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
+    return RedirectResponse(target, status_code=303)
+
+
+@router.post("/sales/{sale_id}/edit")
+async def sales_edit_quick_sale(
+    request: Request,
+    sale_id: int,
+    ctx: Ctx = Depends(require("sales")),
+):
+    form = await request.form()
+    next_url = str(form.get("next_url") or "/sales")
+    try:
+        occ_utc = local_input_to_utc_iso(str(form.get("occurred_at_local") or ""))
+        payment_type = str(form.get("payment_type") or "cash")
+        cash_raw = str(form.get("cash_received") or "").strip()
+        cash_cents = _parse_dollars_to_cents(cash_raw) if cash_raw else None
+        total_raw = str(form.get("total_dollars") or "").strip()
+        total_cents = _parse_dollars_to_cents(total_raw) if total_raw else None
+
+        item_updates = []
+        for k in form.keys():
+            if not k.startswith("qty_"):
+                continue
+            si_id = int(k[4:])
+            qty_raw = str(form.get(k) or "").strip()
+            try:
+                qty_val = float(qty_raw)
+            except ValueError as exc:
+                raise ValueError("Item quantities must be valid numbers.") from exc
+            price_raw = str(form.get(f"price_{si_id}") or "").strip()
+            price_cents = _parse_dollars_to_cents(price_raw)
+            if price_cents is None:
+                raise ValueError("Enter a valid unit price for every line item.")
+            item_updates.append(
+                {
+                    "sale_item_id": si_id,
+                    "quantity": qty_val,
+                    "unit_price_cents": price_cents,
+                }
+            )
+
+        update_quick_sale(
+            ctx.merchant_id,
+            sale_id=sale_id,
+            payment_type=payment_type,
+            occurred_at_utc=occ_utc,
+            item_updates=item_updates or None,
+            total_cents=total_cents,
+            cash_received_cents=cash_cents,
+        )
+        msg = f"Updated Quick sale #{sale_id}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return _redirect_sales_msg(next_url, msg)
+
+
+@router.post("/sales/{sale_id}/delete")
+def sales_delete_quick_sale(
+    sale_id: int,
+    restore_stock: str = Form(""),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        res = delete_quick_sale(ctx.merchant_id, sale_id, restore_stock=bool(restore_stock))
+        if res["restore_stock"] and res["ledger_entries_affected"]:
+            msg = f"Permanently deleted Quick sale #{sale_id} (stock restored)."
+        else:
+            msg = f"Permanently deleted Quick sale #{sale_id}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return _redirect_sales_msg(next_url, msg)
+
+
+@router.post("/sales/{sale_id}/exclude")
+def sales_exclude_zettle(
+    sale_id: int,
+    restore_stock: str = Form("1"),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        res = exclude_zettle_sale(ctx.merchant_id, sale_id, restore_stock=bool(restore_stock))
+        n = int(res.get("restored_items") or 0)
+        suffix = f" and restored {n} stock item(s)" if n else ""
+        msg = f"Excluded Zettle sale #{sale_id} from totals & insights{suffix}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return _redirect_sales_msg(next_url, msg)
+
+
+@router.post("/sales/{sale_id}/restore")
+def sales_restore(
+    sale_id: int,
+    rededuct_stock: str = Form("1"),
+    next_url: str = Form("/sales"),
+    ctx: Ctx = Depends(require("sales")),
+):
+    try:
+        res = restore_sale(ctx.merchant_id, sale_id, rededuct_stock=bool(rededuct_stock))
+        msg = f"Restored sale #{sale_id} to completed totals."
+        if res.get("removed_adjustments"):
+            msg += " Stock deduction re-applied."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return _redirect_sales_msg(next_url, msg)
 
 
 @router.post("/sales/{sale_id}/void")

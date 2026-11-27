@@ -181,10 +181,24 @@
         <td class="num">{{ mp.booth_fee_cents|money }}</td>
         <td class="num">{{ mp.travel_cost_cents|money }}</td>
         <td class="num"><b>{{ (mp.booth_fee_cents + mp.travel_cost_cents)|money }}</b></td>
-        <td style="text-align:right">
+        <td style="text-align:right;white-space:nowrap">
+          <button type="button" class="link"
+            data-id="{{ mp.id }}"
+            data-name="{{ mp.name }}"
+            data-location="{{ mp.location or '' }}"
+            data-booth="{{ '%.2f'|format((mp.booth_fee_cents or 0) / 100) }}"
+            data-travel="{{ '%.2f'|format((mp.travel_cost_cents or 0) / 100) }}"
+            onclick="openEditMarketplace(this)">Edit</button>
+          &middot;
           <form method="post" action="/settings/marketplaces/{{ mp.id }}/archive" style="display:inline">
-            <button class="link" style="color:var(--redink)">Archive</button>
+            <button class="link" style="color:var(--muted)">Archive</button>
           </form>
+          {% if not mp.day_count %}
+          &middot;
+          <form method="post" action="/settings/marketplaces/{{ mp.id }}/delete" style="display:inline" onsubmit="return confirm('Delete marketplace {{ mp.name }} permanently?')">
+            <button class="link" style="color:var(--redink)">Delete</button>
+          </form>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}
@@ -250,4 +264,39 @@
     </div>
   </form>
 </dialog>
+
+<dialog id="dlg-edit-mp" class="card" style="width:100%;max-width:440px">
+  <h2 style="margin-top:0">Edit Marketplace</h2>
+  <form method="post" action="/settings/marketplaces" style="display:flex;flex-direction:column;gap:12px">
+    <input type="hidden" name="marketplace_id" id="emp-id">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Name
+      <input name="name" id="emp-name" required>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Location
+      <input name="location" id="emp-location" placeholder="Town, address, or stand">
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Default booth fee ($)
+        <input type="number" step="0.01" min="0" name="booth_fee" id="emp-booth">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">Default travel ($)
+        <input type="number" step="0.01" min="0" name="travel_cost" id="emp-travel">
+      </label>
+    </div>
+    <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
+      <button type="button" class="btn sm" onclick="document.getElementById('dlg-edit-mp').close()">Cancel</button>
+      <button class="btn sm primary">Save changes</button>
+    </div>
+  </form>
+</dialog>
+<script>
+function openEditMarketplace(btn) {
+  document.getElementById('emp-id').value = btn.dataset.id || '';
+  document.getElementById('emp-name').value = btn.dataset.name || '';
+  document.getElementById('emp-location').value = btn.dataset.location || '';
+  document.getElementById('emp-booth').value = btn.dataset.booth || '0.00';
+  document.getElementById('emp-travel').value = btn.dataset.travel || '0.00';
+  document.getElementById('dlg-edit-mp').showModal();
+}
+</script>
 {% endblock %}

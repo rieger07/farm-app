@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 
 from inventory.stock import (
     add_ledger_entry,
+    delete_manual_stock_entry,
     fmt_qty,
     list_sku_history,
     list_stock,
@@ -108,3 +109,16 @@ def api_stock_history(sku_id: int, ctx: Ctx = Depends(require("inventory"))):
             .replace("PM", "pm")
         )
     return {"entries": rows}
+
+
+@router.post("/inventory/stock/ledger/{entry_id}/delete")
+def inventory_delete_stock_entry(
+    entry_id: int,
+    ctx: Ctx = Depends(require("inventory")),
+):
+    try:
+        res = delete_manual_stock_entry(ctx.merchant_id, entry_id)
+        msg = f"Removed stock ledger entry #{res['entry_id']}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/inventory?msg={quote_plus(msg)}", status_code=303)

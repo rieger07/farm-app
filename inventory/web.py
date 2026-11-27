@@ -60,6 +60,17 @@ def to_local(occurred_at: str) -> datetime:
     return datetime.fromisoformat(occurred_at).replace(tzinfo=timezone.utc).astimezone(local_tz())
 
 
+def local_input_to_utc_iso(raw: str) -> str:
+    """Parse a local HTML datetime-local string into a naive UTC ISO seconds string."""
+    txt = (raw or "").strip()
+    if not txt:
+        raise ValueError("Date & time is required.")
+    dt = datetime.fromisoformat(txt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=local_tz())
+    return dt.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
 def format_last_sync(iso_ts: str | None) -> str:
     """Format an ISO UTC timestamp as a human-readable relative + local time string."""
     if not iso_ts:
