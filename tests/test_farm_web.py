@@ -1358,6 +1358,218 @@ class FarmWebTest(unittest.TestCase):
         restored_cs = next(s for s in list_batch_sales(new_bid) if s["allocation_type"] == "Customer Sale")
         self.assertEqual(restored_cs["payment_method"], "card")
 
+    def test_capital_equipment_line14_and_gemini_receipt_ocr(self):
+        import csv
+        import io
+        from unittest.mock import patch
+        import httpx
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # 1. Log both Line 14 Capital Equipment ($3,200) and Line 28 Supplies ($45)
+        lines = [
+            {
+                "kind": "general",
+                "category": "Capital Equipment / Depreciation",
+                "amount": 3200.00,
+                "notes": "Zero-turn mower",
+            },
+            {
+                "kind": "general",
+                "category": "Supplies & Equipment",
+                "amount": 45.00,
+                "notes": "Buckets and twine",
+            },
+        ]
+        r_save = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-11-26",
+                "vendor": "John Deere",
+                "lines_json": json.dumps(lines),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_save.status_code, 303)
+
+        # Verify Financials Schedule F Summary, Capital (L14) filter, and CSV export
+        fin_html = self.c.get("/financials?tab=taxes&year=2026").text
+        self.assertIn("Line 14 · Capital Equipment / Depreciation (CPA check)", fin_html)
+        self.assertIn("Line 28 · Supplies", fin_html)
+        self.assertIn('data-src="capital"', fin_html)
+        self.assertIn('data-line="Line 14"', fin_html)
+
+        csv_resp = self.c.get("/financials/expenses.csv?year=2026")
+        self.assertEqual(csv_resp.status_code, 200)
+        csv_rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+        cap_row = next(r for r in csv_rows if r["Category"] == "Capital Equipment / Depreciation")
+        self.assertEqual(cap_row["Schedule F Line"], "Line 14")
+        self.assertEqual(cap_row["Amount ($)"], "3200.00")
+
+        # 2. When GEMINI_API_KEY is unset, scan trigger is hidden and OCR endpoint returns 503
+        prev_key = os.environ.pop("GEMINI_API_KEY", None)
+        try:
+            fin_no_key = self.c.get("/financials?tab=taxes").text
+            self.assertNotIn('id="rcpt-scan-btn"', fin_no_key)
+            r_no_key = self.c.post(
+                "/api/receipts/parse",
+                files={"file": ("receipt.jpg", b"\xff\xd8\xff\xe0test", "image/jpeg")},
+            )
+            self.assertEqual(r_no_key.status_code, 503)
+
+            # 3. With GEMINI_API_KEY set, scan trigger renders & structured outputs work for JPEG and PDF
+            os.environ["GEMINI_API_KEY"] = "secret-gemini-test-key"
+            fin_with_key = self.c.get("/financials?tab=taxes").text
+            self.assertIn('id="rcpt-scan-btn"', fin_with_key)
+            self.assertIn("compressReceiptImage", fin_with_key)
+
+            mock_ocr_payload = {
+                "date": "2026-11-26",
+                "vendor": "Tractor Supply",
+                "receipt_total": 2912.50,
+                "tax_charged": 3.12,
+                "mixed_use_warning": True,
+                "splits": [
+                    {
+                        "split_type": "laying_flock_feed",
+                        "amount": 44.00,
+                        "notes": "2x 50lb Layer Pellets",
+                        "schedule_f_category": None,
+                        "feed_type": "layer",
+                        "bags": 2,
+                        "total_weight_lb": 100,
+                    },
+                    {
+                        "split_type": "meat_batch_feed",
+                        "amount": 68.50,
+                        "notes": "3x 50lb Meatbird Crumble",
+                        "schedule_f_category": None,
+                        "feed_type": "grower",
+                        "bags": 3,
+                        "total_weight_lb": 150,
+                    },
+                    {
+                        "split_type": "general_farm_expense",
+                        "amount": 2800.00,
+                        "notes": "Utility trailer (incl. tax)",
+                        "schedule_f_category": "capital_equipment",
+                        "feed_type": None,
+                        "bags": None,
+                        "total_weight_lb": None,
+                    },
+                ],
+            }
+            captured_calls: list[dict] = []
+
+            class _FakeResp:
+                def __init__(self, status_code=200, body=None):
+                    self.status_code = status_code
+                    self._body = body or {}
+
+                def json(self):
+                    return self._body
+
+            async def _fake_post(self_client, url, **kwargs):
+                captured_calls.append({"url": url, "kwargs": kwargs})
+                return _FakeResp(
+                    200,
+                    {"candidates": [{"content": {"parts": [{"text": json.dumps(mock_ocr_payload)}]}}]},
+                )
+
+            with patch.object(httpx.AsyncClient, "post", _fake_post):
+                r_img = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_img.status_code, 200)
+                parsed = r_img.json()
+                self.assertEqual(parsed["vendor"], "Tractor Supply")
+                self.assertEqual(parsed["date"], "2026-11-26")
+                self.assertAlmostEqual(parsed["tax_charged"], 3.12, places=2)
+                self.assertTrue(parsed["mixed_use_warning"])
+                self.assertEqual(len(parsed["splits"]), 3)
+                self.assertEqual(parsed["splits"][0]["bags"], 2)
+                self.assertEqual(parsed["splits"][0]["total_weight_lb"], 100)
+                self.assertEqual(parsed["splits"][2]["schedule_f_category"], "capital_equipment")
+
+                # Native PDF upload also works without resampling
+                r_pdf = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("order.pdf", b"%PDF-1.4\n%test", "application/pdf")},
+                )
+                self.assertEqual(r_pdf.status_code, 200)
+
+            self.assertEqual(len(captured_calls), 2)
+            req0 = captured_calls[0]
+            self.assertNotIn("secret-gemini-test-key", req0["url"])
+            self.assertEqual(req0["kwargs"]["headers"]["x-goog-api-key"], "secret-gemini-test-key")
+            self.assertEqual(req0["kwargs"]["timeout"], 25.0)
+            req_json = req0["kwargs"]["json"]
+            self.assertEqual(req_json["generationConfig"]["responseMimeType"], "application/json")
+            self.assertIn("responseSchema", req_json["generationConfig"])
+            self.assertIn("NJ Farm Exemption", req_json["systemInstruction"]["parts"][0]["text"])
+            self.assertEqual(
+                captured_calls[1]["kwargs"]["json"]["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+                "application/pdf",
+            )
+
+            # 4. File validation, timeout & upstream error handling (no API key leak)
+            r_bad = self.c.post(
+                "/api/receipts/parse",
+                files={"file": ("notes.txt", b"hello", "text/plain")},
+            )
+            self.assertEqual(r_bad.status_code, 400)
+            r_empty = self.c.post(
+                "/api/receipts/parse",
+                files={"file": ("empty.jpg", b"", "image/jpeg")},
+            )
+            self.assertEqual(r_empty.status_code, 400)
+
+            async def _timeout_post(self_client, url, **kwargs):
+                raise httpx.ReadTimeout("timed out")
+
+            with patch.object(httpx.AsyncClient, "post", _timeout_post):
+                r_to = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_to.status_code, 504)
+                self.assertNotIn("secret-gemini-test-key", r_to.text)
+
+            async def _err_post(self_client, url, **kwargs):
+                return _FakeResp(500, {"error": {"message": "backend error"}})
+
+            with patch.object(httpx.AsyncClient, "post", _err_post):
+                r_err = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+                self.assertEqual(r_err.status_code, 502)
+                self.assertNotIn("secret-gemini-test-key", r_err.text)
+
+            # 5. Staff user is blocked with 403
+            self.c.post(
+                "/settings/members",
+                data={"username": "helper", "display_name": "Helper", "password": "secret", "role": "staff"},
+                follow_redirects=False,
+            )
+            c_staff = TestClient(app)
+            c_staff.post("/login", data={"username": "helper", "password": "secret"}, follow_redirects=False)
+            r_staff = c_staff.post(
+                "/api/receipts/parse",
+                files={"file": ("tsc.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+            )
+            self.assertEqual(r_staff.status_code, 403)
+        finally:
+            if prev_key is None:
+                os.environ.pop("GEMINI_API_KEY", None)
+            else:
+                os.environ["GEMINI_API_KEY"] = prev_key
+
 
 if __name__ == "__main__":
     unittest.main()

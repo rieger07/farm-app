@@ -117,6 +117,7 @@ from homestead.db.eggs import (
 )
 from homestead.db.expenses import (
     EXPENSE_CATEGORIES,
+    EXPENSE_CATEGORY_OPTIONS,
     add_farm_expense,
     delete_farm_expense,
     disconnect_google_drive,
@@ -152,6 +153,7 @@ __all__ = [
     "EGG_SPECIES_DEFAULTS",
     "EGG_SPECIES_ORDER",
     "EXPENSE_CATEGORIES",
+    "EXPENSE_CATEGORY_OPTIONS",
     "HOMESTEAD_PAYMENT_METHODS",
     "HOMESTEAD_ROLES",
     "HOMESTEAD_ROLE_PAGES",

@@ -9,6 +9,8 @@ services:
       - farm-data:/app/data
     environment:
       - FARM_DB_PATH=/app/data/homestead.db
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_OCR_MODEL=${GEMINI_OCR_MODEL:-gemini-2.5-flash}
     restart: unless-stopped
 
   inventory:

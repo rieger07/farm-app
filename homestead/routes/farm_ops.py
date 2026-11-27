@@ -8,7 +8,7 @@ import secrets
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from homestead.db.backup import export_backup_json
 from homestead.db.batches import (
@@ -33,6 +33,7 @@ from homestead.db.eggs import (
 )
 from homestead.db.expenses import (
     EXPENSE_CATEGORIES,
+    EXPENSE_CATEGORY_OPTIONS,
     add_farm_expense,
     attach_farm_expense_receipt,
     delete_farm_expense,
@@ -45,6 +46,13 @@ from homestead.financials import (
     compute_purchasing_schedule,
     compute_roi_summary_table,
     compute_unified_financials_table,
+)
+from homestead.receipt_ocr import (
+    MAX_OCR_FILE_BYTES,
+    ReceiptOCRError,
+    detect_receipt_mime_type,
+    is_receipt_ocr_enabled,
+    parse_receipt_with_gemini,
 )
 from homestead.scheduling import compute_combined_feed_schedule
 from homestead.tax_books import build_unified_tax_books
@@ -229,11 +237,45 @@ def financials_page(
         unified_rows=unified_rows,
         roi_rows=roi_rows,
         expense_categories=EXPENSE_CATEGORIES,
+        expense_category_options=EXPENSE_CATEGORY_OPTIONS,
+        ocr_enabled=is_receipt_ocr_enabled(),
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
         totals=totals,
         chart_peak=chart_peak,
         msg=msg,
     )
+
+
+@router.post("/api/receipts/parse")
+async def api_receipt_parse(
+    file: UploadFile = File(...),
+    user: dict = Depends(current_user),
+):
+    _require_financials(user)
+    if not is_receipt_ocr_enabled():
+        return JSONResponse(
+            {"error": "Receipt OCR is not configured (set GEMINI_API_KEY)."},
+            status_code=503,
+        )
+    try:
+        mime_type = detect_receipt_mime_type(file.content_type, file.filename)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        return JSONResponse({"error": "Uploaded receipt file is empty."}, status_code=400)
+    if len(raw_bytes) > MAX_OCR_FILE_BYTES:
+        return JSONResponse(
+            {"error": "Receipt file exceeds the 12 MB size limit."},
+            status_code=413,
+        )
+
+    try:
+        parsed = await parse_receipt_with_gemini(raw_bytes, mime_type)
+        return JSONResponse(parsed, status_code=200)
+    except ReceiptOCRError as exc:
+        return JSONResponse({"error": exc.message}, status_code=exc.status_code)
 
 
 @router.post("/expenses/receipt")

@@ -130,6 +130,7 @@
           <button type="button" class="seg-btn on" data-src="all" onclick="setSourceFilter('all', this)">All</button>
           <button type="button" class="seg-btn" data-src="feed" onclick="setSourceFilter('feed', this)">Feed</button>
           <button type="button" class="seg-btn" data-src="processing" onclick="setSourceFilter('processing', this)">Processing</button>
+          <button type="button" class="seg-btn" data-src="capital" onclick="setSourceFilter('capital', this)">Capital (L14)</button>
           <button type="button" class="seg-btn" data-src="market_day" onclick="setSourceFilter('market_day', this)">Market</button>
           <button type="button" class="seg-btn" data-src="general" onclick="setSourceFilter('general', this)">General</button>
         </div>
@@ -145,8 +146,9 @@
       <details
         class="hist-row"
         data-src="{{ e.source_key }}"
+        data-line="{{ e.schedule_f_code }}"
         data-missing="{{ '1' if (e.can_attach_receipt and not e.receipt_url) else '0' }}"
-        data-search="{{ (e.date ~ ' ' ~ e.vendor ~ ' ' ~ e.allocation_label ~ ' ' ~ e.category ~ ' ' ~ e.source_label ~ ' ' ~ e.notes)|lower }}"
+        data-search="{{ (e.date ~ ' ' ~ e.vendor ~ ' ' ~ e.allocation_label ~ ' ' ~ e.category ~ ' ' ~ e.schedule_f_label ~ ' ' ~ e.source_label ~ ' ' ~ e.notes)|lower }}"
       >
         <summary>
           <div class="hist-left">
@@ -342,10 +344,19 @@
           {% endfor %}
         </div>
       </div>
-      <label class="full">
-        {% if gdrive_connected %}Receipt Photo / PDF (→ Google Drive){% else %}Receipt Photo / PDF (connect Drive in Settings){% endif %}
-        <input type="file" name="receipt_file" accept="image/*,.pdf" capture="environment">
-      </label>
+      <div class="full">
+        <label for="rcpt-file">
+          {% if gdrive_connected %}Receipt Photo / PDF (→ Google Drive){% else %}Receipt Photo / PDF (connect Drive in Settings){% endif %}
+        </label>
+        <div class="row mt-sm" style="gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="rcpt-file" name="receipt_file" accept="image/*,.pdf" onchange="handleReceiptFileChange(this)" style="flex:1;min-width:190px">
+          {% if ocr_enabled %}
+          <button type="button" class="btn sm" id="rcpt-scan-btn" onclick="scanReceiptFile()" disabled>✨ Scan &amp; Auto-fill</button>
+          {% endif %}
+        </div>
+        <div id="rcpt-ocr-status" class="ocr-status" hidden></div>
+        <div id="rcpt-tax-note" class="ocr-tax-note" hidden></div>
+      </div>
       <details class="full">
         <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Or paste an existing receipt URL</summary>
         <input type="url" name="receipt_url" class="mt-sm" placeholder="https://..." style="width:100%">
@@ -357,6 +368,7 @@
         <b>Line items / Splits</b>
         <button type="button" class="btn sm" onclick="addSplitLine()">+ Add split line</button>
       </div>
+      <div id="rcpt-mixed-warn" class="notice warn mb-sm" hidden>Heads up: check for personal/non-deductible items before saving.</div>
       <div id="rcpt-lines"></div>
       <div class="alloc-bar" id="rcpt-alloc-bar"></div>
     </div>
@@ -404,6 +416,8 @@ const FIN_BATCHES = {{ all_batches|tojson }};
 const FIN_BAG_WT = {{ bag_weight|int }};
 const FIN_LAYER_CFG = {{ layer_cfg|tojson }};
 const FIN_CATEGORIES = {{ expense_categories|tojson }};
+const FIN_CATEGORY_OPTIONS = {{ expense_category_options|tojson }};
+const FIN_OCR_ENABLED = {{ ocr_enabled|tojson }};
 const FIN_PRESET = {
   autoOpen: {{ auto_open_receipt|tojson }},
   mode: {{ preset_mode|tojson }},
@@ -414,6 +428,7 @@ const FIN_PRESET = {
 let finSrcFilter = 'all';
 let finMissingOnly = false;
 let lineSeq = 0;
+let preparedReceiptFile = null;
 
 function switchFinTab(tab) {
   document.querySelectorAll('.tab-bar .seg-btn[data-tab]').forEach(btn => {
@@ -448,8 +463,10 @@ function filterTaxLedger() {
   let visible = 0;
   document.querySelectorAll('#tax-ledger-list details.hist-row').forEach(row => {
     const src = row.dataset.src || '';
+    const lineCode = row.dataset.line || '';
     const srcOk = finSrcFilter === 'all'
       || (finSrcFilter === 'feed' && (src === 'batch_feed' || src === 'layer_feed'))
+      || (finSrcFilter === 'capital' && lineCode === 'Line 14')
       || src === finSrcFilter;
     const missOk = !finMissingOnly || row.dataset.missing === '1';
     const textOk = !q || (row.dataset.search || '').includes(q);
@@ -528,8 +545,8 @@ function addSplitLine(opts) {
     escapeHtml(b.name) + (b.active ? '' : ' (archived)') + '</option>'
   ).join('');
 
-  const catOpts = FIN_CATEGORIES.map(c =>
-    '<option value="' + escapeHtml(c) + '"' + (c === (opts.category || 'Supplies & Equipment') ? ' selected' : '') + '>' + escapeHtml(c) + '</option>'
+  const catOpts = FIN_CATEGORY_OPTIONS.map(([val, lbl]) =>
+    '<option value="' + escapeHtml(val) + '"' + (val === (opts.category || 'Supplies & Equipment') ? ' selected' : '') + '>' + escapeHtml(lbl) + '</option>'
   ).join('');
 
   const card = document.createElement('div');
@@ -563,8 +580,31 @@ function addSplitLine(opts) {
       '<small class="full text-amber sl-feed-tip" hidden>Tip: Use "Meat Batch Feed" or "Laying Flock Feed" above if this feed belongs to livestock/layers so weights &amp; batch costs update together.</small>' +
     '</div>';
 
+  if (opts.feedType) {
+    const bp = card.querySelector('.sl-bphase');
+    const lt = card.querySelector('.sl-ltype');
+    if (kind === 'batch_feed' && bp && ['starter', 'grower'].includes(opts.feedType)) bp.value = opts.feedType;
+    if (kind === 'layer_feed' && lt && ['layer', 'scratch', 'supplement'].includes(opts.feedType)) lt.value = opts.feedType;
+  }
+  if (opts.bags !== undefined && opts.bags !== null) {
+    const bagsEl = card.querySelector('.sl-bags');
+    if (bagsEl) bagsEl.value = String(opts.bags);
+  }
+  if (opts.notes) {
+    const notesEl = card.querySelector('.sl-notes');
+    if (notesEl) notesEl.value = opts.notes;
+  }
+  if (opts.manualAmount) {
+    const amtEl = card.querySelector('.sl-amount');
+    if (amtEl) amtEl.dataset.manual = '1';
+  }
+
   document.getElementById('rcpt-lines').appendChild(card);
   syncSplitLine(card, Boolean(initAmt));
+  if (opts.lbs !== undefined && opts.lbs !== null) {
+    const lbsEl = card.querySelector('.sl-lbs');
+    if (lbsEl) lbsEl.value = String(opts.lbs);
+  }
   refreshRemoveButtons();
   updateAllocBar();
 }
@@ -660,7 +700,232 @@ function updateAllocBar() {
   bar.innerHTML = '<span>Lines: <b>$' + sum.toFixed(2) + '</b> / $' + target.toFixed(2) + '</span>' + badge;
 }
 
+function setOcrStatus(text, opts) {
+  opts = opts || {};
+  const el = document.getElementById('rcpt-ocr-status');
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    el.className = 'ocr-status';
+    return;
+  }
+  el.hidden = false;
+  el.className = 'ocr-status' + (opts.error ? ' err' : '');
+  el.innerHTML = (opts.loading ? '<span class="ocr-spin" aria-hidden="true"></span>' : '') + '<span>' + escapeHtml(text) + '</span>';
+}
+
+function resetReceiptOcrUi() {
+  preparedReceiptFile = null;
+  const fIn = document.getElementById('rcpt-file');
+  if (fIn) fIn.value = '';
+  const scanBtn = document.getElementById('rcpt-scan-btn');
+  if (scanBtn) {
+    scanBtn.disabled = true;
+    scanBtn.textContent = '✨ Scan & Auto-fill';
+  }
+  setOcrStatus('');
+  const taxEl = document.getElementById('rcpt-tax-note');
+  if (taxEl) { taxEl.hidden = true; taxEl.textContent = ''; }
+  const mixEl = document.getElementById('rcpt-mixed-warn');
+  if (mixEl) mixEl.hidden = true;
+}
+
+async function compressReceiptImage(file) {
+  const nameLower = (file.name || '').toLowerCase();
+  if (file.type === 'application/pdf' || nameLower.endsWith('.pdf')) {
+    return { file, compressed: false };
+  }
+  if (!file.type || !file.type.startsWith('image/')) {
+    return { file, compressed: false };
+  }
+  const objUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = objUrl;
+    });
+    const natW = img.naturalWidth || img.width;
+    const natH = img.naturalHeight || img.height;
+    if (!natW || !natH) return { file, compressed: false };
+    const scale = natW > 1200 ? (1200 / natW) : 1;
+    const dstW = Math.max(1, Math.round(natW * scale));
+    const dstH = Math.max(1, Math.round(natH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { file, compressed: false };
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, dstW, dstH);
+    ctx.drawImage(img, 0, 0, dstW, dstH);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+    if (!blob) return { file, compressed: false };
+    const baseName = (file.name || 'receipt').replace(/\.[^.]+$/, '') || 'receipt';
+    const compressedFile = new File([blob], baseName + '.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+    return { file: compressedFile, compressed: true, origSize: file.size, newSize: compressedFile.size };
+  } catch (_) {
+    return { file, compressed: false };
+  } finally {
+    URL.revokeObjectURL(objUrl);
+  }
+}
+
+async function handleReceiptFileChange(input) {
+  const file = input && input.files && input.files[0];
+  const scanBtn = document.getElementById('rcpt-scan-btn');
+  const taxEl = document.getElementById('rcpt-tax-note');
+  const mixEl = document.getElementById('rcpt-mixed-warn');
+  if (taxEl) { taxEl.hidden = true; taxEl.textContent = ''; }
+  if (mixEl) mixEl.hidden = true;
+  if (!file) {
+    preparedReceiptFile = null;
+    if (scanBtn) scanBtn.disabled = true;
+    setOcrStatus('');
+    return;
+  }
+  if (scanBtn) scanBtn.disabled = true;
+  setOcrStatus('Preparing file…', { loading: true });
+  const res = await compressReceiptImage(file);
+  preparedReceiptFile = res.file;
+  if (res.compressed && input) {
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(res.file);
+      input.files = dt.files;
+    } catch (_) {}
+  }
+  if (scanBtn) scanBtn.disabled = false;
+  if (res.compressed) {
+    const kb = Math.max(1, Math.round(res.newSize / 1024));
+    setOcrStatus('Compressed image to ' + kb + ' KB JPEG — click Scan & Auto-fill or Save receipt.');
+  } else {
+    const kb = Math.max(1, Math.round(res.file.size / 1024));
+    setOcrStatus('Ready (' + kb + ' KB) — click Scan & Auto-fill or Save receipt.');
+  }
+}
+
+const OCR_CATEGORY_MAP = {
+  supplies: 'Supplies & Equipment',
+  capital_equipment: 'Capital Equipment / Depreciation',
+  livestock: 'Livestock / Chicks',
+  processing: 'Processing',
+  market: 'Market / Selling Fees',
+  general: 'Other',
+};
+
+function applyParsedReceipt(data) {
+  if (data.date) {
+    const dEl = document.getElementById('rcpt-date');
+    if (dEl) dEl.value = data.date;
+  }
+  if (data.vendor) {
+    const vEl = document.getElementById('rcpt-vendor');
+    if (vEl) vEl.value = data.vendor;
+  }
+  if (data.receipt_total !== undefined && data.receipt_total !== null && Number(data.receipt_total) > 0) {
+    const tEl = document.getElementById('rcpt-target-total');
+    if (tEl) tEl.value = Number(data.receipt_total).toFixed(2);
+  }
+  const taxEl = document.getElementById('rcpt-tax-note');
+  if (taxEl) {
+    const taxVal = Number(data.tax_charged || 0);
+    if (taxVal > 0) {
+      taxEl.textContent = 'Note: $' + taxVal.toFixed(2) + ' sales tax detected on this receipt (verify NJ farm tax exemption).';
+      taxEl.hidden = false;
+    } else {
+      taxEl.hidden = true;
+      taxEl.textContent = '';
+    }
+  }
+  const mixEl = document.getElementById('rcpt-mixed-warn');
+  if (mixEl) mixEl.hidden = !data.mixed_use_warning;
+
+  const container = document.getElementById('rcpt-lines');
+  container.innerHTML = '';
+  lineSeq = 0;
+
+  const splits = Array.isArray(data.splits) && data.splits.length ? data.splits : [];
+  if (!splits.length) {
+    addSplitLine({
+      kind: 'general',
+      category: 'Supplies & Equipment',
+      amount: Number(data.receipt_total || 0) > 0 ? Number(data.receipt_total).toFixed(2) : '',
+      notes: data.vendor || '',
+      manualAmount: true,
+    });
+    return;
+  }
+  splits.forEach(sp => {
+    let kind = 'general';
+    let category = OCR_CATEGORY_MAP[sp.schedule_f_category || 'supplies'] || 'Supplies & Equipment';
+    let feedType = sp.feed_type || '';
+    if (sp.split_type === 'laying_flock_feed') {
+      kind = 'layer_feed';
+      if (!['layer', 'scratch', 'supplement'].includes(feedType)) feedType = 'layer';
+    } else if (sp.split_type === 'meat_batch_feed') {
+      if (FIN_BATCHES.length) {
+        kind = 'batch_feed';
+        if (!['starter', 'grower'].includes(feedType)) feedType = 'grower';
+      } else {
+        kind = 'general';
+        category = 'Feed';
+      }
+    }
+    const amtNum = Number(sp.amount || 0);
+    addSplitLine({
+      kind,
+      category,
+      feedType,
+      bags: sp.bags !== null && sp.bags !== undefined ? Number(sp.bags) : undefined,
+      lbs: sp.total_weight_lb !== null && sp.total_weight_lb !== undefined ? Number(sp.total_weight_lb) : undefined,
+      amount: amtNum > 0 ? amtNum.toFixed(2) : '',
+      notes: sp.notes || '',
+      manualAmount: true,
+    });
+  });
+}
+
+async function scanReceiptFile() {
+  if (!FIN_OCR_ENABLED) return;
+  const fIn = document.getElementById('rcpt-file');
+  const file = preparedReceiptFile || (fIn && fIn.files && fIn.files[0]);
+  if (!file) {
+    setOcrStatus('Choose a receipt photo, screenshot, or PDF first.', { error: true });
+    return;
+  }
+  const scanBtn = document.getElementById('rcpt-scan-btn');
+  if (scanBtn) {
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning…';
+  }
+  setOcrStatus('Scanning receipt with Gemini Vision…', { loading: true });
+  try {
+    const fd = new FormData();
+    fd.append('file', file, file.name || 'receipt.jpg');
+    const resp = await fetch('/api/receipts/parse', { method: 'POST', body: fd });
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok) {
+      throw new Error(data.error || ('Scan failed (HTTP ' + resp.status + ') — please enter details manually.'));
+    }
+    applyParsedReceipt(data);
+    const n = (data.splits || []).length;
+    setOcrStatus('Auto-filled ' + n + ' split line' + (n === 1 ? '' : 's') + '. Verify fields and tap Save receipt.');
+  } catch (err) {
+    setOcrStatus((err && err.message) || 'Could not scan receipt — please enter details manually.', { error: true });
+  } finally {
+    if (scanBtn) {
+      scanBtn.disabled = false;
+      scanBtn.textContent = '✨ Scan & Auto-fill';
+    }
+  }
+}
+
 function openReceiptModal(mode, batchId, species) {
+  resetReceiptOcrUi();
   const container = document.getElementById('rcpt-lines');
   container.innerHTML = '';
   lineSeq = 0;
