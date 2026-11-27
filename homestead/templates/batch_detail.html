@@ -57,7 +57,7 @@
     <p class="sub mb-md">
       {% set logged_lbs = (feed_logs|sum(attribute='feed_lbs')) if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
       {% set logged_cost = (feed_logs|sum(attribute='cost_total')) if feed_logs else (b.actual_feed_cost if b.actual_feed_cost is not none else 0.0) %}
-      Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb (${{ '%.2f'|format(logged_cost) }})</b>
+      Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb ({{ logged_cost|money }})</b>
       · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
       · <small class="inline muted">All receipts &amp; feed purchases are logged together under Tax Books.</small>
     </p>
@@ -68,7 +68,7 @@
         <tr>
           <td>{{ fl.feed_date }}</td><td>{{ fl.feed_type|title }}{% if fl.vendor %} <small class="inline muted">· {{ fl.vendor }}</small>{% endif %}</td>
           <td class="num">{{ fl.bags }}</td><td class="num">{{ '%.1f'|format(fl.feed_lbs) }}</td>
-          <td class="num">${{ '%.2f'|format(fl.cost_total) }}</td>
+          <td class="num">{{ fl.cost_total|money }}{% if fl.cost_total < 0 %} <span class="pill blue">Refund</span>{% endif %}</td>
           <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
           <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
         </tr>

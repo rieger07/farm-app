@@ -58,7 +58,7 @@
     </div>
     <div class="card">
       <small>Estimated Net</small>
-      <div class="big">{{ '-' if tax_books.totals.estimated_net < 0 }}{{ (tax_books.totals.estimated_net|abs)|money }}</div>
+      <div class="big">{{ tax_books.totals.estimated_net|money }}</div>
       <small>Cash basis ({{ yr_lbl }})</small>
     </div>
     <div class="card">
@@ -148,7 +148,7 @@
         data-src="{{ e.source_key }}"
         data-line="{{ e.schedule_f_code }}"
         data-missing="{{ '1' if (e.can_attach_receipt and not e.receipt_url) else '0' }}"
-        data-search="{{ (e.date ~ ' ' ~ e.vendor ~ ' ' ~ e.allocation_label ~ ' ' ~ e.category ~ ' ' ~ e.schedule_f_label ~ ' ' ~ e.source_label ~ ' ' ~ e.notes)|lower }}"
+        data-search="{{ (e.date ~ ' ' ~ e.vendor ~ ' ' ~ e.allocation_label ~ ' ' ~ e.category ~ ' ' ~ e.schedule_f_label ~ ' ' ~ e.source_label ~ ' ' ~ e.notes ~ (' refund credit' if e.amount < 0 else ''))|lower }}"
       >
         <summary>
           <div class="hist-left">
@@ -159,7 +159,8 @@
             </small>
           </div>
           <div class="hist-right">
-            <b>{{ e.amount|money }}</b>
+            <b{{ ' class="text-green"' if e.amount < 0 }}>{{ e.amount|money }}</b>
+            {% if e.amount < 0 %}<span class="pill blue">Refund</span>{% endif %}
             {% if not e.can_attach_receipt %}
               <span class="pill gray">POS log</span>
             {% elif e.receipt_url %}
@@ -199,7 +200,7 @@
               method="post"
               action="/expenses/entry/delete"
               class="inline-form"
-              data-confirm="Remove this {{ e.source_label|lower }} entry (${{ '%.2f'|format(e.amount) }})?"
+              data-confirm="Remove this {{ e.source_label|lower }} entry ({{ e.amount|money }})?"
               onsubmit="return confirm(this.dataset.confirm)"
             >
               <input type="hidden" name="source_key" value="{{ e.source_key }}">
@@ -331,7 +332,7 @@
       </label>
       <label>
         Receipt Total ($ optional check)
-        <input type="number" id="rcpt-target-total" step="0.01" min="0" placeholder="e.g. 255.68" oninput="updateAllocBar()">
+        <input type="number" id="rcpt-target-total" step="0.01" placeholder="e.g. 255.68 or -45.00" oninput="updateAllocBar()">
       </label>
       <div class="full">
         <label>
@@ -527,18 +528,77 @@ function syncSplitLayerTags(changed) {
   }
 }
 
+function fmtSignedMoney(n) {
+  const v = Number(n || 0);
+  return (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
+}
+
+function effectiveLineAmount(card) {
+  const raw = parseFloat((card.querySelector('.sl-amount') || {}).value || '0') || 0;
+  if (raw === 0) return 0;
+  const isRefund = Boolean((card.querySelector('.sl-refund') || {}).checked) || raw < 0;
+  return isRefund ? -Math.abs(raw) : Math.abs(raw);
+}
+
+function syncSplitRefundUi(card) {
+  const isRefund = Boolean((card.querySelector('.sl-refund') || {}).checked);
+  card.classList.toggle('is-refund', isRefund);
+  const amtLbl = card.querySelector('.sl-amt-label');
+  if (amtLbl) amtLbl.textContent = isRefund ? 'Refund credit (-$)' : 'Amount ($)';
+  const bagsLbl = card.querySelector('.sl-bags-label');
+  if (bagsLbl) bagsLbl.textContent = (isRefund ? 'Returned bags (' : 'Bags (') + FIN_BAG_WT + ' lb)';
+  const lbsLbl = card.querySelector('.sl-lbs-label');
+  if (lbsLbl) lbsLbl.textContent = isRefund ? 'Returned weight (lb)' : 'Total weight (lb)';
+}
+
+function toggleSplitRefund(cb) {
+  const card = cb.closest('.split-line');
+  if (!card) return;
+  const amtEl = card.querySelector('.sl-amount');
+  if (amtEl && !cb.checked) {
+    const val = parseFloat(amtEl.value || '0') || 0;
+    if (val < 0) amtEl.value = Math.abs(val).toFixed(2);
+  }
+  syncSplitRefundUi(card);
+  updateAllocBar();
+}
+
+function onSplitAmountInput(input) {
+  input.dataset.manual = '1';
+  const val = parseFloat(input.value || '0');
+  if (!Number.isNaN(val) && val < 0) {
+    const card = input.closest('.split-line');
+    const cb = card && card.querySelector('.sl-refund');
+    if (cb && !cb.checked) {
+      cb.checked = true;
+      syncSplitRefundUi(card);
+    }
+  }
+  updateAllocBar();
+}
+
 function addSplitLine(opts) {
   opts = opts || {};
   lineSeq += 1;
   const idx = lineSeq;
   const kind = opts.kind || (FIN_BATCHES.length ? 'general' : 'general');
-  const targetTotal = parseFloat((document.getElementById('rcpt-target-total') || {}).value || '0') || 0;
+  const targetEl = document.getElementById('rcpt-target-total');
+  const targetRaw = targetEl ? targetEl.value.trim() : '';
+  const hasTarget = targetRaw !== '' && !Number.isNaN(Number(targetRaw));
+  const targetTotal = hasTarget ? Number(targetRaw) : 0;
   let currentSum = 0;
-  document.querySelectorAll('#rcpt-lines .sl-amount').forEach(el => {
-    currentSum += parseFloat(el.value || '0') || 0;
+  document.querySelectorAll('#rcpt-lines .split-line').forEach(c => {
+    currentSum += effectiveLineAmount(c);
   });
-  const rem = targetTotal > 0 ? Math.max(0, targetTotal - currentSum) : 0;
-  const initAmt = opts.amount !== undefined ? opts.amount : (rem > 0 ? rem.toFixed(2) : '');
+  const rem = hasTarget ? +(targetTotal - currentSum).toFixed(2) : 0;
+  const hasExplicitAmt = opts.amount !== undefined;
+  const explicitNum = hasExplicitAmt && opts.amount !== '' ? Number(opts.amount) : 0;
+  const isRefund = Boolean(opts.isRefund)
+    || (hasExplicitAmt && explicitNum < 0)
+    || (!hasExplicitAmt && hasTarget && rem < 0);
+  const initAmt = hasExplicitAmt
+    ? (opts.amount === '' ? '' : Math.abs(explicitNum).toFixed(2))
+    : (rem !== 0 ? Math.abs(rem).toFixed(2) : '');
 
   const batchOpts = FIN_BATCHES.map(b =>
     '<option value="' + b.id + '"' + (String(opts.batchId || '') === String(b.id) ? ' selected' : '') + '>' +
@@ -554,11 +614,12 @@ function addSplitLine(opts) {
   card.dataset.lineId = String(idx);
   card.innerHTML =
     '<div class="split-head">' +
-      '<select class="sl-kind" onchange="syncSplitLine(this.closest(\'.split-line\'))" style="flex:1;min-width:160px;font-weight:600">' +
+      '<select class="sl-kind" onchange="syncSplitLine(this.closest(\'.split-line\'))" style="flex:1;min-width:150px;font-weight:600">' +
         '<option value="general"' + (kind === 'general' ? ' selected' : '') + '>General Farm Expense</option>' +
         '<option value="layer_feed"' + (kind === 'layer_feed' ? ' selected' : '') + '>Laying Flock Feed</option>' +
         (FIN_BATCHES.length ? '<option value="batch_feed"' + (kind === 'batch_feed' ? ' selected' : '') + '>Meat Batch Feed</option>' : '') +
       '</select>' +
+      '<label class="refund-toggle"><input type="checkbox" class="sl-refund"' + (isRefund ? ' checked' : '') + ' onchange="toggleSplitRefund(this)"> Refund / Credit</label>' +
       '<button type="button" class="btn sm danger sl-remove" onclick="removeSplitLine(this)">Remove</button>' +
     '</div>' +
 
@@ -569,13 +630,13 @@ function addSplitLine(opts) {
       '<label class="sl-only sl-only-layer" hidden>Feed Type<select class="sl-ltype" onchange="autoEstimateSplitFeed(this.closest(\'.split-line\'))"><option value="layer">Layer / Waterfowl Feed</option><option value="scratch">Scratch Grains</option><option value="supplement">Grit / Oyster Shell</option></select></label>' +
       '<div class="full sl-only sl-only-layer sl-tags-wrap" hidden><small class="mb-sm">Allocate layer feed to</small><div class="row">' + buildLayerTagCheckboxes(idx, opts.species || '') + '</div></div>' +
 
-      '<label class="sl-only sl-only-feed" hidden>Bags (' + FIN_BAG_WT + ' lb)<input type="number" class="sl-bags" step="0.5" min="0" value="1" oninput="autoEstimateSplitFeed(this.closest(\'.split-line\'))"></label>' +
-      '<label class="sl-only sl-only-feed" hidden>Total weight (lb)<input type="number" class="sl-lbs" step="0.1" min="0" value="' + FIN_BAG_WT + '"></label>' +
+      '<label class="sl-only sl-only-feed" hidden><span class="sl-bags-label">Bags (' + FIN_BAG_WT + ' lb)</span><input type="number" class="sl-bags" step="0.5" min="0" value="1" oninput="autoEstimateSplitFeed(this.closest(\'.split-line\'))"></label>' +
+      '<label class="sl-only sl-only-feed" hidden><span class="sl-lbs-label">Total weight (lb)</span><input type="number" class="sl-lbs" step="0.1" min="0" value="' + FIN_BAG_WT + '"></label>' +
 
       '<label class="sl-only sl-only-gen">Schedule F Category<select class="sl-cat" onchange="syncGeneralFeedTip(this.closest(\'.split-line\'))">' + catOpts + '</select></label>' +
       (FIN_BATCHES.length ? '<label class="sl-only sl-only-gen">Batch tag (optional)<select class="sl-gbatch"><option value="">General farm</option>' + batchOpts + '</select></label>' : '') +
 
-      '<label>Amount ($)<input type="number" class="sl-amount" step="0.01" min="0.01" required placeholder="0.00" value="' + initAmt + '" oninput="this.dataset.manual=\'1\';updateAllocBar()"></label>' +
+      '<label><span class="sl-amt-label">Amount ($)</span><input type="number" class="sl-amount" step="0.01" required placeholder="0.00" value="' + initAmt + '" oninput="onSplitAmountInput(this)"></label>' +
       '<label>Notes (optional)<input class="sl-notes" placeholder="e.g. 2 bags pellets, pine shavings"></label>' +
       '<small class="full text-amber sl-feed-tip" hidden>Tip: Use "Meat Batch Feed" or "Laying Flock Feed" above if this feed belongs to livestock/layers so weights &amp; batch costs update together.</small>' +
     '</div>';
@@ -588,7 +649,7 @@ function addSplitLine(opts) {
   }
   if (opts.bags !== undefined && opts.bags !== null) {
     const bagsEl = card.querySelector('.sl-bags');
-    if (bagsEl) bagsEl.value = String(opts.bags);
+    if (bagsEl) bagsEl.value = String(Math.abs(Number(opts.bags)));
   }
   if (opts.notes) {
     const notesEl = card.querySelector('.sl-notes');
@@ -603,8 +664,9 @@ function addSplitLine(opts) {
   syncSplitLine(card, Boolean(initAmt));
   if (opts.lbs !== undefined && opts.lbs !== null) {
     const lbsEl = card.querySelector('.sl-lbs');
-    if (lbsEl) lbsEl.value = String(opts.lbs);
+    if (lbsEl) lbsEl.value = String(Math.abs(Number(opts.lbs)));
   }
+  syncSplitRefundUi(card);
   refreshRemoveButtons();
   updateAllocBar();
 }
@@ -680,24 +742,27 @@ function updateAllocBar() {
   const bar = document.getElementById('rcpt-alloc-bar');
   if (!bar) return;
   let sum = 0;
-  document.querySelectorAll('#rcpt-lines .sl-amount').forEach(el => {
-    sum += parseFloat(el.value || '0') || 0;
+  document.querySelectorAll('#rcpt-lines .split-line').forEach(c => {
+    sum += effectiveLineAmount(c);
   });
-  const target = parseFloat((document.getElementById('rcpt-target-total') || {}).value || '0') || 0;
-  if (target <= 0) {
-    bar.innerHTML = '<span>Allocated total: <b>$' + sum.toFixed(2) + '</b></span><small class="inline muted">Single Drive photo attaches to all splits</small>';
+  const targetEl = document.getElementById('rcpt-target-total');
+  const targetRaw = targetEl ? targetEl.value.trim() : '';
+  const hasTarget = targetRaw !== '' && !Number.isNaN(Number(targetRaw));
+  if (!hasTarget) {
+    bar.innerHTML = '<span>Allocated net total: <b>' + fmtSignedMoney(sum) + '</b></span><small class="inline muted">Single Drive photo attaches to all splits</small>';
     return;
   }
+  const target = Number(targetRaw);
   const diff = +(target - sum).toFixed(2);
   let badge = '';
   if (Math.abs(diff) < 0.01) {
     badge = '<span class="pill green">Balanced ✓</span>';
   } else if (diff > 0) {
-    badge = '<span class="pill amber">Remaining: $' + diff.toFixed(2) + '</span>';
+    badge = '<span class="pill amber">Diff: +' + fmtSignedMoney(diff) + '</span>';
   } else {
-    badge = '<span class="pill red">Over by $' + Math.abs(diff).toFixed(2) + '</span>';
+    badge = '<span class="pill red">Diff: ' + fmtSignedMoney(diff) + '</span>';
   }
-  bar.innerHTML = '<span>Lines: <b>$' + sum.toFixed(2) + '</b> / $' + target.toFixed(2) + '</span>' + badge;
+  bar.innerHTML = '<span>Lines: <b>' + fmtSignedMoney(sum) + '</b> / ' + fmtSignedMoney(target) + '</span>' + badge;
 }
 
 function setOcrStatus(text, opts) {
@@ -828,7 +893,7 @@ function applyParsedReceipt(data) {
     const vEl = document.getElementById('rcpt-vendor');
     if (vEl) vEl.value = data.vendor;
   }
-  if (data.receipt_total !== undefined && data.receipt_total !== null && Number(data.receipt_total) > 0) {
+  if (data.receipt_total !== undefined && data.receipt_total !== null && (Number(data.receipt_total) !== 0 || (Array.isArray(data.splits) && data.splits.length > 1))) {
     const tEl = document.getElementById('rcpt-target-total');
     if (tEl) tEl.value = Number(data.receipt_total).toFixed(2);
   }
@@ -852,11 +917,13 @@ function applyParsedReceipt(data) {
 
   const splits = Array.isArray(data.splits) && data.splits.length ? data.splits : [];
   if (!splits.length) {
+    const tot = Number(data.receipt_total || 0);
     addSplitLine({
       kind: 'general',
       category: 'Supplies & Equipment',
-      amount: Number(data.receipt_total || 0) > 0 ? Number(data.receipt_total).toFixed(2) : '',
-      notes: data.vendor || '',
+      isRefund: tot < 0,
+      amount: tot !== 0 ? Math.abs(tot).toFixed(2) : '',
+      notes: tot < 0 ? (data.vendor ? 'Refund: ' + data.vendor : 'Refund') : (data.vendor || ''),
       manualAmount: true,
     });
     return;
@@ -878,13 +945,17 @@ function applyParsedReceipt(data) {
       }
     }
     const amtNum = Number(sp.amount || 0);
+    const isRefund = amtNum < 0;
+    const hasBags = sp.bags !== null && sp.bags !== undefined;
+    const hasLbs = sp.total_weight_lb !== null && sp.total_weight_lb !== undefined;
     addSplitLine({
       kind,
       category,
       feedType,
-      bags: sp.bags !== null && sp.bags !== undefined ? Number(sp.bags) : undefined,
-      lbs: sp.total_weight_lb !== null && sp.total_weight_lb !== undefined ? Number(sp.total_weight_lb) : undefined,
-      amount: amtNum > 0 ? amtNum.toFixed(2) : '',
+      isRefund,
+      bags: hasBags ? Math.abs(Number(sp.bags)) : (isRefund ? 0 : undefined),
+      lbs: hasLbs ? Math.abs(Number(sp.total_weight_lb)) : (isRefund ? 0 : undefined),
+      amount: amtNum !== 0 ? Math.abs(amtNum).toFixed(2) : '',
       notes: sp.notes || '',
       manualAmount: true,
     });
@@ -953,17 +1024,21 @@ function submitReceiptForm() {
   const lines = [];
   document.querySelectorAll('#rcpt-lines .split-line').forEach(card => {
     const kind = (card.querySelector('.sl-kind') || {}).value || 'general';
-    const amount = parseFloat((card.querySelector('.sl-amount') || {}).value || '0') || 0;
+    const amount = effectiveLineAmount(card);
     const notes = ((card.querySelector('.sl-notes') || {}).value || '').trim();
-    if (amount <= 0) return;
+    if (amount === 0) return;
+    const rawBags = Math.abs(parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0);
+    const rawLbs = Math.abs(parseFloat((card.querySelector('.sl-lbs') || {}).value || '0') || 0);
+    const signedBags = amount < 0 ? (rawBags ? -rawBags : 0) : rawBags;
+    const signedLbs = amount < 0 ? (rawLbs ? -rawLbs : 0) : rawLbs;
     if (kind === 'batch_feed') {
       lines.push({
         kind,
         amount,
         batch_id: (card.querySelector('.sl-batch') || {}).value || '',
         feed_type: (card.querySelector('.sl-bphase') || {}).value || 'grower',
-        bags: parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0,
-        feed_lbs: parseFloat((card.querySelector('.sl-lbs') || {}).value || '0') || 0,
+        bags: signedBags,
+        feed_lbs: signedLbs,
         notes,
       });
     } else if (kind === 'layer_feed') {
@@ -973,8 +1048,8 @@ function submitReceiptForm() {
         amount,
         feed_type: (card.querySelector('.sl-ltype') || {}).value || 'layer',
         species_tags: tags.length ? tags : ['all'],
-        bags: parseFloat((card.querySelector('.sl-bags') || {}).value || '0') || 0,
-        feed_lbs: parseFloat((card.querySelector('.sl-lbs') || {}).value || '0') || 0,
+        bags: signedBags,
+        feed_lbs: signedLbs,
         notes,
       });
     } else {
@@ -988,7 +1063,7 @@ function submitReceiptForm() {
     }
   });
   if (!lines.length) {
-    alert('Add at least one line item with an amount greater than $0.');
+    alert('Add at least one line item with a non-zero amount.');
     return false;
   }
   document.getElementById('rcpt-lines-json').value = JSON.stringify(lines);

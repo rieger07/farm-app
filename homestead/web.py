@@ -44,9 +44,19 @@ def _asset(name: str) -> str:
     return f"/static/{name}?v={int(p.stat().st_mtime)}" if p.exists() else f"/static/{name}"
 
 
+def _fmt_money(v) -> str:
+    n = round(float(v or 0), 2)
+    return f"-${abs(n):,.2f}" if n < 0 else f"${n:,.2f}"
+
+
+def _fmt_money0(v) -> str:
+    n = round(float(v or 0))
+    return f"-${abs(n):,.0f}" if n < 0 else f"${n:,.0f}"
+
+
 templates.env.globals["asset"] = _asset
-templates.env.filters["money"] = lambda v: f"${float(v or 0):,.2f}"
-templates.env.filters["money0"] = lambda v: f"${float(v or 0):,.0f}"
+templates.env.filters["money"] = _fmt_money
+templates.env.filters["money0"] = _fmt_money0
 
 
 class _LoginRedirect(Exception):

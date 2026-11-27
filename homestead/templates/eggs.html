@@ -347,7 +347,7 @@
       </div>
       <p class="sub mb-md">
         Total daily burn: <b>{{ '%.1f'|format(dash.total_daily_feed_burn_lbs) }} lb/d</b> ({{ '%.1f'|format(dash.monthly_bags) }} bags/mo)
-        · Total spent: <b>${{ '%.2f'|format(dash.logged_feed_cost) }} ({{ '%.1f'|format(dash.logged_feed_lbs) }} lb)</b>
+        · Total spent: <b>{{ dash.logged_feed_cost|money }} ({{ '%.1f'|format(dash.logged_feed_lbs) }} lb)</b>
       </p>
 
       {% if dash.layer_bought_lbs > 0 or dash.scratch_bought_lbs > 0 %}
@@ -382,7 +382,7 @@
                 <small>{{ fl.species_tags_label }}{% if fl.notes %} · {{ fl.notes }}{% endif %}</small>
               </div>
               <div class="hist-right">
-                <b>${{ '%.2f'|format(fl.cost_total) }}</b>
+                <b>{{ fl.cost_total|money }}</b>{% if fl.cost_total < 0 %}<span class="pill blue">Refund</span>{% endif %}
                 <span class="hist-chev" aria-hidden="true">▾</span>
               </div>
             </summary>

@@ -305,7 +305,7 @@ async def expense_receipt_submit(
             amt = round(float(item.get("amount") or 0.0), 2)
         except (TypeError, ValueError):
             amt = 0.0
-        if amt <= 0:
+        if amt == 0:
             continue
         kind = str(item.get("kind") or "general").strip()
         if kind not in ("batch_feed", "layer_feed", "general"):
@@ -332,7 +332,7 @@ async def expense_receipt_submit(
 
     if not valid_lines:
         return _tax_redirect(
-            yr, "Error: Add at least one line item with an amount greater than $0."
+            yr, "Error: Add at least one line item with a non-zero amount."
         )
 
     clean_vendor = vendor.strip()
@@ -348,13 +348,22 @@ async def expense_receipt_submit(
     for line in valid_lines:
         kind = line["kind"]
         notes = str(line.get("notes") or "").strip()
+        if kind in ("batch_feed", "layer_feed"):
+            raw_bags = float(line.get("bags") or 0.0)
+            raw_lbs = float(line.get("feed_lbs") or 0.0)
+            if line["amount"] < 0:
+                signed_bags = -abs(raw_bags) if raw_bags else 0.0
+                signed_lbs = -abs(raw_lbs) if raw_lbs else 0.0
+            else:
+                signed_bags = abs(raw_bags)
+                signed_lbs = abs(raw_lbs)
         if kind == "batch_feed":
             add_batch_feed_log(
                 line["batch_id"],
                 rdate,
                 str(line.get("feed_type") or "grower"),
-                float(line.get("bags") or 0.0),
-                float(line.get("feed_lbs") or 0.0),
+                signed_bags,
+                signed_lbs,
                 line["amount"],
                 notes=notes,
                 receipt_url=r_url,
@@ -367,8 +376,8 @@ async def expense_receipt_submit(
             add_layer_feed_log(
                 user["id"],
                 feed_date=rdate,
-                bags=float(line.get("bags") or 0.0),
-                feed_lbs=float(line.get("feed_lbs") or 0.0),
+                bags=signed_bags,
+                feed_lbs=signed_lbs,
                 cost_total=line["amount"],
                 notes=notes,
                 receipt_url=r_url,
@@ -392,11 +401,12 @@ async def expense_receipt_submit(
                 receipt_group_id=group_id,
             )
 
-    total_amt = sum(item["amount"] for item in valid_lines)
+    total_amt = round(sum(item["amount"] for item in valid_lines), 2)
+    total_lbl = f"-${abs(total_amt):,.2f}" if total_amt < 0 else f"${total_amt:,.2f}"
     if len(valid_lines) == 1:
-        msg = f"Saved receipt (${total_amt:,.2f})."
+        msg = f"Saved receipt ({total_lbl})."
     else:
-        msg = f"Saved split receipt ({len(valid_lines)} items, ${total_amt:,.2f})."
+        msg = f"Saved split receipt ({len(valid_lines)} items, {total_lbl})."
     if warn:
         msg += f" (Receipt not uploaded: {warn})"
     return _tax_redirect(yr, msg)
