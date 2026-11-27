@@ -7,6 +7,7 @@ from homestead.db.core import get_db_connection
 
 EXPENSE_CATEGORIES = (
     "Supplies & Equipment",
+    "Capital Equipment / Depreciation",
     "Feed",
     "Livestock / Chicks",
     "Processing",
@@ -16,10 +17,23 @@ EXPENSE_CATEGORIES = (
     "Other",
 )
 
+EXPENSE_CATEGORY_OPTIONS = (
+    ("Supplies & Equipment", "Supplies (Line 28)"),
+    ("Capital Equipment / Depreciation", "Capital Equipment / Depreciation (Line 14 · CPA check)"),
+    ("Feed", "Feed (Line 16)"),
+    ("Livestock / Chicks", "Livestock / Chicks (Part I Line 1b · CPA check)"),
+    ("Processing", "Processing / Custom Hire (Line 15)"),
+    ("Repairs & Maintenance", "Repairs & Maintenance (Line 25)"),
+    ("Utilities & Fuel", "Utilities & Fuel (Line 30)"),
+    ("Market / Selling Fees", "Market / Selling Fees (Line 32)"),
+    ("Other", "Other Farm Expenses (Line 32)"),
+)
+
 SCHEDULE_F_LINE_MAP = {
     "Feed": ("Line 16", "Line 16 · Feed", 10),
     "Processing": ("Line 15", "Line 15 · Custom Hire / Processing", 20),
     "Supplies & Equipment": ("Line 28", "Line 28 · Supplies", 30),
+    "Capital Equipment / Depreciation": ("Line 14", "Line 14 · Capital Equipment / Depreciation (CPA check)", 35),
     "Repairs & Maintenance": ("Line 25", "Line 25 · Repairs & Maintenance", 40),
     "Utilities & Fuel": ("Line 30", "Line 30 · Utilities & Fuel", 50),
     "Market / Selling Fees": ("Line 32", "Line 32 · Market Booth & Travel Fees", 60),
