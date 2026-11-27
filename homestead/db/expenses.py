@@ -6,14 +6,31 @@ from homestead.db.core import get_db_connection
 
 
 EXPENSE_CATEGORIES = (
+    "Supplies & Equipment",
     "Feed",
     "Livestock / Chicks",
     "Processing",
-    "Supplies & Equipment",
-    "Utilities & Fuel",
     "Repairs & Maintenance",
+    "Utilities & Fuel",
+    "Market / Selling Fees",
     "Other",
 )
+
+SCHEDULE_F_LINE_MAP = {
+    "Feed": ("Line 16", "Line 16 · Feed", 10),
+    "Processing": ("Line 15", "Line 15 · Custom Hire / Processing", 20),
+    "Supplies & Equipment": ("Line 28", "Line 28 · Supplies", 30),
+    "Repairs & Maintenance": ("Line 25", "Line 25 · Repairs & Maintenance", 40),
+    "Utilities & Fuel": ("Line 30", "Line 30 · Utilities & Fuel", 50),
+    "Market / Selling Fees": ("Line 32", "Line 32 · Market Booth & Travel Fees", 60),
+    "Livestock / Chicks": ("Part I / 1b", "Part I Line 1b · Livestock / Chicks (CPA check)", 70),
+    "Other": ("Line 32", "Line 32 · Other Farm Expenses", 80),
+}
+
+
+def schedule_f_line_for(category: str) -> tuple[str, str, int]:
+    """Return (line_code, label, sort_order) on IRS Schedule F for an expense category."""
+    return SCHEDULE_F_LINE_MAP.get(category, SCHEDULE_F_LINE_MAP["Other"])
 
 
 def get_google_drive_connection(user_id: int) -> dict | None:
@@ -133,6 +150,7 @@ def add_farm_expense(
     notes: str = "",
     receipt_url: str = "",
     drive_file_id: str = "",
+    receipt_group_id: str = "",
 ) -> int:
     cat = str(category or "Other").strip() or "Other"
     with get_db_connection() as conn:
@@ -140,9 +158,9 @@ def add_farm_expense(
             """
             INSERT INTO farm_expenses (
                 user_id, batch_id, expense_date, vendor, category, amount,
-                notes, receipt_url, drive_file_id, created_at
+                notes, receipt_url, drive_file_id, receipt_group_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user_id),
@@ -154,11 +172,35 @@ def add_farm_expense(
                 str(notes or "").strip(),
                 str(receipt_url or "").strip(),
                 str(drive_file_id or "").strip(),
+                str(receipt_group_id or "").strip(),
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def attach_farm_expense_receipt(
+    expense_id: int,
+    user_id: int,
+    receipt_url: str,
+    drive_file_id: str = "",
+) -> bool:
+    clean_url = str(receipt_url or "").strip()
+    if not clean_url:
+        return False
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE farm_expenses
+            SET receipt_url = ?,
+                drive_file_id = COALESCE(NULLIF(?, ''), drive_file_id)
+            WHERE id = ? AND user_id = ?
+            """,
+            (clean_url, str(drive_file_id or "").strip(), int(expense_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_farm_expense(expense_id: int, user_id: int) -> None:
@@ -168,3 +210,71 @@ def delete_farm_expense(expense_id: int, user_id: int) -> None:
             (int(expense_id), int(user_id)),
         )
         conn.commit()
+
+
+def delete_receipt_group(user_id: int, receipt_group_id: str) -> int:
+    """Delete all lines sharing a split receipt_group_id across general, batch feed, and layer feed."""
+    gid = str(receipt_group_id or "").strip()
+    if not gid:
+        return 0
+    with get_db_connection() as conn:
+        deleted = 0
+        c1 = conn.execute(
+            "DELETE FROM farm_expenses WHERE user_id = ? AND receipt_group_id = ?",
+            (int(user_id), gid),
+        )
+        deleted += int(c1.rowcount or 0)
+        c2 = conn.execute(
+            "DELETE FROM layer_feed_logs WHERE user_id = ? AND receipt_group_id = ?",
+            (int(user_id), gid),
+        )
+        deleted += int(c2.rowcount or 0)
+        c3 = conn.execute(
+            """
+            DELETE FROM batch_feed_logs
+            WHERE receipt_group_id = ?
+              AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+            """,
+            (gid, int(user_id)),
+        )
+        deleted += int(c3.rowcount or 0)
+        conn.commit()
+        return deleted
+
+
+def list_recent_vendors(user_id: int, limit: int = 10) -> list[str]:
+    """Return distinct recent vendor names topped up with common farm defaults."""
+    defaults = ("Tractor Supply", "Runnings", "Local Feed Mill", "Butcher")
+    seen_low: set[str] = set()
+    vendors: list[str] = []
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT vendor, MAX(d) AS last_d FROM (
+                SELECT vendor, expense_date AS d FROM farm_expenses WHERE user_id = ? AND vendor != ''
+                UNION ALL
+                SELECT fl.vendor, fl.feed_date AS d
+                FROM batch_feed_logs fl
+                JOIN batches b ON b.id = fl.batch_id
+                WHERE b.user_id = ? AND COALESCE(fl.vendor, '') != ''
+                UNION ALL
+                SELECT vendor, feed_date AS d FROM layer_feed_logs WHERE user_id = ? AND COALESCE(vendor, '') != ''
+            )
+            GROUP BY vendor COLLATE NOCASE
+            ORDER BY last_d DESC, vendor ASC
+            LIMIT ?
+            """,
+            (int(user_id), int(user_id), int(user_id), int(limit)),
+        ).fetchall()
+    for r in rows:
+        v = str(r["vendor"] or "").strip()
+        if v and v.lower() not in seen_low:
+            seen_low.add(v.lower())
+            vendors.append(v)
+    for d in defaults:
+        if len(vendors) >= limit:
+            break
+        if d.lower() not in seen_low:
+            seen_low.add(d.lower())
+            vendors.append(d)
+    return vendors[:limit]

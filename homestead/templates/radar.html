@@ -4,7 +4,12 @@
 <div class="eyebrow">TODAY ON THE FARM</div>
 <div class="pagehead">
   <div><h1>Radar</h1><p class="sub">Active flocks, upcoming milestones, and 1-tap barn logs.</p></div>
-  <button class="btn primary" onclick="openNewBatchModal()">+ New batch</button>
+  <div class="row">
+    {% if (user.role or 'owner') in ('owner', 'manager') %}
+    <a href="/financials?tab=taxes&amp;new=1" class="btn">+ Log receipt</a>
+    {% endif %}
+    <button class="btn primary" onclick="openNewBatchModal()">+ New batch</button>
+  </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 

@@ -239,6 +239,8 @@ def add_batch_feed_log(
     notes: str = "",
     receipt_url: str = "",
     drive_file_id: str = "",
+    vendor: str = "",
+    receipt_group_id: str = "",
 ) -> int:
     ft = "starter" if str(feed_type).strip().lower() == "starter" else "grower"
     with get_db_connection() as conn:
@@ -246,9 +248,9 @@ def add_batch_feed_log(
             """
             INSERT INTO batch_feed_logs (
                 batch_id, feed_date, feed_type, bags, feed_lbs, cost_total,
-                notes, receipt_url, drive_file_id, created_at
+                notes, receipt_url, drive_file_id, vendor, receipt_group_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(batch_id),
@@ -260,6 +262,8 @@ def add_batch_feed_log(
                 str(notes or "").strip(),
                 str(receipt_url or "").strip(),
                 str(drive_file_id or "").strip(),
+                str(vendor or "").strip(),
+                str(receipt_group_id or "").strip(),
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
         )
@@ -267,10 +271,72 @@ def add_batch_feed_log(
         return int(cur.lastrowid)
 
 
+def attach_batch_feed_receipt(
+    log_id: int,
+    user_id: int,
+    receipt_url: str,
+    drive_file_id: str = "",
+) -> bool:
+    clean_url = str(receipt_url or "").strip()
+    if not clean_url:
+        return False
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE batch_feed_logs
+            SET receipt_url = ?,
+                drive_file_id = COALESCE(NULLIF(?, ''), drive_file_id)
+            WHERE id = ?
+              AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+            """,
+            (clean_url, str(drive_file_id or "").strip(), int(log_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def attach_batch_harvest_receipt(
+    harvest_id: int,
+    user_id: int,
+    receipt_url: str,
+    drive_file_id: str = "",
+) -> bool:
+    clean_url = str(receipt_url or "").strip()
+    if not clean_url:
+        return False
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE batch_harvests
+            SET receipt_url = ?,
+                drive_file_id = COALESCE(NULLIF(?, ''), drive_file_id)
+            WHERE id = ?
+              AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+            """,
+            (clean_url, str(drive_file_id or "").strip(), int(harvest_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def delete_batch_feed_log(log_id: int) -> None:
     with get_db_connection() as conn:
         conn.execute("DELETE FROM batch_feed_logs WHERE id = ?", (int(log_id),))
         conn.commit()
+
+
+def delete_batch_feed_log_for_user(log_id: int, user_id: int) -> bool:
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM batch_feed_logs
+            WHERE id = ?
+              AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+            """,
+            (int(log_id), int(user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def set_batch_actual_feed(

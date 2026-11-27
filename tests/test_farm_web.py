@@ -1008,6 +1008,216 @@ class FarmWebTest(unittest.TestCase):
         self.assertIsNone(get_user_by_username("helper"))
         self.assertEqual(list_batches(user_id=helper["id"]), [])
 
+    def test_unified_split_receipt_tax_books_and_csv(self):
+        import csv
+        import io
+        from unittest.mock import patch
+        from homestead.database import (
+            compute_egg_dashboard,
+            list_batch_feed_logs,
+            list_batches,
+        )
+        from homestead.db.eggs import list_layer_feed_logs
+        from homestead.db.expenses import list_farm_expenses
+        from inventory.market_day import save_market_day_pack
+        from shared.db import get_connection
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # Radar shows unified + Log receipt CTA for owner/manager
+        radar_owner = self.c.get("/").text
+        self.assertIn("/financials?tab=taxes&amp;new=1", radar_owner)
+
+        # Create Thanksgiving 2026 batch with 2 paid/sold birds ($240 + $15 proc) and 1 Home Freezer bird (40 lb)
+        self.c.post("/batches/save", data={
+            "name": "Thanksgiving 2026",
+            "species": "turkey chicks",
+            "start_date": "2026-06-01",
+            "initial_quantity": "10",
+            "unit_cost": "10.00",
+            "avg_dressed_weight": "20.0",
+            "sale_price_per_lb": "6.00",
+            "processing_cost": "5.00",
+            "grower_bag_price": "25.00",
+            "lifecycle_type": "live_arrival",
+            "next_url": "/batches",
+        }, follow_redirects=False)
+        bid = list_batches()[0]["id"]
+        self.c.post("/batches/log-harvest", data={
+            "batch_id": str(bid),
+            "harvest_date": "2026-11-15",
+            "head_count": "1",
+            "dressed_lbs": "20.0",
+            "processing_cost_total": "15.00",
+            "notes": "Butcher invoice #42",
+        }, follow_redirects=False)
+        # Assign harvest #1 to customer and mark paid ($120), plus manual Customer Sale ($120, 20 lb) and Home Freezer (40 lb)
+        self.c.post(f"/batches/{bid}/harvests/1/delete", follow_redirects=False)
+        conn = get_connection()
+        conn.execute(
+            """
+            INSERT INTO batch_harvests (
+                batch_id, harvest_date, head_count, dressed_lbs, processing_cost_total,
+                for_sale, actual_sale_price, payment_status, pickup_status, notes, created_at
+            ) VALUES (?, '2026-11-15', 2, 40.0, 15.00, 1, 240.00, 'paid', 'picked_up', 'Butcher invoice #42', '2026-11-15T12:00:00')
+            """,
+            (bid,),
+        )
+        conn.execute(
+            """
+            INSERT INTO batch_harvests (
+                batch_id, harvest_date, head_count, dressed_lbs, processing_cost_total,
+                for_sale, notes, created_at
+            ) VALUES (?, '2026-11-15', 1, 40.0, 0.0, 0, 'Family freezer bird', '2026-11-15T12:05:00')
+            """,
+            (bid,),
+        )
+        conn.execute(
+            """
+            INSERT INTO sales (
+                merchant_id, source, external_id, occurred_at, total_cents, status, created_at
+            ) VALUES (1, 'cash', 'pos-tax-1', '2026-09-12T16:00:00', 18000, 'completed', '2026-09-12T16:00:00')
+            """,
+        )
+        conn.commit()
+        conn.close()
+
+        # Seed an Iron Ledger market day ($50 booth + $15 travel = $65)
+        save_market_day_pack(
+            merchant_id=1,
+            market_date="2026-09-12",
+            marketplace_id=None,
+            brought_by_sku={},
+            new_marketplace_name="Sussex Farmers Market",
+            booth_fee_cents=5000,
+            travel_cost_cents=1500,
+        )
+
+        # 1. Submit 3-way split Tractor Supply receipt ($110 batch feed + $52 layer feed + $93.68 supplies = $255.68)
+        split_lines = [
+            {"kind": "batch_feed", "batch_id": str(bid), "feed_type": "grower", "bags": 4, "feed_lbs": 200, "amount": 110.00, "notes": "Turkey grower"},
+            {"kind": "layer_feed", "feed_type": "layer", "species_tags": ["chicken"], "bags": 2, "feed_lbs": 100, "amount": 52.00, "notes": "Layer pellets"},
+            {"kind": "general", "category": "Supplies & Equipment", "amount": 93.68, "notes": "Pine shavings & heat lamp"},
+        ]
+        with patch("homestead.gdrive.upload_receipt_to_drive", return_value=("drv777", "https://drive.google.com/file/d/drv777/view")) as mock_up:
+            r_split = self.c.post(
+                "/expenses/receipt",
+                data={
+                    "receipt_date": "2026-11-04",
+                    "vendor": "Tractor Supply",
+                    "lines_json": json.dumps(split_lines),
+                },
+                files={"receipt_file": ("tsc.jpg", b"jpeg-bytes", "image/jpeg")},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_split.status_code, 303)
+            self.assertEqual(mock_up.call_count, 1)
+
+        bf = list_batch_feed_logs(bid)
+        lf = list_layer_feed_logs(1)
+        fe = list_farm_expenses(1)
+        self.assertEqual(len(bf), 1)
+        self.assertEqual(len(lf), 1)
+        self.assertEqual(len(fe), 1)
+        gid = bf[0]["receipt_group_id"]
+        self.assertTrue(gid)
+        self.assertEqual(lf[0]["receipt_group_id"], gid)
+        self.assertEqual(fe[0]["receipt_group_id"], gid)
+        self.assertEqual(bf[0]["receipt_url"], "https://drive.google.com/file/d/drv777/view")
+        self.assertEqual(lf[0]["receipt_url"], "https://drive.google.com/file/d/drv777/view")
+        self.assertEqual(fe[0]["receipt_url"], "https://drive.google.com/file/d/drv777/view")
+
+        # Verify batch detail & egg hub updated from unified receipt
+        self.assertIn("200.0 lb ($110.00)", self.c.get(f"/batches/{bid}").text)
+        self.assertAlmostEqual(compute_egg_dashboard(1)["logged_feed_cost"], 52.0)
+
+        # 2. Log a second layer feed entry WITHOUT a receipt, then attach one cleanly
+        self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-10-01",
+                "vendor": "Runnings",
+                "lines_json": json.dumps([
+                    {"kind": "layer_feed", "feed_type": "scratch", "species_tags": ["all"], "bags": 1, "feed_lbs": 50, "amount": 24.00, "notes": "Scratch bag"}
+                ]),
+            },
+            follow_redirects=False,
+        )
+        runnings_lf = next(x for x in list_layer_feed_logs(1) if x["vendor"] == "Runnings")
+        self.assertEqual(runnings_lf["receipt_url"], "")
+        with patch("homestead.gdrive.upload_receipt_to_drive", return_value=("drv888", "https://drive.google.com/file/d/drv888/view")):
+            r_att = self.c.post(
+                "/expenses/attach-receipt",
+                data={
+                    "source_key": "layer_feed",
+                    "entry_id": str(runnings_lf["id"]),
+                    "entry_date": "2026-10-01",
+                    "label": "Runnings",
+                    "year": "2026",
+                },
+                files={"receipt_file": ("runnings.jpg", b"jpeg-2", "image/jpeg")},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_att.status_code, 303)
+        self.assertEqual(
+            next(x["receipt_url"] for x in list_layer_feed_logs(1) if x["id"] == runnings_lf["id"]),
+            "https://drive.google.com/file/d/drv888/view",
+        )
+
+        # 3. Tax Books HTML shows combined income ($420), non-duplicated expenses ($359.68), Schedule F categories, and freezer note
+        tax_html = self.c.get("/financials?tab=taxes&year=2026").text
+        self.assertIn("$420.00", tax_html)  # $240 Homestead + $180 POS
+        self.assertIn("$359.68", tax_html)  # $186 feed + $15 proc + $93.68 supplies + $65 market
+        self.assertIn("$186.00", tax_html)  # Line 16 Feed (110 + 52 + 24)
+        self.assertIn("$93.68", tax_html)   # Line 28 Supplies
+        self.assertIn("$65.00", tax_html)   # Line 32 Market Booth & Travel Fees
+        self.assertIn("$15.00", tax_html)   # Line 15 Custom Hire / Processing
+        self.assertIn("Thanksgiving 2026 (40.0 of 80.0 lb · 50.0%)", tax_html)
+        self.assertIn("Split (3)", tax_html)
+
+        # 4. Schedule F CSV export includes all 5 sources and sums cleanly to exact $359.68 (zero double-counting)
+        csv_resp = self.c.get("/financials/expenses.csv?year=2026")
+        self.assertEqual(csv_resp.status_code, 200)
+        rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+        sources = {r["Source"] for r in rows}
+        self.assertEqual(sources, {"General", "Batch Feed", "Layer Feed", "Processing", "Market Day"})
+        self.assertAlmostEqual(sum(float(r["Amount ($)"]) for r in rows), 359.68, places=2)
+
+        # 5. Deleting split receipt group removes all 3 splits cleanly at once
+        r_gdel = self.c.post(
+            "/expenses/group/delete",
+            data={"receipt_group_id": gid, "year": "2026"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_gdel.status_code, 303)
+        self.assertEqual(list_batch_feed_logs(bid), [])
+        self.assertEqual(list_farm_expenses(1), [])
+        remaining_lf = list_layer_feed_logs(1)
+        self.assertEqual(len(remaining_lf), 1)
+
+        # Single entry delete via /expenses/entry/delete also works cleanly
+        r_ed = self.c.post(
+            "/expenses/entry/delete",
+            data={"source_key": "layer_feed", "entry_id": str(remaining_lf[0]["id"]), "year": "2026"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_ed.status_code, 303)
+        self.assertEqual(list_layer_feed_logs(1), [])
+
+        # 6. Staff user cannot log receipts or view Financials
+        self.c.post("/settings/members", data={"username": "mom", "display_name": "Mom", "password": "secret", "role": "staff"}, follow_redirects=False)
+        c_mom = TestClient(app)
+        c_mom.post("/login", data={"username": "mom", "password": "secret"}, follow_redirects=False)
+        self.assertNotIn("/financials?tab=taxes&amp;new=1", c_mom.get("/").text)
+        self.assertEqual(
+            c_mom.post("/expenses/receipt", data={"lines_json": "[]"}, follow_redirects=False).status_code,
+            403,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

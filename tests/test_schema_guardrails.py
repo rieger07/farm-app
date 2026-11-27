@@ -215,6 +215,17 @@ class SchemaGuardrailsTest(unittest.TestCase):
             self.assertIn("species", eg_cols)
             self.assertIn("created_by", eg_cols)
 
+            bf_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_feed_logs)").fetchall()}
+            self.assertIn("vendor", bf_cols)
+            self.assertIn("receipt_group_id", bf_cols)
+
+            lf_cols = {r["name"] for r in c2.execute("PRAGMA table_info(layer_feed_logs)").fetchall()}
+            self.assertIn("vendor", lf_cols)
+            self.assertIn("receipt_group_id", lf_cols)
+
+            fe_cols = {r["name"] for r in c2.execute("PRAGMA table_info(farm_expenses)").fetchall()}
+            self.assertIn("receipt_group_id", fe_cols)
+
             b1 = c2.execute("SELECT picking_slug, starter_weeks, lifecycle_type FROM batches WHERE id = 1").fetchone()
             self.assertEqual(b1["picking_slug"], "live-turkey-2026")
             self.assertIsNotNone(b1["starter_weeks"])

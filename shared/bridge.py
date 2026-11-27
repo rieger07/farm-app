@@ -147,3 +147,97 @@ def delete_user_account(
         conn.execute("DELETE FROM batches WHERE user_id = ?", (int(user_id),))
         conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
         conn.commit()
+
+
+def list_ledger_market_day_costs(
+    merchant_id: int | None, tax_year: int | None = None
+) -> list[dict]:
+    """Read-only Iron Ledger market booth/travel fees for Schedule F Tax Books."""
+    if not merchant_id:
+        return []
+    params: list[object] = [int(merchant_id)]
+    year_clause = ""
+    if tax_year is not None:
+        year_clause = " AND substr(md.market_date, 1, 4) = ?"
+        params.append(str(int(tax_year)))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT md.id, md.market_date, mp.name AS marketplace_name,
+                   mp.location, md.booth_fee_cents, md.travel_cost_cents, md.notes
+            FROM market_days md
+            JOIN marketplaces mp ON mp.id = md.marketplace_id
+            WHERE md.merchant_id = ?
+              AND (md.booth_fee_cents > 0 OR md.travel_cost_cents > 0)
+              {year_clause}
+            ORDER BY md.market_date DESC, md.id DESC
+            """,
+            tuple(params),
+        ).fetchall()
+        out = []
+        for r in rows:
+            booth = round(float(r["booth_fee_cents"] or 0) / 100.0, 2)
+            travel = round(float(r["travel_cost_cents"] or 0) / 100.0, 2)
+            out.append(
+                {
+                    "id": int(r["id"]),
+                    "market_date": str(r["market_date"] or "")[:10],
+                    "marketplace_name": str(r["marketplace_name"] or "Market"),
+                    "location": str(r["location"] or ""),
+                    "booth_fee_dollars": booth,
+                    "travel_cost_dollars": travel,
+                    "total_dollars": round(booth + travel, 2),
+                    "notes": str(r["notes"] or ""),
+                }
+            )
+        return out
+
+
+def get_ledger_sales_summary_by_year(
+    merchant_id: int | None, tax_year: int | None = None
+) -> dict:
+    """Read-only completed Iron Ledger POS sales summary (and active years)."""
+    if not merchant_id:
+        return {"total_dollars": 0.0, "sale_count": 0, "years": []}
+    with get_connection() as conn:
+        year_rows = conn.execute(
+            """
+            SELECT DISTINCT substr(occurred_at, 1, 4) AS yr
+            FROM sales
+            WHERE merchant_id = ? AND status = 'completed'
+            """,
+            (int(merchant_id),),
+        ).fetchall()
+        years = sorted(
+            {
+                int(str(r["yr"]))
+                for r in year_rows
+                if r["yr"] and str(r["yr"]).isdigit() and len(str(r["yr"])) == 4
+            }
+        )
+        if tax_year is not None:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(total_cents), 0) AS total_cents, COUNT(*) AS cnt
+                FROM sales
+                WHERE merchant_id = ? AND status = 'completed'
+                  AND substr(occurred_at, 1, 4) = ?
+                """,
+                (int(merchant_id), str(int(tax_year))),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(total_cents), 0) AS total_cents, COUNT(*) AS cnt
+                FROM sales
+                WHERE merchant_id = ? AND status = 'completed'
+                """,
+                (int(merchant_id),),
+            ).fetchone()
+        total_cents = float(row["total_cents"] or 0.0) if row else 0.0
+        cnt = int(row["cnt"] or 0) if row else 0
+        return {
+            "total_dollars": round(total_cents / 100.0, 2),
+            "sale_count": cnt,
+            "years": years,
+        }
