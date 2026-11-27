@@ -8,6 +8,7 @@ from homestead.db.core import (
     get_text_setting,
     set_text_setting,
 )
+from shared.bridge import HOMESTEAD_PAYMENT_METHODS, normalize_homestead_payment_method
 from shared.merchants import clean_payment_handle as _clean_payment_handle
 
 
@@ -246,31 +247,46 @@ def update_harvest_assignment(
     payment_status: str = "unpaid",
     pickup_status: str = "unassigned",
     notes: str | None = None,
+    payment_method: str | None = None,
 ) -> bool:
     pay = payment_status if payment_status in PAYMENT_STATUSES else "unpaid"
     pstat = pickup_status if pickup_status in PICKUP_STATUSES else "unassigned"
     actual_val = round(max(0.0, float(actual_sale_price)), 2) if actual_sale_price is not None else None
+    pm_val = (
+        normalize_homestead_payment_method(payment_method)
+        if payment_method is not None
+        else None
+    )
     if not for_sale:
         customer_id = None
         pstat = "unassigned"
         actual_val = None
+        pm_val = ""
     elif customer_id is not None and pstat == "unassigned":
         pstat = "assigned"
     elif customer_id is None and pstat != "unassigned":
         pstat = "unassigned"
-    claimed_at = datetime.utcnow().isoformat(timespec="seconds") if customer_id else ""
+    now_utc = datetime.utcnow().isoformat(timespec="seconds")
+    claimed_at = now_utc if customer_id else ""
     with get_db_connection() as conn:
+        pm_sql = ", payment_method = ?" if pm_val is not None else ""
+        pm_args: list[object] = [pm_val] if pm_val is not None else []
         if notes is not None:
             cur = conn.execute(
-                """
+                f"""
                 UPDATE batch_harvests
                 SET customer_id = ?, for_sale = ?, deposit_paid = ?, actual_sale_price = ?,
                     payment_status = ?, pickup_status = ?,
                     claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END,
-                    notes = ?
+                    paid_at = CASE
+                        WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ?
+                        WHEN ? != 'paid' AND ? != 'picked_up' THEN ''
+                        ELSE COALESCE(paid_at, '')
+                    END,
+                    notes = ?{pm_sql}
                 WHERE id = ? AND batch_id = ?
                 """,
-                (
+                [
                     int(customer_id) if customer_id else None,
                     1 if for_sale else 0,
                     max(0.0, float(deposit_paid or 0.0)),
@@ -280,21 +296,31 @@ def update_harvest_assignment(
                     claimed_at,
                     claimed_at,
                     claimed_at,
+                    pay,
+                    now_utc,
+                    pay,
+                    pstat,
                     str(notes).strip(),
+                    *pm_args,
                     int(harvest_id),
                     int(batch_id),
-                ),
+                ],
             )
         else:
             cur = conn.execute(
-                """
+                f"""
                 UPDATE batch_harvests
                 SET customer_id = ?, for_sale = ?, deposit_paid = ?, actual_sale_price = ?,
                     payment_status = ?, pickup_status = ?,
-                    claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END
+                    claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END,
+                    paid_at = CASE
+                        WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ?
+                        WHEN ? != 'paid' AND ? != 'picked_up' THEN ''
+                        ELSE COALESCE(paid_at, '')
+                    END{pm_sql}
                 WHERE id = ? AND batch_id = ?
                 """,
-                (
+                [
                     int(customer_id) if customer_id else None,
                     1 if for_sale else 0,
                     max(0.0, float(deposit_paid or 0.0)),
@@ -304,9 +330,14 @@ def update_harvest_assignment(
                     claimed_at,
                     claimed_at,
                     claimed_at,
+                    pay,
+                    now_utc,
+                    pay,
+                    pstat,
+                    *pm_args,
                     int(harvest_id),
                     int(batch_id),
-                ),
+                ],
             )
         conn.commit()
         return cur.rowcount > 0
@@ -836,6 +867,7 @@ def settle_customer_batch_pickup(
     mark_paid: bool = True,
     mark_picked_up: bool = True,
     bird_ids: list[int] | None = None,
+    payment_method: str | None = None,
 ) -> int:
     """Settle selected (or all) for-sale birds assigned to customer_id in batch_id on Pickup Day.
 
@@ -845,6 +877,12 @@ def settle_customer_batch_pickup(
     for the settled birds and distributes any difference proportionally into ``actual_sale_price``.
     """
     clean_ids = [int(x) for x in (bird_ids or []) if int(x) > 0]
+    pm = (
+        normalize_homestead_payment_method(payment_method)
+        if payment_method is not None
+        else None
+    )
+    now_utc = datetime.utcnow().isoformat(timespec="seconds")
     with get_db_connection() as conn:
         batch = conn.execute(
             "SELECT sale_price_per_lb FROM batches WHERE id = ? AND user_id = ?",
@@ -909,13 +947,58 @@ def settle_customer_batch_pickup(
         for b, act_p in zip(bird_list, new_actuals):
             pay_stat = "paid" if mark_paid else (b.get("payment_status") or "unpaid")
             pick_stat = "picked_up" if mark_picked_up else (b.get("pickup_status") or "assigned")
-            conn.execute(
-                """
-                UPDATE batch_harvests
-                SET payment_status = ?, pickup_status = ?, actual_sale_price = ?
-                WHERE id = ? AND batch_id = ?
-                """,
-                (pay_stat, pick_stat, act_p, int(b["id"]), int(batch_id)),
-            )
+            if pm is not None:
+                conn.execute(
+                    """
+                    UPDATE batch_harvests
+                    SET payment_status = ?, pickup_status = ?, actual_sale_price = ?,
+                        payment_method = ?,
+                        paid_at = CASE WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ? ELSE COALESCE(paid_at, '') END
+                    WHERE id = ? AND batch_id = ?
+                    """,
+                    (pay_stat, pick_stat, act_p, pm, pay_stat, now_utc, int(b["id"]), int(batch_id)),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE batch_harvests
+                    SET payment_status = ?, pickup_status = ?, actual_sale_price = ?,
+                        paid_at = CASE WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ? ELSE COALESCE(paid_at, '') END
+                    WHERE id = ? AND batch_id = ?
+                    """,
+                    (pay_stat, pick_stat, act_p, pay_stat, now_utc, int(b["id"]), int(batch_id)),
+                )
         conn.commit()
         return len(bird_list)
+
+
+def update_customer_batch_payment_method(
+    user_id: int,
+    batch_id: int,
+    customer_id: int,
+    payment_method: str,
+) -> int:
+    """Update payment_method across paid/picked-up birds for a customer in an owned batch."""
+    pm = normalize_homestead_payment_method(payment_method)
+    with get_db_connection() as conn:
+        batch = conn.execute(
+            "SELECT id FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not batch:
+            return 0
+        cur = conn.execute(
+            """
+            UPDATE batch_harvests
+            SET payment_method = ?
+            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+              AND (
+                LOWER(COALESCE(payment_status, '')) = 'paid'
+                OR LOWER(COALESCE(pickup_status, '')) = 'picked_up'
+                OR actual_sale_price IS NOT NULL
+              )
+            """,
+            (pm, int(batch_id), int(customer_id)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)

@@ -103,6 +103,8 @@ async def api_batch_harvest_assign(
     )
     payment_status = str(payload.get("payment_status") or "unpaid")
     pickup_status = str(payload.get("pickup_status") or ("assigned" if cid else "unassigned"))
+    raw_pm = payload.get("payment_method")
+    payment_method = str(raw_pm) if raw_pm is not None else None
     notes = payload.get("notes")
     # Auto-apply unapplied paid pre-order deposit if newly assigning with no manual deposit entered
     if cid is not None and for_sale and deposit_paid == 0.0 and payment_status == "unpaid":
@@ -120,17 +122,21 @@ async def api_batch_harvest_assign(
                 else:
                     deposit_paid = rem
                 payment_status = "deposit"
-    update_harvest_assignment(
-        batch_id,
-        harvest_id,
-        customer_id=cid,
-        for_sale=for_sale,
-        deposit_paid=deposit_paid,
-        actual_sale_price=actual_sale_price,
-        payment_status=payment_status,
-        pickup_status=pickup_status,
-        notes=str(notes) if notes is not None else None,
-    )
+    try:
+        update_harvest_assignment(
+            batch_id,
+            harvest_id,
+            customer_id=cid,
+            for_sale=for_sale,
+            deposit_paid=deposit_paid,
+            actual_sale_price=actual_sale_price,
+            payment_status=payment_status,
+            pickup_status=pickup_status,
+            notes=str(notes) if notes is not None else None,
+            payment_method=payment_method,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pub_status = "hidden" if not for_sale else ("claimed" if cid else "available")
     _broadcast_pick_event(
         b.get("picking_slug"), {"bird_id": int(harvest_id), "status": pub_status}

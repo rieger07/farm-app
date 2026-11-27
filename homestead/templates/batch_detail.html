@@ -126,19 +126,45 @@
         </label>
         <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
         <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
-        <label class="full">Notes<input name="notes" placeholder="Cut-meat / bulk pack notes"></label>
+        <label>Payment method
+          <select name="payment_method">
+            <option value="cash">Cash</option>
+            <option value="venmo">Venmo</option>
+            <option value="paypal">PayPal</option>
+            <option value="card">Card</option>
+            <option value="check">Check</option>
+          </select>
+        </label>
+        <label>Notes<input name="notes" placeholder="Cut-meat / bulk pack notes"></label>
         <div class="full"><button class="btn primary sm">+ Add manual entry</button></div>
       </form>
       {% if sales %}
       <table>
-        <thead><tr><th>Date</th><th>Type</th><th class="num">Weight</th><th class="num">Revenue</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Weight</th><th class="num">Revenue</th><th>Payment</th><th></th></tr></thead>
         <tbody>
         {% for sa in sales %}
           <tr>
             <td>{{ sa.entry_date }}</td>
-            <td><span class="pill {{ 'green' if sa.allocation_type == 'sale' else 'gray' }}">{{ 'Customer Sale' if sa.allocation_type == 'sale' else 'Home Freezer' }}</span>{% if sa.notes %} <small class="inline muted">{{ sa.notes }}</small>{% endif %}</td>
+            <td><span class="pill {{ 'green' if sa.allocation_type == 'Customer Sale' else 'gray' }}">{{ 'Customer Sale' if sa.allocation_type == 'Customer Sale' else 'Home Freezer' }}</span>{% if sa.notes %} <small class="inline muted">{{ sa.notes }}</small>{% endif %}</td>
             <td class="num">{{ '%.1f'|format(sa.weight_lbs) }} lb</td>
             <td class="num">${{ '%.2f'|format(sa.revenue) }}</td>
+            <td>
+              {% if sa.allocation_type == 'Customer Sale' %}
+              <form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/payment-method" style="display:flex;align-items:center;gap:6px;margin:0">
+                <select name="payment_method" style="padding:4px 6px;font-size:12px">
+                  {% if not sa.payment_method %}
+                  <option value="" selected>— Untagged —</option>
+                  {% endif %}
+                  {% for pm in payment_methods %}
+                  <option value="{{ pm }}" {{ 'selected' if sa.payment_method == pm }}>{{ pm|capitalize }}</option>
+                  {% endfor %}
+                </select>
+                <button class="btn sm">Save</button>
+              </form>
+              {% else %}
+              <small class="muted">—</small>
+              {% endif %}
+            </td>
             <td class="num"><form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/delete"><button class="link">Remove</button></form></td>
           </tr>
         {% endfor %}

@@ -296,9 +296,10 @@ def import_backup_json(
                 conn.execute(
                     """
                     INSERT INTO batch_harvests (
-                        batch_id, harvest_date, head_count, dressed_lbs, processing_cost_total, notes, created_at
+                        batch_id, harvest_date, head_count, dressed_lbs, processing_cost_total,
+                        notes, payment_method, paid_at, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_batch_id,
@@ -310,6 +311,8 @@ def import_backup_json(
                             float(harv_item.get("processing_cost_total", 0.0)),
                         ),
                         str(harv_item.get("notes", "")),
+                        str(harv_item.get("payment_method", "") or ""),
+                        str(harv_item.get("paid_at", "") or ""),
                         str(harv_item.get("created_at") or now_iso),
                     ),
                 )
@@ -317,9 +320,10 @@ def import_backup_json(
                 conn.execute(
                     """
                     INSERT INTO batch_sales (
-                        batch_id, entry_date, allocation_type, weight_lbs, revenue, notes, created_at
+                        batch_id, entry_date, allocation_type, weight_lbs, revenue,
+                        payment_method, notes, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_batch_id,
@@ -327,6 +331,7 @@ def import_backup_json(
                         str(sale_item.get("allocation_type", "Customer Sale")),
                         max(0.01, float(sale_item.get("weight_lbs", 1.0))),
                         max(0.0, float(sale_item.get("revenue", 0.0))),
+                        str(sale_item.get("payment_method", "") or ""),
                         str(sale_item.get("notes", "")),
                         str(sale_item.get("created_at") or now_iso),
                     ),

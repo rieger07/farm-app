@@ -9,6 +9,7 @@ from homestead.db.core import (
     get_db_connection,
     get_species_defaults,
 )
+from shared.bridge import normalize_homestead_payment_method
 
 
 def list_batches(user_id: int | None = None) -> list[dict]:
@@ -186,19 +187,21 @@ def add_batch_sale(
     weight_lbs: float,
     revenue: float,
     notes: str = "",
+    payment_method: str = "",
 ) -> int:
     resolved_type = (
         "Home Freezer"
         if "freezer" in str(allocation_type).lower()
         else "Customer Sale"
     )
+    pm = "" if resolved_type == "Home Freezer" else normalize_homestead_payment_method(payment_method)
     with get_db_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO batch_sales (
-                batch_id, entry_date, allocation_type, weight_lbs, revenue, notes, created_at
+                batch_id, entry_date, allocation_type, weight_lbs, revenue, payment_method, notes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(batch_id),
@@ -206,12 +209,27 @@ def add_batch_sale(
                 resolved_type,
                 max(0.01, float(weight_lbs)),
                 0.0 if resolved_type == "Home Freezer" else max(0.0, float(revenue)),
+                pm,
                 str(notes).strip(),
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
         )
         conn.commit()
         return int(cursor.lastrowid)
+
+
+def update_batch_sale_payment_method(
+    batch_id: int, sale_id: int, payment_method: str
+) -> bool:
+    """Update payment_method on a batch Customer Sale row."""
+    pm = normalize_homestead_payment_method(payment_method)
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            "UPDATE batch_sales SET payment_method = ? WHERE id = ? AND batch_id = ? AND allocation_type = 'Customer Sale'",
+            (pm, int(sale_id), int(batch_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_batch_sale(sale_id: int) -> None:

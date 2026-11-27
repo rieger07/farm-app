@@ -22,6 +22,7 @@ from homestead.db.batches import (
     save_batch,
     set_batch_active,
     set_batch_actual_feed,
+    update_batch_sale_payment_method,
 )
 from homestead.db.core import (
     _resolve_user_id,
@@ -84,6 +85,7 @@ from homestead.db.customers import (
     update_batch_picking_settings,
     update_batch_preorder,
     update_batch_preorder_settings,
+    update_customer_batch_payment_method,
     update_harvest_assignment,
 )
 from homestead.db.eggs import (
@@ -138,9 +140,11 @@ from homestead.db.workspaces import (
     resolve_homestead_workspace,
 )
 from shared.bridge import (
+    HOMESTEAD_PAYMENT_METHODS,
     delete_ledger_entry,
     get_sku_completed_sales_summary,
     list_active_ledger_skus,
+    normalize_homestead_payment_method,
     restock_ledger_sku,
 )
 
@@ -148,6 +152,7 @@ __all__ = [
     "EGG_SPECIES_DEFAULTS",
     "EGG_SPECIES_ORDER",
     "EXPENSE_CATEGORIES",
+    "HOMESTEAD_PAYMENT_METHODS",
     "HOMESTEAD_ROLES",
     "HOMESTEAD_ROLE_PAGES",
     "PAYMENT_STATUSES",
@@ -246,6 +251,7 @@ __all__ = [
     "merge_customers",
     "normalize_egg_species",
     "normalize_feed_species_tags",
+    "normalize_homestead_payment_method",
     "pack_egg_cartons",
     "remove_homestead_merchant_member",
     "rename_homestead_merchant",
@@ -270,6 +276,8 @@ __all__ = [
     "update_batch_picking_settings",
     "update_batch_preorder",
     "update_batch_preorder_settings",
+    "update_batch_sale_payment_method",
+    "update_customer_batch_payment_method",
     "update_google_drive_folder",
     "update_google_drive_tokens",
     "update_harvest_assignment",

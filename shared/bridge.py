@@ -2,10 +2,89 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timezone
 import sqlite3
 
 from shared.db.connection import get_connection
+
+
+HOMESTEAD_PAYMENT_METHODS = ("cash", "venmo", "paypal", "card", "check")
+
+
+def normalize_homestead_payment_method(value: str | None) -> str:
+    """Validate and normalize a Homestead payment method (empty string clears tag)."""
+    clean = str(value or "").strip().lower()
+    if not clean:
+        return ""
+    if clean not in HOMESTEAD_PAYMENT_METHODS:
+        raise ValueError(f"Unsupported payment method: {value}")
+    return clean
+
+
+def _get_merchant_owner_user_id(
+    conn: sqlite3.Connection, merchant_id: int
+) -> int | None:
+    """Resolve the primary Homestead owner user_id for ``merchant_id``."""
+    row = conn.execute(
+        """
+        SELECT user_id
+        FROM merchant_members
+        WHERE merchant_id = ?
+        ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
+                 created_at ASC, user_id ASC
+        LIMIT 1
+        """,
+        (int(merchant_id),),
+    ).fetchone()
+    return int(row["user_id"]) if row else None
+
+
+def _safe_iso_date(raw: str | None) -> str | None:
+    txt = str(raw or "").strip()[:10]
+    if len(txt) != 10:
+        return None
+    try:
+        date.fromisoformat(txt)
+        return txt
+    except ValueError:
+        return None
+
+
+def _safe_pm(raw: str | None) -> str:
+    clean = str(raw or "").strip().lower()
+    return clean if clean in HOMESTEAD_PAYMENT_METHODS else ""
+
+
+def _resolve_harvest_timestamp(
+    paid_at: str | None,
+    pickup_date: str | None,
+    harvest_date: str | None,
+    tz,
+) -> tuple[str, str, str, str]:
+    """Return (local_date, sort_ts, occurred_at, time_label) for a paid bird."""
+    target_tz = tz if tz is not None else timezone.utc
+    raw_paid = str(paid_at or "").strip()
+    if raw_paid:
+        try:
+            dt = datetime.fromisoformat(raw_paid.replace("Z", ""))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            local_dt = dt.astimezone(target_tz)
+            return (
+                local_dt.date().isoformat(),
+                local_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                dt.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds"),
+                local_dt.strftime("%-I:%M %p").lower(),
+            )
+        except ValueError:
+            pass
+    d_str = _safe_iso_date(pickup_date) or _safe_iso_date(harvest_date) or "1970-01-01"
+    return (
+        d_str,
+        f"{d_str}T12:00:00",
+        f"{d_str}T12:00:00",
+        "Farm pickup",
+    )
 
 
 def list_active_ledger_skus() -> list[dict]:
@@ -241,3 +320,232 @@ def get_ledger_sales_summary_by_year(
             "sale_count": cnt,
             "years": years,
         }
+
+
+def list_homestead_paid_transactions(
+    merchant_id: int | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    tz=None,
+) -> list[dict]:
+    """Read paid Homestead harvest & bulk sales live for Iron Ledger display (no DB duplication)."""
+    if not merchant_id:
+        return []
+    with get_connection() as conn:
+        owner_uid = _get_merchant_owner_user_id(conn, int(merchant_id))
+        if owner_uid is None:
+            return []
+
+        harvest_rows = conn.execute(
+            """
+            SELECT bh.id, bh.batch_id, bh.customer_id, bh.harvest_date, bh.head_count,
+                   bh.dressed_lbs, bh.actual_sale_price, bh.payment_status, bh.pickup_status,
+                   COALESCE(bh.payment_method, '') AS payment_method,
+                   COALESCE(bh.paid_at, '') AS paid_at,
+                   COALESCE(bh.notes, '') AS notes,
+                   b.name AS batch_name, b.sale_price_per_lb,
+                   COALESCE(b.pickup_date, '') AS pickup_date,
+                   COALESCE(c.name, '') AS customer_name
+            FROM batch_harvests bh
+            JOIN batches b ON b.id = bh.batch_id
+            LEFT JOIN customers c ON c.id = bh.customer_id
+            WHERE b.user_id = ?
+              AND COALESCE(bh.for_sale, 1) = 1
+              AND (
+                LOWER(COALESCE(bh.payment_status, '')) = 'paid'
+                OR LOWER(COALESCE(bh.pickup_status, '')) = 'picked_up'
+                OR bh.actual_sale_price IS NOT NULL
+              )
+            ORDER BY bh.id ASC
+            """,
+            (owner_uid,),
+        ).fetchall()
+
+        batch_sale_rows = conn.execute(
+            """
+            SELECT bs.id, bs.batch_id, bs.entry_date, bs.weight_lbs, bs.revenue,
+                   COALESCE(bs.payment_method, '') AS payment_method,
+                   COALESCE(bs.notes, '') AS notes,
+                   b.name AS batch_name
+            FROM batch_sales bs
+            JOIN batches b ON b.id = bs.batch_id
+            WHERE b.user_id = ? AND bs.allocation_type = 'Customer Sale'
+            ORDER BY bs.entry_date DESC, bs.id DESC
+            """,
+            (owner_uid,),
+        ).fetchall()
+
+    grouped_harvests: dict[tuple, dict] = {}
+    for r in harvest_rows:
+        local_date, sort_ts, occurred_at, time_label = _resolve_harvest_timestamp(
+            r["paid_at"], r["pickup_date"], r["harvest_date"], tz
+        )
+        if date_from and local_date < date_from:
+            continue
+        if date_to and local_date > date_to:
+            continue
+
+        pm = _safe_pm(r["payment_method"])
+        lbs = round(float(r["dressed_lbs"] or 0.0), 2)
+        if r["actual_sale_price"] is not None:
+            amt_dollars = float(r["actual_sale_price"] or 0.0)
+        else:
+            amt_dollars = round(lbs * float(r["sale_price_per_lb"] or 0.0), 2)
+        price_cents = int(round(max(0.0, amt_dollars) * 100))
+        qty = max(1, int(r["head_count"] or 1))
+        note = str(r["notes"] or "").strip()
+        bname = str(r["batch_name"] or "Batch")
+        item_name = f"{bname} · {lbs:.2f} lb" + (f" ({note})" if note else "")
+
+        cid = int(r["customer_id"]) if r["customer_id"] else None
+        if cid is not None:
+            key = ("harvest", int(r["batch_id"]), cid, local_date, pm)
+        else:
+            key = ("harvest_single", int(r["id"]))
+
+        grp = grouped_harvests.get(key)
+        if grp is None:
+            grp = {
+                "source": "homestead",
+                "record_type": "harvest",
+                "record_ids": [],
+                "batch_id": int(r["batch_id"]),
+                "batch_name": bname,
+                "customer_name": str(r["customer_name"] or "").strip() or "Walk-in / Unassigned",
+                "date_str": local_date,
+                "occurred_at": occurred_at,
+                "sort_ts": sort_ts,
+                "time_label": time_label,
+                "total_cents": 0,
+                "units": 0,
+                "total_lbs": 0.0,
+                "pay_method": pm,
+                "pay_label": pm.capitalize() if pm else "Untagged",
+                "payment_type": pm,
+                "status": "completed",
+                "cash_received_cents": None,
+                "change_cents": None,
+                "items": [],
+            }
+            grouped_harvests[key] = grp
+
+        grp["record_ids"].append(int(r["id"]))
+        grp["total_cents"] += price_cents
+        grp["units"] += qty
+        grp["total_lbs"] = round(grp["total_lbs"] + lbs, 2)
+        if sort_ts > grp["sort_ts"]:
+            grp["sort_ts"] = sort_ts
+            grp["occurred_at"] = occurred_at
+            grp["time_label"] = time_label
+        grp["items"].append(
+            {
+                "id": int(r["id"]),
+                "name_snapshot": item_name,
+                "quantity": qty,
+                "unit_price_cents": price_cents,
+                "subtotal_cents": price_cents,
+                "is_fee": False,
+            }
+        )
+
+    out: list[dict] = []
+    for grp in grouped_harvests.values():
+        grp["id"] = f"H-{grp['record_ids'][0]}"
+        grp["record_ids_csv"] = ",".join(str(x) for x in grp["record_ids"])
+        out.append(grp)
+
+    for r in batch_sale_rows:
+        d_str = _safe_iso_date(r["entry_date"]) or "1970-01-01"
+        if date_from and d_str < date_from:
+            continue
+        if date_to and d_str > date_to:
+            continue
+        pm = _safe_pm(r["payment_method"])
+        lbs = round(float(r["weight_lbs"] or 0.0), 2)
+        price_cents = int(round(max(0.0, float(r["revenue"] or 0.0)) * 100))
+        note = str(r["notes"] or "").strip()
+        bname = str(r["batch_name"] or "Batch")
+        item_name = f"{bname} · {lbs:.2f} lb bulk sale" + (f" ({note})" if note else "")
+        out.append(
+            {
+                "id": f"BS-{int(r['id'])}",
+                "source": "homestead",
+                "record_type": "batch_sale",
+                "record_ids": [int(r["id"])],
+                "record_ids_csv": str(int(r["id"])),
+                "batch_id": int(r["batch_id"]),
+                "batch_name": bname,
+                "customer_name": "Bulk Customer Sale",
+                "date_str": d_str,
+                "occurred_at": f"{d_str}T12:00:00",
+                "sort_ts": f"{d_str}T12:00:00",
+                "time_label": "Batch sale",
+                "total_cents": price_cents,
+                "units": 1,
+                "total_lbs": lbs,
+                "pay_method": pm,
+                "pay_label": pm.capitalize() if pm else "Untagged",
+                "payment_type": pm,
+                "status": "completed",
+                "cash_received_cents": None,
+                "change_cents": None,
+                "items": [
+                    {
+                        "id": int(r["id"]),
+                        "name_snapshot": item_name,
+                        "quantity": 1,
+                        "unit_price_cents": price_cents,
+                        "subtotal_cents": price_cents,
+                        "is_fee": False,
+                    }
+                ],
+            }
+        )
+
+    out.sort(key=lambda t: (t["sort_ts"], t["record_ids"][0]), reverse=True)
+    return out
+
+
+def update_homestead_transaction_payment_method(
+    merchant_id: int,
+    record_type: str,
+    record_ids: list[int],
+    payment_method: str | None,
+) -> int:
+    """Update payment_method on workspace-owned Homestead harvest or bulk sale rows."""
+    pm = normalize_homestead_payment_method(payment_method)
+    ids = [int(x) for x in record_ids if int(x) > 0]
+    if not ids:
+        raise ValueError("No transaction records selected.")
+
+    with get_connection() as conn:
+        owner_uid = _get_merchant_owner_user_id(conn, int(merchant_id))
+        if owner_uid is None:
+            raise ValueError("Workspace owner not found.")
+        marks = ",".join("?" * len(ids))
+        if record_type == "harvest":
+            cur = conn.execute(
+                f"""
+                UPDATE batch_harvests
+                SET payment_method = ?
+                WHERE id IN ({marks})
+                  AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+                """,
+                [pm, *ids, owner_uid],
+            )
+        elif record_type == "batch_sale":
+            cur = conn.execute(
+                f"""
+                UPDATE batch_sales
+                SET payment_method = ?
+                WHERE id IN ({marks})
+                  AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
+                """,
+                [pm, *ids, owner_uid],
+            )
+        else:
+            raise ValueError("Invalid Homestead record type.")
+        conn.commit()
+        if not cur.rowcount:
+            raise ValueError("Homestead transaction was not found in this workspace.")
+        return int(cur.rowcount)

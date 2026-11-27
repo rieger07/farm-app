@@ -10,7 +10,7 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-PAYMENT_METHODS = ("cash", "venmo", "paypal", "card")
+PAYMENT_METHODS = ("cash", "venmo", "paypal", "card", "check")
 
 
 def _normalize_payment_method(source: str, payment_type: str | None) -> str:
@@ -19,6 +19,8 @@ def _normalize_payment_method(source: str, payment_type: str | None) -> str:
         return "venmo"
     if "paypal" in pt:
         return "paypal"
+    if "check" in pt:
+        return "check"
     if "cash" in pt or (source == "cash" and not pt):
         return "cash"
     return "card"
@@ -523,6 +525,7 @@ def sales_summary(
                    CASE
                      WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%venmo%' THEN 'venmo'
                      WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%paypal%' THEN 'paypal'
+                     WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%check%' THEN 'check'
                      WHEN LOWER(COALESCE(s.payment_type, '')) LIKE '%cash%'
                           OR (s.source = 'cash' AND COALESCE(s.payment_type, '') = '') THEN 'cash'
                      ELSE 'card'
@@ -593,6 +596,12 @@ def sales_summary(
         "zettle_cash_cents": zettle_cash_cents,
         "quick_cash_count": quick_cash_count,
         "quick_cash_cents": quick_cash_cents,
+        "check_count": bucket(pay="check", col="n"),
+        "check_cents": bucket(pay="check", col="cents"),
+        "unset_count": 0,
+        "unset_cents": 0,
+        "homestead_count": 0,
+        "homestead_cents": 0,
         "zettle_count": bucket("zettle", col="n"),
         "zettle_cents": bucket("zettle", col="cents"),
     }
@@ -643,12 +652,17 @@ def _source_filter_clause(source: str | None, alias: str = "") -> str:
         return not_void + f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
     if source == "paypal":
         return not_void + f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%'"
+    if source in ("homestead", "unset"):
+        return " AND 1=0"
+    if source == "check":
+        return not_void + f" AND LOWER(COALESCE({p}payment_type, '')) LIKE '%check%'"
     if source == "card":
         return not_void + (
             f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%cash%'"
             f" OR ({p}source = 'cash' AND COALESCE({p}payment_type, '') = ''))"
             f" AND NOT (LOWER(COALESCE({p}payment_type, '')) LIKE '%venmo%'"
             f" OR LOWER(COALESCE({p}payment_type, '')) LIKE '%paypal%')"
+            f" AND NOT LOWER(COALESCE({p}payment_type, '')) LIKE '%check%'"
         )
     if source == "zettle":
         return not_void + f" AND {p}source = 'zettle'"

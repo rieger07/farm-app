@@ -167,6 +167,16 @@
           <option value="picked_up">Picked up</option>
         </select>
       </label>
+      <label class="full">Payment method
+        <select id="am-pay-method">
+          <option value="">— Untagged —</option>
+          <option value="cash">Cash</option>
+          <option value="venmo">Venmo</option>
+          <option value="paypal">PayPal</option>
+          <option value="card">Card</option>
+          <option value="check">Check</option>
+        </select>
+      </label>
       <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
         <div>
           <span style="font-size:13px">Balance due</span>
@@ -259,7 +269,11 @@ function renderTally(t) {
       badgeHtml = '<span class="pill green">Available</span>';
     } else {
       const pCls = e.pickup_status === 'picked_up' ? 'green' : 'amber';
-      const pLbl = e.pickup_status === 'picked_up' ? 'Picked up' : (e.payment_status === 'paid' ? 'Paid' : 'Assigned');
+      let pLbl = e.pickup_status === 'picked_up' ? 'Picked up' : (e.payment_status === 'paid' ? 'Paid' : 'Assigned');
+      if (e.payment_status === 'paid' || e.pickup_status === 'picked_up') {
+        const pmTxt = e.payment_method ? (e.payment_method.charAt(0).toUpperCase() + e.payment_method.slice(1)) : 'Untagged';
+        pLbl += ` · ${pmTxt}`;
+      }
       const tipTag = e.tip_diff > 0.005 ? ` <small class="inline" style="color:var(--green)">(+$${Number(e.tip_diff).toFixed(2)})</small>` : '';
       badgeHtml = `<b></b> <span class="pill ${pCls}" style="margin-left:4px">${pLbl}</span>${tipTag}`;
     }
@@ -341,6 +355,7 @@ function openAssignModal(bird) {
   document.getElementById('am-dep').value = Number(bird.deposit_paid || 0).toFixed(2);
   document.getElementById('am-pay').value = bird.payment_status || 'unpaid';
   document.getElementById('am-pickup').value = bird.pickup_status || 'unassigned';
+  document.getElementById('am-pay-method').value = bird.payment_method || '';
   document.getElementById('am-notes').value = bird.notes || '';
   document.getElementById('am-new-cust').hidden = true;
   syncAssignUI();
@@ -392,6 +407,7 @@ async function saveAssignment(ev) {
       deposit_paid: parseFloat(document.getElementById('am-dep').value || '0') || 0,
       payment_status: document.getElementById('am-pay').value,
       pickup_status: document.getElementById('am-pickup').value,
+      payment_method: document.getElementById('am-pay-method').value,
       notes: document.getElementById('am-notes').value.trim(),
     }),
   });

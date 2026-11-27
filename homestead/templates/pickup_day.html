@@ -123,11 +123,21 @@
 
     <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/settle" id="pu-form-{{ g.customer_id }}" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
       <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-        <label style="flex:1;min-width:120px;margin:0;font-size:12px">
+        <label style="flex:1;min-width:105px;margin:0;font-size:12px">
           Collected today ($)
           <input type="number" step="0.01" min="0" name="collected_today" id="pu-amt-{{ g.customer_id }}" value="{{ '%.2f'|format(g.balance_due) }}" style="margin-top:2px">
         </label>
-        <button class="btn primary" id="pu-sub-{{ g.customer_id }}" style="flex:1;min-width:150px">✓ Paid &amp; Picked Up</button>
+        <label style="min-width:105px;margin:0;font-size:12px">
+          Paid by
+          <select name="payment_method" id="pu-pm-{{ g.customer_id }}" style="margin-top:2px">
+            <option value="cash">Cash</option>
+            <option value="venmo">Venmo</option>
+            <option value="paypal">PayPal</option>
+            <option value="card">Card</option>
+            <option value="check">Check</option>
+          </select>
+        </label>
+        <button class="btn primary" id="pu-sub-{{ g.customer_id }}" style="flex:1;min-width:140px">✓ Paid &amp; Picked Up</button>
       </div>
     </form>
   </div>
@@ -146,7 +156,7 @@
 <details class="card table-card">
   <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Completed Pickups ({{ completed_groups|length }})</summary>
   <table>
-    <thead><tr><th>Customer</th><th>Birds</th><th class="num">Weight</th><th class="num">Total Paid</th><th></th></tr></thead>
+    <thead><tr><th>Customer</th><th>Birds</th><th class="num">Weight</th><th class="num">Total Paid</th><th>Payment</th><th></th></tr></thead>
     <tbody>
     {% for g in completed_groups %}
       <tr>
@@ -154,6 +164,19 @@
         <td>Bird {{ g.bird_nums_label }}</td>
         <td class="num">{{ '%.2f'|format(g.total_lbs) }} lb</td>
         <td class="num"><b>${{ '%.2f'|format(g.effective_total) }}</b></td>
+        <td>
+          <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/payment-method" style="display:flex;align-items:center;gap:6px;margin:0">
+            <select name="payment_method" style="padding:4px 6px;font-size:12px">
+              {% if not g.payment_method or g.payment_method == 'mixed' %}
+              <option value="" selected>{{ 'Mixed' if g.payment_method == 'mixed' else '— Untagged —' }}</option>
+              {% endif %}
+              {% for pm in payment_methods %}
+              <option value="{{ pm }}" {{ 'selected' if g.payment_method == pm }}>{{ pm|capitalize }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn sm">Save</button>
+          </form>
+        </td>
         <td class="num">
           <form method="post" action="/batches/{{ b.id }}/pickup/{{ g.customer_id }}/reopen" style="display:inline">
             <button class="link">Undo</button>
@@ -193,6 +216,7 @@ const BATCH_NAME = {{ b.name|tojson }};
 const VENMO_HANDLE = {{ (pickup_cfg.venmo_handle or '')|tojson }};
 const PAYPAL_HANDLE = {{ (pickup_cfg.paypal_handle or '')|tojson }};
 let activeQrCid = null;
+let activeQrProvider = 'cash';
 let activeQrUrl = '';
 
 function filterPickupCards() {
@@ -222,6 +246,7 @@ function recalcPickupCard(cid) {
 
 function openPickupQr(provider, cid, custName, defaultBirdNums) {
   activeQrCid = cid;
+  activeQrProvider = provider || 'cash';
   const cbs = Array.from(document.querySelectorAll('.pu-bird-cb-' + cid));
   const birdNums = cbs.length
     ? cbs.filter(c => c.checked).map(c => '#' + c.dataset.num).join(', ')
@@ -269,6 +294,8 @@ document.getElementById('pu-qr-copy').onclick = async function() {
 document.getElementById('pu-qr-done').onclick = function() {
   document.getElementById('pu-qrm').close();
   if (activeQrCid) {
+    const sel = document.getElementById('pu-pm-' + activeQrCid);
+    if (sel && activeQrProvider) sel.value = activeQrProvider;
     const f = document.getElementById('pu-form-' + activeQrCid);
     if (f) f.submit();
   }

@@ -226,6 +226,13 @@ class SchemaGuardrailsTest(unittest.TestCase):
             fe_cols = {r["name"] for r in c2.execute("PRAGMA table_info(farm_expenses)").fetchall()}
             self.assertIn("receipt_group_id", fe_cols)
 
+            bh_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_harvests)").fetchall()}
+            self.assertIn("payment_method", bh_cols)
+            self.assertIn("paid_at", bh_cols)
+
+            bs_cols = {r["name"] for r in c2.execute("PRAGMA table_info(batch_sales)").fetchall()}
+            self.assertIn("payment_method", bs_cols)
+
             b1 = c2.execute("SELECT picking_slug, starter_weeks, lifecycle_type FROM batches WHERE id = 1").fetchone()
             self.assertEqual(b1["picking_slug"], "live-turkey-2026")
             self.assertIsNotNone(b1["starter_weeks"])

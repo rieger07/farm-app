@@ -1218,6 +1218,146 @@ class FarmWebTest(unittest.TestCase):
             403,
         )
 
+    def test_homestead_payment_method_crud_pickup_harvest_and_batch_sales(self):
+        from homestead.db.batches import (
+            add_batch_harvest,
+            list_batch_harvests,
+            list_batch_sales,
+            save_batch,
+        )
+        from homestead.db.customers import save_customer, update_harvest_assignment
+        from homestead.db.backup import export_backup_json, import_backup_json
+
+        r_reg = self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_reg.status_code, 303)
+
+        bid = save_batch(
+            {
+                "name": "Pay Method Batch",
+                "species": "cornish cross",
+                "quantity": 10,
+                "start_date": "2026-09-01",
+                "days_to_birth": 0,
+                "weeks_to_proc": 8,
+                "feed_total": 10.0,
+                "sale_price_per_lb": 5.0,
+            },
+            user_id=1,
+        )
+        alice_id = save_customer(1, "Alice Pay", phone="5550001111")
+        bob_id = save_customer(1, "Bob Legacy", phone="5550002222")
+        h1 = add_batch_harvest(bid, "2026-10-25", 1, 5.0, 0.0, for_sale=True)
+        h2 = add_batch_harvest(bid, "2026-10-25", 1, 6.0, 0.0, for_sale=True)
+        update_harvest_assignment(bid, h1, customer_id=alice_id, for_sale=True)
+        # Legacy paid bird without payment method
+        update_harvest_assignment(
+            bid, h2, customer_id=bob_id, for_sale=True, actual_sale_price=32.0,
+            payment_status="paid", pickup_status="picked_up",
+        )
+
+        # 1. Pickup Day settle records payment_method & paid_at
+        r_settle = self.c.post(
+            f"/batches/{bid}/pickup/{alice_id}/settle",
+            data={"collected_today": "25.00", "payment_method": "venmo", "bird_ids": [str(h1)]},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_settle.status_code, 303)
+        hv_map = {int(h["id"]): h for h in list_batch_harvests(bid)}
+        self.assertEqual(hv_map[h1]["payment_method"], "venmo")
+        self.assertTrue(hv_map[h1]["paid_at"])
+        self.assertEqual(hv_map[h2]["payment_method"], "")
+
+        # 2. Pickup Day Completed Pickups inline CRUD re-tags payment_method (including legacy birds)
+        r_retag_bob = self.c.post(
+            f"/batches/{bid}/pickup/{bob_id}/payment-method",
+            data={"payment_method": "check"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_retag_bob.status_code, 303)
+        hv_map = {int(h["id"]): h for h in list_batch_harvests(bid)}
+        self.assertEqual(hv_map[h2]["payment_method"], "check")
+
+        # 3. Harvest Tally assign API persists payment_method edits
+        r_api = self.c.post(
+            f"/api/batches/{bid}/harvest/{h2}/assign",
+            json={
+                "for_sale": True,
+                "customer_id": bob_id,
+                "actual_sale_price": 32.0,
+                "deposit_paid": 0,
+                "payment_status": "paid",
+                "pickup_status": "picked_up",
+                "payment_method": "paypal",
+                "notes": "Paid via PayPal later",
+            },
+        )
+        self.assertEqual(r_api.status_code, 200)
+        hv_map = {int(h["id"]): h for h in list_batch_harvests(bid)}
+        self.assertEqual(hv_map[h2]["payment_method"], "paypal")
+
+        # 4. Manual batch_sales supports payment_method on creation & CRUD re-tagging, ignoring Home Freezer
+        self.c.post(
+            "/batches/log-sale",
+            data={
+                "batch_id": str(bid),
+                "entry_date": "2026-10-28",
+                "allocation_type": "sale",
+                "weight_lbs": "12.0",
+                "revenue": "60.00",
+                "payment_method": "check",
+                "next_url": f"/batches/{bid}",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/batches/log-sale",
+            data={
+                "batch_id": str(bid),
+                "entry_date": "2026-10-28",
+                "allocation_type": "freezer",
+                "weight_lbs": "8.0",
+                "revenue": "0",
+                "payment_method": "cash",
+                "next_url": f"/batches/{bid}",
+            },
+            follow_redirects=False,
+        )
+        bs_rows = list_batch_sales(bid)
+        cust_sale = next(s for s in bs_rows if s["allocation_type"] == "Customer Sale")
+        freezer_sale = next(s for s in bs_rows if s["allocation_type"] == "Home Freezer")
+        self.assertEqual(cust_sale["payment_method"], "check")
+        self.assertEqual(freezer_sale["payment_method"], "")
+
+        r_bs_edit = self.c.post(
+            f"/batches/{bid}/sales/{cust_sale['id']}/payment-method",
+            data={"payment_method": "card"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_bs_edit.status_code, 303)
+        self.assertEqual(
+            next(s["payment_method"] for s in list_batch_sales(bid) if s["id"] == cust_sale["id"]),
+            "card",
+        )
+
+        # 5. Pickup Day & Batch Detail pages render payment controls cleanly
+        pu_html = self.c.get(f"/batches/{bid}/pickup").text
+        self.assertIn(f"/batches/{bid}/pickup/{alice_id}/payment-method", pu_html)
+        bd_html = self.c.get(f"/batches/{bid}").text
+        self.assertIn(f"/batches/{bid}/sales/{cust_sale['id']}/payment-method", bd_html)
+
+        # 6. JSON backup export + import preserves payment_method and paid_at
+        raw_json = export_backup_json(user_id=1)
+        imported = import_backup_json(raw_json, replace_existing=True, user_id=1)
+        self.assertEqual(imported, 1)
+        from homestead.db.batches import list_batches
+        new_bid = list_batches(user_id=1)[0]["id"]
+        restored_cs = next(s for s in list_batch_sales(new_bid) if s["allocation_type"] == "Customer Sale")
+        self.assertEqual(restored_cs["payment_method"], "card")
+
 
 if __name__ == "__main__":
     unittest.main()
