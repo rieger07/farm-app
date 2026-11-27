@@ -798,12 +798,15 @@ async function handleReceiptFileChange(input) {
     } catch (_) {}
   }
   if (scanBtn) scanBtn.disabled = false;
+  const nextHint = FIN_OCR_ENABLED
+    ? 'click Scan & Auto-fill or Save receipt.'
+    : 'ready to upload with Save receipt.';
   if (res.compressed) {
     const kb = Math.max(1, Math.round(res.newSize / 1024));
-    setOcrStatus('Compressed image to ' + kb + ' KB JPEG — click Scan & Auto-fill or Save receipt.');
+    setOcrStatus('Compressed image to ' + kb + ' KB JPEG — ' + nextHint);
   } else {
     const kb = Math.max(1, Math.round(res.file.size / 1024));
-    setOcrStatus('Ready (' + kb + ' KB) — click Scan & Auto-fill or Save receipt.');
+    setOcrStatus('Ready (' + kb + ' KB) — ' + nextHint);
   }
 }
 
@@ -906,10 +909,16 @@ async function scanReceiptFile() {
     const fd = new FormData();
     fd.append('file', file, file.name || 'receipt.jpg');
     const resp = await fetch('/api/receipts/parse', { method: 'POST', body: fd });
+    if (resp.redirected && resp.url && resp.url.includes('/login')) {
+      throw new Error('Session expired — please refresh and sign in again.');
+    }
     let data = {};
     try { data = await resp.json(); } catch (_) {}
     if (!resp.ok) {
       throw new Error(data.error || ('Scan failed (HTTP ' + resp.status + ') — please enter details manually.'));
+    }
+    if (!data || typeof data !== 'object' || !Array.isArray(data.splits)) {
+      throw new Error('Unexpected response from receipt scanner — please enter details manually.');
     }
     applyParsedReceipt(data);
     const n = (data.splits || []).length;
