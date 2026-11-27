@@ -1106,6 +1106,151 @@ class WebTest(unittest.TestCase):
         self.assertEqual(next(s["on_hand"] for s in list_stock(1) if s["id"] == s2["id"]), s2_before_close)
         self.assertIn('id="qs-booth-bar"', c.get("/quick-sale").text)
 
+    def test_admin_and_settings_crud_cleanup(self):
+        from datetime import datetime, timedelta
+        from inventory import sync
+        from inventory.merchants import list_members
+        from shared.auth import get_user_by_username
+
+        admin = self.client("zach")
+        # 1. Seed a Zettle sync timestamp and check human-readable formatting + apostrophe safety on /admin
+        sync.save_connection(1, {"access_token": "tok_a", "refresh_token": "tok_r", "expires_in": 3600})
+        sync_iso = (datetime.utcnow() - timedelta(minutes=5)).isoformat(timespec="seconds")
+        conn = get_connection()
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state (merchant_id, key, value) VALUES (1, 'last_sync_at', ?)",
+            (sync_iso,),
+        )
+        conn.commit()
+        conn.close()
+
+        admin.post(
+            "/admin/merchants/create",
+            data={"merchant_name": "Zach's Bees", "owner_username": ""},
+        )
+        admin_html = admin.get("/admin").text
+        self.assertIn("5 min ago", admin_html)
+        self.assertNotIn(sync_iso, admin_html)
+        self.assertIn("Zach&#39;s Bees", admin_html)
+        self.assertIn('data-name="Zach&#39;s Bees"', admin_html)
+
+        # 2. Create user from /admin/users/create with initial workspace + role
+        r_cu = admin.post(
+            "/admin/users/create",
+            data={
+                "username": "ssmith",
+                "display_name": "SAAAAAAAM",
+                "password": "initial99",
+                "merchant_id": "1",
+                "role": "manager",
+            },
+        )
+        self.assertEqual(r_cu.status_code, 303)
+        self.assertIn("tab=users", r_cu.headers["location"])
+        ssmith = get_user_by_username("ssmith")
+        self.assertIsNotNone(ssmith)
+        self.assertEqual(
+            next(m["role"] for m in list_members(1) if m["user_id"] == ssmith["id"]),
+            "manager",
+        )
+
+        # 3. Inline role update via /admin/members/role and assign existing user via existing_user_id
+        r_role = admin.post(
+            "/admin/members/role",
+            data={"merchant_id": "1", "user_id": str(ssmith["id"]), "role": "staff"},
+        )
+        self.assertEqual(r_role.status_code, 303)
+        self.assertEqual(
+            next(m["role"] for m in list_members(1) if m["user_id"] == ssmith["id"]),
+            "staff",
+        )
+
+        admin.post(
+            "/admin/users/create",
+            data={"username": "alex", "display_name": "Alex", "password": "alexpass"},
+        )
+        alex = get_user_by_username("alex")
+        self.assertNotIn(alex["id"], {m["user_id"] for m in list_members(1)})
+        r_ex = admin.post(
+            "/admin/members/save",
+            data={"merchant_id": "1", "existing_user_id": str(alex["id"]), "role": "manager"},
+        )
+        self.assertEqual(r_ex.status_code, 303)
+        self.assertEqual(
+            next(m["role"] for m in list_members(1) if m["user_id"] == alex["id"]),
+            "manager",
+        )
+
+        # 4. Update user display name, password, and Super Admin flag via /admin/users/update
+        r_up = admin.post(
+            "/admin/users/update",
+            data={
+                "user_id": str(ssmith["id"]),
+                "display_name": "Sam Smith",
+                "new_password": "newpass99",
+                "is_admin": "1",
+            },
+        )
+        self.assertEqual(r_up.status_code, 303)
+        ssmith_after = get_user_by_username("ssmith")
+        self.assertEqual(ssmith_after["display_name"], "Sam Smith")
+        self.assertTrue(ssmith_after["is_admin"])
+        sam_client = TestClient(self.app, follow_redirects=False)
+        self.assertEqual(
+            sam_client.post("/login", data={"username": "ssmith", "password": "newpass99"}).status_code,
+            303,
+        )
+
+        # 5. Guardrails on /admin/users/delete and last Super Admin
+        zach = get_user_by_username("zach")
+        self.assertIn(
+            "You+cannot+delete+your+own+account",
+            admin.post("/admin/users/delete", data={"user_id": str(zach["id"])}).headers["location"],
+        )
+        self.assertIsNotNone(get_user_by_username("zach"))
+
+        # Demote ssmith then verify zach (last Super Admin) cannot revoke his own admin flag
+        admin.post(
+            "/admin/users/update",
+            data={"user_id": str(ssmith["id"]), "display_name": "Sam Smith", "new_password": ""},
+        )
+        self.assertIn(
+            "last+Super+Admin",
+            admin.post(
+                "/admin/users/update",
+                data={"user_id": str(zach["id"]), "display_name": zach["display_name"], "new_password": ""},
+            ).headers["location"],
+        )
+
+        # Delete ssmith cleanly
+        r_del = admin.post("/admin/users/delete", data={"user_id": str(ssmith["id"])})
+        self.assertEqual(r_del.status_code, 303)
+        self.assertIsNone(get_user_by_username("ssmith"))
+
+        # 6. Iron Ledger /settings workspace rename + inline role change + last-owner guard
+        r_ren = admin.post("/settings/merchant/rename", data={"name": "Cassberry Apiary"})
+        self.assertEqual(r_ren.status_code, 303)
+        self.assertIn("Cassberry Apiary", admin.get("/settings").text)
+
+        r_sr = admin.post(
+            "/settings/members/role",
+            data={"user_id": str(alex["id"]), "role": "staff"},
+        )
+        self.assertEqual(r_sr.status_code, 303)
+        self.assertEqual(
+            next(m["role"] for m in list_members(1) if m["user_id"] == alex["id"]),
+            "staff",
+        )
+        r_last = admin.post(
+            "/settings/members/role",
+            data={"user_id": str(zach["id"]), "role": "manager"},
+        )
+        self.assertIn("Cannot+demote+the+last+owner", r_last.headers["location"])
+        self.assertEqual(
+            next(m["role"] for m in list_members(1) if m["user_id"] == zach["id"]),
+            "owner",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

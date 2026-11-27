@@ -929,6 +929,85 @@ class FarmWebTest(unittest.TestCase):
         self.assertEqual(duck_after_undo["loose_eggs"], 8)
         self.assertEqual(duck_after_undo["linked_sku"]["on_hand"], 0.0)
 
+    def test_workspace_member_roles_and_admin_user_crud(self):
+        from homestead.database import get_user_by_username, list_batches
+        from homestead.db.workspaces import list_homestead_merchant_members
+
+        # Register first admin owner ("steve") and verify workspace/settings render
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"}, follow_redirects=False)
+        steve = get_user_by_username("steve")
+        self.c.post("/settings/members", data={
+            "username": "sarah", "display_name": "Sarah", "password": "secret", "role": "manager",
+        }, follow_redirects=False)
+        sarah = get_user_by_username("sarah")
+
+        # 1. Inline role change: promote sarah to owner, then back to staff
+        r_up = self.c.post("/settings/members/role", data={"user_id": str(sarah["id"]), "role": "owner"}, follow_redirects=False)
+        self.assertEqual(r_up.status_code, 303)
+        self.assertEqual(
+            next(m["role"] for m in list_homestead_merchant_members(1) if m["user_id"] == sarah["id"]),
+            "owner",
+        )
+        self.c.post("/settings/members/role", data={"user_id": str(sarah["id"]), "role": "staff"}, follow_redirects=False)
+        self.assertEqual(
+            next(m["role"] for m in list_homestead_merchant_members(1) if m["user_id"] == sarah["id"]),
+            "staff",
+        )
+
+        # 2. Cannot demote the last owner via /settings/members/role or /settings/members
+        r_guard = self.c.post("/settings/members/role", data={"user_id": str(steve["id"]), "role": "manager"}, follow_redirects=False)
+        self.assertIn("Cannot+demote+the+last+owner", r_guard.headers["location"])
+        r_guard2 = self.c.post("/settings/members", data={"username": "steve", "role": "manager"}, follow_redirects=False)
+        self.assertIn("Cannot+demote+the+last+owner", r_guard2.headers["location"])
+        self.assertEqual(
+            next(m["role"] for m in list_homestead_merchant_members(1) if m["user_id"] == steve["id"]),
+            "owner",
+        )
+
+        # 3. Admin user CRUD: create -> edit display name + reset password -> self-delete guard -> delete with batch cleanup
+        self.c.post("/settings/admin/users", data={
+            "username": "helper", "display_name": "Helpr", "password": "pass1",
+        }, follow_redirects=False)
+        helper = get_user_by_username("helper")
+        self.assertIsNotNone(helper)
+
+        r_edit = self.c.post(f"/settings/admin/users/{helper['id']}/update", data={
+            "display_name": "Farm Helper", "new_password": "pass22",
+        }, follow_redirects=False)
+        self.assertEqual(r_edit.status_code, 303)
+        self.assertEqual(get_user_by_username("helper")["display_name"], "Farm Helper")
+
+        c_helper = TestClient(app)
+        self.assertEqual(
+            c_helper.post("/login", data={"username": "helper", "password": "pass22"}, follow_redirects=False).status_code,
+            303,
+        )
+        # Create a batch owned by helper's own workspace so batch cleanup during delete is exercised
+        c_helper.post("/batches/save", data={
+            "name": "Helper Ducklings",
+            "species": "cornish cross",
+            "start_date": "2026-07-01",
+            "initial_quantity": "10",
+            "unit_cost": "4.00",
+            "avg_dressed_weight": "5.0",
+            "sale_price_per_lb": "6.00",
+            "processing_cost": "4.00",
+            "lifecycle_type": "live_arrival",
+            "next_url": "/batches",
+        }, follow_redirects=False)
+        self.assertTrue(any(b["name"] == "Helper Ducklings" for b in list_batches(user_id=helper["id"])))
+
+        # Admin cannot delete self
+        r_self_del = self.c.post(f"/settings/admin/users/{steve['id']}/delete", follow_redirects=False)
+        self.assertIn("You+cannot+delete+your+own+account", r_self_del.headers["location"])
+        self.assertIsNotNone(get_user_by_username("steve"))
+
+        # Delete helper cleanly along with helper's batches
+        r_del = self.c.post(f"/settings/admin/users/{helper['id']}/delete", follow_redirects=False)
+        self.assertEqual(r_del.status_code, 303)
+        self.assertIsNone(get_user_by_username("helper"))
+        self.assertEqual(list_batches(user_id=helper["id"]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

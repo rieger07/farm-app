@@ -1,7 +1,6 @@
 """Workspace settings, payment handles, marketplaces, members, and Zettle OAuth sync."""
 
 import asyncio
-from datetime import datetime
 import os
 import secrets
 from urllib.parse import quote_plus
@@ -17,16 +16,17 @@ from inventory.merchants import (
     get_payment_handles,
     list_members,
     remove_member,
+    rename_merchant,
+    update_member_role,
     update_payment_handles,
 )
 from inventory.stock import ITEM_TYPES, list_stock, set_item_type
 from inventory.web import (
     Ctx,
     _parse_dollars_to_cents,
-    local_tz,
+    format_last_sync,
     render,
     require,
-    to_local,
 )
 from shared.auth import create_user, get_user_by_username
 
@@ -46,38 +46,13 @@ def _redirect_uri(request: Request) -> str:
     return str(request.url_for("zettle_callback"))
 
 
-def _format_last_sync(iso_ts: str | None) -> str:
-    if not iso_ts:
-        return "Never"
-    try:
-        local_dt = to_local(iso_ts)
-        now_local = datetime.now(local_tz())
-        diff_sec = max(0, int((now_local - local_dt).total_seconds()))
-        if diff_sec < 60:
-            rel = "just now"
-        elif diff_sec < 3600:
-            rel = f"{diff_sec // 60} min ago"
-        elif diff_sec < 86400:
-            hrs = diff_sec // 3600
-            rel = f"{hrs} hr ago" if hrs == 1 else f"{hrs} hrs ago"
-        else:
-            days = diff_sec // 86400
-            rel = f"{days} day ago" if days == 1 else f"{days} days ago"
-        time_str = local_dt.strftime("%-I:%M %p")
-        if local_dt.date() != now_local.date():
-            time_str = f"{local_dt.strftime('%b %-d')}, {time_str}"
-        return f"{rel} ({time_str})"
-    except Exception:
-        return str(iso_ts)
-
-
 @router.get("/settings")
 def settings_page(request: Request, msg: str = "", ctx: Ctx = Depends(require("settings"))):
     status = sync.connection_status(ctx.merchant_id)
     return render(
         request, "settings.html", ctx, "settings",
         status=status,
-        last_sync_display=_format_last_sync(status.get("last_sync")),
+        last_sync_display=format_last_sync(status.get("last_sync")),
         configured=zettle.configured(),
         sub=billing.get_subscription(ctx.merchant_id),
         stripe_configured=billing.configured(),
@@ -156,6 +131,19 @@ def settings_item_type(
     )
 
 
+@router.post("/settings/merchant/rename")
+def settings_rename_merchant(
+    name: str = Form(...),
+    ctx: Ctx = Depends(require("settings")),
+):
+    try:
+        rename_merchant(ctx.merchant_id, name)
+        msg = f"Renamed workspace to {name.strip()}."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/settings?msg={quote_plus(msg)}", status_code=303)
+
+
 @router.post("/settings/members")
 def settings_add_member(
     username: str = Form(...),
@@ -168,7 +156,12 @@ def settings_add_member(
         clean_user = username.strip()
         existing = get_user_by_username(clean_user)
         if existing:
-            uid = existing["id"]
+            uid = int(existing["id"])
+            current_ids = {int(m["user_id"]) for m in list_members(ctx.merchant_id)}
+            if uid in current_ids:
+                update_member_role(ctx.merchant_id, uid, role, allow_zero_owners=False)
+            else:
+                add_member(ctx.merchant_id, uid, role)
         else:
             user = create_user(
                 clean_user,
@@ -176,9 +169,23 @@ def settings_add_member(
                 display_name=display_name,
                 is_admin=False,
             )
-            uid = user["id"]
-        add_member(ctx.merchant_id, uid, role)
+            uid = int(user["id"])
+            add_member(ctx.merchant_id, uid, role)
         msg = f"Saved member {clean_user} ({role})."
+    except ValueError as exc:
+        msg = f"Error: {exc}"
+    return RedirectResponse(f"/settings?msg={quote_plus(msg)}", status_code=303)
+
+
+@router.post("/settings/members/role")
+def settings_update_member_role(
+    user_id: int = Form(...),
+    role: str = Form(...),
+    ctx: Ctx = Depends(require("settings")),
+):
+    try:
+        update_member_role(ctx.merchant_id, user_id, role, allow_zero_owners=False)
+        msg = f"Updated member role to {role}."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(f"/settings?msg={quote_plus(msg)}", status_code=303)

@@ -21,9 +21,12 @@ from shared.auth import (
     get_user_by_username,
     hash_password,
     list_users,
+    set_user_admin,
+    update_user_display_name,
     update_user_password,
     verify_password,
 )
+from shared.bridge import delete_user_account
 from shared.db import (
     get_connection as _shared_get_connection,
     get_db_path,
@@ -226,30 +229,8 @@ def create_user(
         return user
 
 
-def delete_user(user_id: int) -> None:
-    with get_db_connection() as conn:
-        user_batches = conn.execute(
-            "SELECT id FROM batches WHERE user_id = ?", (int(user_id),)
-        ).fetchall()
-        for b in user_batches:
-            bid = int(b["id"])
-            conn.execute("DELETE FROM batch_sales WHERE batch_id = ?", (bid,))
-            conn.execute(
-                "DELETE FROM batch_harvests WHERE batch_id = ?", (bid,)
-            )
-            conn.execute("DELETE FROM batch_losses WHERE batch_id = ?", (bid,))
-        conn.execute("DELETE FROM batches WHERE user_id = ?", (int(user_id),))
-        conn.execute(
-            "DELETE FROM species_presets WHERE user_id = ?", (int(user_id),)
-        )
-        conn.execute(
-            "DELETE FROM user_settings WHERE user_id = ?", (int(user_id),)
-        )
-        conn.execute(
-            "DELETE FROM user_sessions WHERE user_id = ?", (int(user_id),)
-        )
-        conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
-        conn.commit()
+def delete_user(user_id: int, acting_user_id: int | None = None) -> None:
+    delete_user_account(user_id, acting_user_id=acting_user_id)
 
 
 def is_public_registration_enabled() -> bool:

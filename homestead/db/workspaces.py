@@ -12,6 +12,7 @@ from shared.merchants import (
     list_user_merchants as _shared_list_user_merchants,
     remove_member as _shared_remove_member,
     rename_merchant as _shared_rename_merchant,
+    update_member_role as _shared_update_member_role,
 )
 
 
@@ -130,6 +131,21 @@ def remove_homestead_merchant_member(merchant_id: int, user_id: int) -> None:
         _shared_remove_member(merchant_id, user_id)
     except ValueError as exc:
         raise ValueError("Cannot remove the last owner of the farm workspace.") from exc
+
+
+def update_homestead_merchant_member_role(
+    merchant_id: int, user_id: int, role: str
+) -> None:
+    try:
+        _shared_update_member_role(
+            merchant_id, user_id, role, allow_zero_owners=False
+        )
+    except ValueError as exc:
+        if "last owner" in str(exc).lower():
+            raise ValueError(
+                "Cannot demote the last owner of the farm workspace."
+            ) from exc
+        raise
 
 
 def rename_homestead_merchant(merchant_id: int, new_name: str) -> None:

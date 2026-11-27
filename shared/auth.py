@@ -175,6 +175,29 @@ def authenticate_user(username: str, password: str) -> dict | None:
         conn.close()
 
 
+def update_user_display_name(user_id: int, display_name: str) -> str:
+    """Update a user's display name and return the cleaned value."""
+    clean = str(display_name or "").strip()[:120]
+    if not clean:
+        raise ValueError("Display name cannot be empty.")
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("User not found.")
+        conn.execute(
+            "UPDATE users SET display_name = ? WHERE id = ?",
+            (clean, int(user_id)),
+        )
+        conn.commit()
+        return clean
+    finally:
+        conn.close()
+
+
 def update_user_password(user_id: int, new_password: str) -> None:
     """Update a user's stored password hash and salt."""
     if len(str(new_password)) < 4:
