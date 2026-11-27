@@ -2243,6 +2243,378 @@ class FarmWebTest(unittest.TestCase):
             404,
         )
 
+    def test_perennial_herds_breeding_pigs_alpacas_feed_hay_ocr_and_litter(self):
+        from datetime import date
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import httpx
+
+        from homestead.db.herds import get_herd, list_herd_animals, list_herd_feed_logs, list_herds
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # 1. Create Breeding Pigs & Alpaca Herd
+        r_pig = self.c.post(
+            "/herds/save",
+            data={
+                "name": "Breeding Pigs",
+                "species": "pig",
+                "herd_type": "breeding",
+                "head_count": "2",
+                "notes": "Kunekune breeding pair",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_pig.status_code, 303)
+
+        r_alp = self.c.post(
+            "/herds/save",
+            data={
+                "name": "Alpaca Herd",
+                "species": "alpaca",
+                "herd_type": "fiber",
+                "head_count": "2",
+                "notes": "Annual shearing fiber flock",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_alp.status_code, 303)
+
+        herds = list_herds(1)
+        self.assertEqual(len(herds), 2)
+        by_name = {h["name"]: h for h in herds}
+        pig_id = by_name["Breeding Pigs"]["id"]
+        alpaca_id = by_name["Alpaca Herd"]["id"]
+
+        # 2. Manage named animal roster & retire Cocoa on Alpaca Herd
+        self.c.post(
+            f"/herds/{pig_id}/animals/save",
+            data={
+                "name": "Penelope",
+                "sex_role": "sow",
+                "color": "Black & White",
+                "birth_year": "2024",
+                "notes": "Breeding sow",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{pig_id}/animals/save",
+            data={
+                "name": "Wilbur",
+                "sex_role": "boar",
+                "color": "Ginger",
+                "birth_year": "2024",
+                "notes": "Breeding boar",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alpaca_id}/animals/save",
+            data={
+                "name": "Luna",
+                "sex_role": "female",
+                "color": "White",
+                "birth_year": "2022",
+                "notes": "Fine white fleece",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alpaca_id}/animals/save",
+            data={
+                "name": "Cocoa",
+                "sex_role": "gelding",
+                "color": "Dark Chocolate",
+                "birth_year": "2021",
+                "notes": "Retired",
+            },
+            follow_redirects=False,
+        )
+
+        alp_animals = list_herd_animals(1, herd_id=alpaca_id, include_inactive=True)
+        self.assertEqual(len(alp_animals), 2)
+        cocoa = next(a for a in alp_animals if a["name"] == "Cocoa")
+        r_tog = self.c.post(
+            f"/herds/{alpaca_id}/animals/{cocoa['id']}/toggle",
+            data={"active": "0"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_tog.status_code, 303)
+        alp_after_retire = get_herd(1, alpaca_id)
+        self.assertEqual(alp_after_retire["active_animal_count"], 1)
+        self.assertEqual(alp_after_retire["effective_head_count"], 1)
+
+        # 3. Log split receipt: 50/50 Hay Bales across both herds + signed Grain Bag refund for Pigs
+        today = date.today()
+        today_iso = today.isoformat()
+        yr = today.year
+        r_rec = self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": today_iso,
+                "vendor": "Local Feed Mill",
+                "receipt_url": "https://drive.google.com/file/d/herd-receipt-1/view",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "herd_feed",
+                            "feed_category": "hay",
+                            "unit": "bales",
+                            "quantity": 10,
+                            "weight_lbs": 500,
+                            "amount": 95.00,
+                            "notes": "First cutting square bales",
+                            "allocations": [
+                                {"herd_id": pig_id, "weight": 1},
+                                {"herd_id": alpaca_id, "weight": 1},
+                            ],
+                        },
+                        {
+                            "kind": "herd_feed",
+                            "feed_category": "grain",
+                            "unit": "bags",
+                            "quantity": -1,
+                            "weight_lbs": -50,
+                            "amount": -18.00,
+                            "notes": "Refund: torn pig grower bag",
+                            "herd_id": str(pig_id),
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_rec.status_code, 303)
+
+        pig_logs = list_herd_feed_logs(1, herd_id=pig_id)
+        alp_logs = list_herd_feed_logs(1, herd_id=alpaca_id)
+        self.assertEqual(len(pig_logs), 2)
+        self.assertEqual(len(alp_logs), 1)
+        self.assertAlmostEqual(sum(x["cost_total"] for x in pig_logs), 29.50, places=2)
+        self.assertAlmostEqual(alp_logs[0]["cost_total"], 47.50, places=2)
+        self.assertAlmostEqual(alp_logs[0]["quantity"], 5.0, places=2)
+        self.assertAlmostEqual(alp_logs[0]["weight_lbs"], 250.0, places=2)
+        self.assertEqual(alp_logs[0]["feed_category"], "hay")
+        self.assertEqual(alp_logs[0]["unit"], "bales")
+        self.assertEqual(alp_logs[0]["receipt_url"], "https://drive.google.com/file/d/herd-receipt-1/view")
+        self.assertTrue(pig_logs[0]["receipt_group_id"])
+        self.assertEqual(pig_logs[0]["receipt_group_id"], alp_logs[0]["receipt_group_id"])
+
+        # 4. Verify /herds UI KPIs, Flocks & Herds subnav on /herds & /eggs, Tax Books & CSV
+        herds_html = self.c.get(f"/herds?herd_id={pig_id}").text
+        self.assertIn("Flocks &amp; Herds", herds_html)
+        self.assertIn("Eggs &amp; Laying Flock", herds_html)
+        self.assertIn("Perennial Herds", herds_html)
+        self.assertIn("Penelope", herds_html)
+        self.assertIn("Wilbur", herds_html)
+        self.assertIn("$29.50", herds_html)
+        self.assertIn(f"/batches?from_herd={pig_id}", herds_html)
+
+        eggs_html = self.c.get("/eggs").text
+        self.assertIn("Eggs &amp; Laying Flock", eggs_html)
+        self.assertIn("Perennial Herds", eggs_html)
+
+        fin_html = self.c.get(f"/financials?tab=taxes&year={yr}&source=feed").text
+        self.assertIn("Herd Feed / Hay", fin_html)
+        self.assertIn("FIN_HERDS", fin_html)
+        self.assertIn("$77.00", fin_html)
+
+        csv_resp = self.c.get(f"/financials/expenses.csv?year={yr}")
+        self.assertEqual(csv_resp.status_code, 200)
+        self.assertIn("Herd Feed", csv_resp.text)
+
+        # 5. Edit single herd_feed entry & preserve existing Drive receipt URL
+        alp_entry_id = alp_logs[0]["id"]
+        api_single = self.c.get(f"/api/receipts/entry?source_key=herd_feed&entry_id={alp_entry_id}")
+        self.assertEqual(api_single.status_code, 200)
+        single_data = api_single.json()
+        self.assertEqual(single_data["edit_mode"], "single")
+        self.assertEqual(single_data["receipt_url"], "https://drive.google.com/file/d/herd-receipt-1/view")
+        self.assertEqual(single_data["lines"][0]["kind"], "herd_feed")
+        self.assertEqual(single_data["lines"][0]["herd_id"], alpaca_id)
+
+        r_edit_single = self.c.post(
+            "/expenses/receipt",
+            data={
+                "edit_mode": "single",
+                "orig_source_key": "herd_feed",
+                "orig_entry_id": str(alp_entry_id),
+                "receipt_date": today_iso,
+                "vendor": "Local Feed Mill",
+                "lines_json": json.dumps(
+                    [
+                        {
+                            "kind": "herd_feed",
+                            "herd_id": str(alpaca_id),
+                            "feed_category": "hay",
+                            "unit": "bales",
+                            "quantity": 6,
+                            "weight_lbs": 300,
+                            "amount": 55.00,
+                            "notes": "Updated alpaca hay share",
+                        }
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_edit_single.status_code, 303)
+        alp_after_edit = list_herd_feed_logs(1, herd_id=alpaca_id)
+        self.assertEqual(len(alp_after_edit), 1)
+        self.assertAlmostEqual(alp_after_edit[0]["cost_total"], 55.00, places=2)
+        self.assertAlmostEqual(alp_after_edit[0]["quantity"], 6.0, places=2)
+        self.assertEqual(
+            alp_after_edit[0]["receipt_url"],
+            "https://drive.google.com/file/d/herd-receipt-1/view",
+        )
+
+        # 6. Mock Gemini Vision OCR returning herd_feed hay + grain refund
+        class _FakeResp:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+                self.text = json.dumps(payload)
+
+            def json(self):
+                return self._payload
+
+        mock_herd_ocr = {
+            "date": today_iso,
+            "vendor": "Local Feed Mill",
+            "receipt_total": 77.00,
+            "tax_charged": 0.0,
+            "mixed_use_warning": False,
+            "splits": [
+                {
+                    "split_type": "herd_feed",
+                    "amount": 95.00,
+                    "notes": "10 square hay bales",
+                    "schedule_f_category": None,
+                    "feed_type": "Timothy Grass Hay",
+                    "feed_category": "hay",
+                    "unit": "bales",
+                    "quantity": 10,
+                    "bags": None,
+                    "total_weight_lb": 500,
+                    "herd_hint": "Breeding Pigs, Alpaca Herd",
+                },
+                {
+                    "split_type": "herd_feed",
+                    "amount": -18.00,
+                    "notes": "Refund damaged pig grower bag",
+                    "schedule_f_category": None,
+                    "feed_type": "Pig Grower",
+                    "feed_category": "grain",
+                    "unit": "bags",
+                    "quantity": 1,
+                    "bags": 1,
+                    "total_weight_lb": 50,
+                    "herd_hint": "Breeding Pigs",
+                },
+            ],
+        }
+
+        async def _fake_post(self_client, url, **kwargs):
+            return _FakeResp(
+                200,
+                {
+                    "candidates": [
+                        {"content": {"parts": [{"text": json.dumps(mock_herd_ocr)}]}}
+                    ]
+                },
+            )
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "secret-gemini-test-key"}):
+            with patch.object(httpx.AsyncClient, "post", _fake_post):
+                r_ocr = self.c.post(
+                    "/api/receipts/parse",
+                    files={"file": ("hay.jpg", b"\xff\xd8\xff\xe0imgbytes", "image/jpeg")},
+                )
+        self.assertEqual(r_ocr.status_code, 200)
+        ocr_data = r_ocr.json()
+        self.assertEqual(ocr_data["splits"][0]["split_type"], "herd_feed")
+        self.assertEqual(ocr_data["splits"][0]["feed_category"], "hay")
+        self.assertEqual(ocr_data["splits"][0]["unit"], "bales")
+        self.assertEqual(ocr_data["splits"][0]["quantity"], 10)
+        self.assertEqual(ocr_data["splits"][0]["total_weight_lb"], 500)
+        self.assertEqual(ocr_data["splits"][0]["herd_hint"], "Breeding Pigs, Alpaca Herd")
+        self.assertAlmostEqual(ocr_data["splits"][1]["amount"], -18.00, places=2)
+        self.assertLess(ocr_data["splits"][1]["quantity"], 0)
+        self.assertLess(ocr_data["splits"][1]["total_weight_lb"], 0)
+
+        # 7. Pig Litter Batch helper pre-fills /batches?from_herd=<pig_id>
+        batches_litter = self.c.get(f"/batches?from_herd={pig_id}")
+        self.assertEqual(batches_litter.status_code, 200)
+        self.assertIn("openNewBatchModal", batches_litter.text)
+        self.assertIn("From Breeding Pigs", batches_litter.text)
+
+        # 8. Role & workspace ownership guards (staff 200 GET / 403 POST, other 404)
+        self.c.post(
+            "/settings/members",
+            data={"username": "helper", "display_name": "Helper", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "helper", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(c_staff.get("/herds").status_code, 200)
+        self.assertEqual(
+            c_staff.post("/herds/save", data={"name": "Nope", "species": "pig"}, follow_redirects=False).status_code,
+            403,
+        )
+        self.assertEqual(
+            c_staff.post(
+                f"/herds/{pig_id}/animals/save",
+                data={"name": "Nope", "sex_role": "sow"},
+                follow_redirects=False,
+            ).status_code,
+            403,
+        )
+
+        self.c.post(
+            "/settings/admin/users",
+            data={"username": "other", "display_name": "Other Farm", "password": "secret"},
+            follow_redirects=False,
+        )
+        c_other = TestClient(app)
+        c_other.post("/login", data={"username": "other", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(
+            c_other.post(
+                f"/herds/{pig_id}/animals/save",
+                data={"name": "Intruder", "sex_role": "sow"},
+                follow_redirects=False,
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            c_other.post(
+                "/expenses/receipt",
+                data={
+                    "receipt_date": today_iso,
+                    "vendor": "Intruder",
+                    "lines_json": json.dumps(
+                        [
+                            {
+                                "kind": "herd_feed",
+                                "herd_id": str(pig_id),
+                                "feed_category": "hay",
+                                "unit": "bales",
+                                "quantity": 1,
+                                "amount": 10.0,
+                            }
+                        ]
+                    ),
+                },
+                follow_redirects=False,
+            ).status_code,
+            404,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

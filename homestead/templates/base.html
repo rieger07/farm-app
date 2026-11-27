@@ -47,6 +47,12 @@
       <span class="pill green">{{ active_count }} active batch{{ '' if active_count == 1 else 'es' }}</span>
     </header>
     <div class="content">
+      {% if sub_active in ('eggs', 'herds') %}
+      <div class="subnav-bar" role="navigation" aria-label="Flock and herd sections">
+        <a href="/eggs" class="subnav-pill {{ 'on' if sub_active == 'eggs' }}">Eggs &amp; Laying Flock</a>
+        <a href="/herds" class="subnav-pill {{ 'on' if sub_active == 'herds' }}">Perennial Herds</a>
+      </div>
+      {% endif %}
       {% if sub_active in ('feed', 'financials', 'settings') %}
       <div class="subnav-bar" role="navigation" aria-label="Farm management sections">
         <a href="/feed" class="subnav-pill {{ 'on' if sub_active == 'feed' }}">Feed Schedule</a>

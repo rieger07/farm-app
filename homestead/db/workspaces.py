@@ -17,9 +17,9 @@ from shared.merchants import (
 
 
 HOMESTEAD_ROLE_PAGES = {
-    "owner": {"radar", "batches", "eggs", "customers", "feed", "financials", "settings"},
-    "manager": {"radar", "batches", "eggs", "customers", "feed", "financials"},
-    "staff": {"radar", "batches", "eggs"},
+    "owner": {"radar", "batches", "eggs", "herds", "customers", "feed", "financials", "settings"},
+    "manager": {"radar", "batches", "eggs", "herds", "customers", "feed", "financials"},
+    "staff": {"radar", "batches", "eggs", "herds"},
 }
 
 

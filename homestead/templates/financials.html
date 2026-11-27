@@ -440,6 +440,7 @@
 <script>
 const FIN_BATCHES = {{ all_batches|tojson }};
 const FIN_RECEIPT_BATCHES = {{ receipt_batches|tojson }};
+const FIN_HERDS = {{ all_herds|tojson }};
 const FIN_TODAY = {{ today_iso|tojson }};
 const FIN_BAG_WT = {{ bag_weight|int }};
 const FIN_LAYER_CFG = {{ layer_cfg|tojson }};
@@ -450,6 +451,7 @@ const FIN_PRESET = {
   autoOpen: {{ auto_open_receipt|tojson }},
   mode: {{ preset_mode|tojson }},
   batchId: {{ preset_batch_id|tojson }},
+  herdId: {{ preset_herd_id|tojson }},
   species: {{ preset_species|tojson }}
 };
 
@@ -493,7 +495,7 @@ function filterTaxLedger() {
     const src = row.dataset.src || '';
     const lineCode = row.dataset.line || '';
     const srcOk = finSrcFilter === 'all'
-      || (finSrcFilter === 'feed' && (src === 'batch_feed' || src === 'layer_feed'))
+      || (finSrcFilter === 'feed' && (src === 'batch_feed' || src === 'layer_feed' || src === 'herd_feed'))
       || (finSrcFilter === 'capital' && lineCode === 'Line 14')
       || src === finSrcFilter;
     const missOk = !finMissingOnly || row.dataset.missing === '1';
@@ -582,6 +584,11 @@ function syncSplitRefundUi(card) {
   if (bagsLbl) bagsLbl.textContent = (isRefund ? 'Returned bags (' : 'Bags (') + FIN_BAG_WT + ' lb)';
   const lbsLbl = card.querySelector('.sl-lbs-label');
   if (lbsLbl) lbsLbl.textContent = isRefund ? 'Returned weight (lb)' : 'Total weight (lb)';
+  const unit = (card.querySelector('.sl-hunit') || {}).value || 'bags';
+  const hqtyLbl = card.querySelector('.sl-hqty-label');
+  if (hqtyLbl) hqtyLbl.textContent = (isRefund ? 'Returned ' : 'Qty (') + unit + (isRefund ? '' : ')');
+  const hlbsLbl = card.querySelector('.sl-hlbs-label');
+  if (hlbsLbl) hlbsLbl.textContent = isRefund ? 'Returned weight (lb)' : 'Est. weight (lb)';
 }
 
 function toggleSplitRefund(cb) {
@@ -594,6 +601,7 @@ function toggleSplitRefund(cb) {
   }
   syncSplitRefundUi(card);
   updateBatchAllocPreview(card);
+  updateHerdAllocPreview(card);
   updateAllocBar();
 }
 
@@ -608,7 +616,10 @@ function onSplitAmountInput(input) {
       syncSplitRefundUi(card);
     }
   }
-  if (card) updateBatchAllocPreview(card);
+  if (card) {
+    updateBatchAllocPreview(card);
+    updateHerdAllocPreview(card);
+  }
   updateAllocBar();
 }
 
@@ -872,6 +883,200 @@ function onBatchCustomWeightInput(input, sid) {
   updateBatchAllocPreview(card);
 }
 
+function getCardSelectedHerdIds(card) {
+  const set = card._selectedHerds instanceof Set ? card._selectedHerds : new Set();
+  return Array.from(set).filter(id => FIN_HERDS.some(h => String(h.id) === String(id)));
+}
+
+function getCardHerdAllocMode(card) {
+  const sel = card.querySelector('.sl-herd-alloc-mode');
+  return (sel && sel.value) || card._herdAllocMode || 'head';
+}
+
+function herdHeadWeight(h) {
+  return Math.max(1, Number(h.effective_head_count || h.head_count || 1));
+}
+
+function computeCardHerdWeights(card, selectedIds, mode) {
+  const herds = selectedIds
+    .map(id => FIN_HERDS.find(h => String(h.id) === String(id)))
+    .filter(Boolean);
+  if (mode === 'even') return herds.map(() => 1);
+  if (mode === 'custom') {
+    const map = card._herdCustomWeights || {};
+    return herds.map(h => Math.max(0, Number(map[String(h.id)] || 0)));
+  }
+  return herds.map(h => herdHeadWeight(h));
+}
+
+function seedHerdCustomWeightsIfMissing(card, selectedIds) {
+  card._herdCustomWeights = card._herdCustomWeights || {};
+  const herds = selectedIds
+    .map(id => FIN_HERDS.find(h => String(h.id) === String(id)))
+    .filter(Boolean);
+  if (!herds.some(h => card._herdCustomWeights[String(h.id)] === undefined)) return;
+  const qty = Math.abs(parseFloat((card.querySelector('.sl-hqty') || {}).value || '0') || 0);
+  const hw = herds.map(h => herdHeadWeight(h));
+  const defaults = qty > 0 ? jsAllocateSignedTotal(qty, hw, 2) : jsAllocateSignedTotal(100, hw, 1);
+  herds.forEach((h, i) => {
+    if (card._herdCustomWeights[String(h.id)] === undefined) {
+      card._herdCustomWeights[String(h.id)] = defaults[i];
+    }
+  });
+}
+
+function renderCardHerdPicker(card) {
+  const wrap = card.querySelector('.sl-herd-picker');
+  if (!wrap) return;
+  const kind = (card.querySelector('.sl-kind') || {}).value || 'general';
+  const show = kind === 'herd_feed' && FIN_HERDS.length > 0;
+  wrap.hidden = !show;
+  if (!show) return;
+
+  const selectedIds = getCardSelectedHerdIds(card);
+  const mode = getCardHerdAllocMode(card);
+  card._herdAllocMode = mode;
+  if (selectedIds.length >= 2 && mode === 'custom') {
+    seedHerdCustomWeightsIfMissing(card, selectedIds);
+  }
+
+  const chipsHtml = FIN_HERDS.map(h => {
+    const hid = String(h.id);
+    const checked = selectedIds.includes(hid);
+    const customIn = (checked && selectedIds.length >= 2 && mode === 'custom')
+      ? '<input type="number" class="batch-custom-in" step="0.1" min="0" value="' +
+        escapeHtml(String((card._herdCustomWeights || {})[hid] ?? 0)) +
+        '" aria-label="Split weight for ' + escapeHtml(h.name) +
+        '" oninput="onHerdCustomWeightInput(this, \'' + hid + '\')">'
+      : '';
+    return (
+      '<span class="batch-chip' + (checked ? ' on' : '') + '">' +
+        '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0">' +
+          '<input type="checkbox" class="sl-herd-cb" value="' + hid + '"' + (checked ? ' checked' : '') + ' onchange="onHerdChipToggle(this)">' +
+          '<span>' + escapeHtml(h.name) + ' <small>(' + h.effective_head_count + ' hd)</small></span>' +
+        '</label>' +
+        customIn +
+      '</span>'
+    );
+  }).join('');
+
+  let allocBarHtml = '';
+  if (selectedIds.length >= 2) {
+    const unit = (card.querySelector('.sl-hunit') || {}).value || 'bags';
+    allocBarHtml =
+      '<div class="batch-alloc-bar">' +
+        '<select class="sl-herd-alloc-mode" onchange="onHerdAllocModeChange(this)">' +
+          '<option value="head"' + (mode === 'head' ? ' selected' : '') + '>Auto by headcount</option>' +
+          '<option value="even"' + (mode === 'even' ? ' selected' : '') + '>Even split</option>' +
+          '<option value="custom"' + (mode === 'custom' ? ' selected' : '') + '>Custom ' + escapeHtml(unit) + ' / ratio</option>' +
+        '</select>' +
+        '<span class="sl-herd-alloc-preview"></span>' +
+      '</div>';
+  }
+
+  wrap.innerHTML =
+    '<div class="mb-sm"><small>Herds (select 1 or more)</small></div>' +
+    '<div class="batch-alloc-wrap">' + chipsHtml + '</div>' +
+    allocBarHtml;
+
+  if (selectedIds.length >= 2) {
+    updateHerdAllocPreview(card);
+  }
+}
+
+function updateHerdAllocPreview(card) {
+  const prevEl = card && card.querySelector('.sl-herd-alloc-preview');
+  if (!prevEl) return;
+  const selectedIds = getCardSelectedHerdIds(card);
+  if (selectedIds.length < 2) {
+    prevEl.textContent = '';
+    return;
+  }
+  const mode = getCardHerdAllocMode(card);
+  const weights = computeCardHerdWeights(card, selectedIds, mode);
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  if (wSum <= 0) {
+    prevEl.textContent = 'Enter a positive weight to preview split.';
+    return;
+  }
+  const amt = effectiveLineAmount(card);
+  const amtShares = amt !== 0 ? jsAllocateSignedTotal(amt, weights, 2) : [];
+  const rawQty = Math.abs(parseFloat((card.querySelector('.sl-hqty') || {}).value || '0') || 0);
+  const signedQty = amt < 0 ? (rawQty ? -rawQty : 0) : rawQty;
+  const qtyShares = signedQty !== 0 ? jsAllocateSignedTotal(signedQty, weights, 2) : [];
+  const unit = (card.querySelector('.sl-hunit') || {}).value || 'bags';
+
+  const parts = selectedIds.map((hid, idx) => {
+    const h = FIN_HERDS.find(x => String(x.id) === String(hid));
+    const hName = h ? h.name : ('Herd #' + hid);
+    const pct = Math.round((weights[idx] / wSum) * 100);
+    const bits = [pct + '%'];
+    if (amtShares.length) bits.push(fmtSignedMoney(amtShares[idx]));
+    if (qtyShares.length) bits.push(qtyShares[idx] + ' ' + unit);
+    return hName + ': ' + bits.join(' · ');
+  });
+  prevEl.textContent = parts.join(' | ');
+}
+
+function onHerdChipToggle(cb) {
+  const card = cb.closest('.split-line');
+  if (!card) return;
+  card._selectedHerds = card._selectedHerds instanceof Set ? card._selectedHerds : new Set();
+  const hid = String(cb.value || '');
+  if (cb.checked) card._selectedHerds.add(hid);
+  else {
+    card._selectedHerds.delete(hid);
+    if (card._herdCustomWeights) delete card._herdCustomWeights[hid];
+  }
+  if (card._herdCustomWeights && getCardHerdAllocMode(card) === 'custom') {
+    card._herdCustomWeights = {};
+  }
+  renderCardHerdPicker(card);
+}
+
+function onHerdAllocModeChange(sel) {
+  const card = sel.closest('.split-line');
+  if (!card) return;
+  card._herdAllocMode = sel.value || 'head';
+  if (card._herdAllocMode === 'custom') {
+    card._herdCustomWeights = {};
+    seedHerdCustomWeightsIfMissing(card, getCardSelectedHerdIds(card));
+  }
+  renderCardHerdPicker(card);
+}
+
+function onHerdCustomWeightInput(input, hid) {
+  const card = input.closest('.split-line');
+  if (!card) return;
+  card._herdCustomWeights = card._herdCustomWeights || {};
+  card._herdCustomWeights[String(hid)] = Math.max(0, parseFloat(input.value || '0') || 0);
+  updateHerdAllocPreview(card);
+}
+
+function syncHerdWeightEstimate(card, forceRecalc) {
+  const unit = (card.querySelector('.sl-hunit') || {}).value || 'bags';
+  const qty = Math.abs(parseFloat((card.querySelector('.sl-hqty') || {}).value || '0') || 0);
+  const lbsEl = card.querySelector('.sl-hlbs');
+  if (lbsEl && (forceRecalc || lbsEl.dataset.manual !== '1')) {
+    if (unit === 'lbs') lbsEl.value = qty.toFixed(1).replace(/\.0$/, '');
+    else if (unit === 'bales') lbsEl.value = (qty * 45).toFixed(1).replace(/\.0$/, '');
+    else lbsEl.value = (qty * FIN_BAG_WT).toFixed(1).replace(/\.0$/, '');
+  }
+  syncSplitRefundUi(card);
+  updateHerdAllocPreview(card);
+}
+
+function onHerdCategoryChange(sel) {
+  const card = sel.closest('.split-line');
+  if (!card) return;
+  const unitSel = card.querySelector('.sl-hunit');
+  if (unitSel) {
+    if (sel.value === 'hay' && unitSel.value === 'bags') unitSel.value = 'bales';
+    else if (sel.value !== 'hay' && unitSel.value === 'bales') unitSel.value = 'bags';
+  }
+  syncHerdWeightEstimate(card, false);
+}
+
 function addSplitLine(opts) {
   opts = opts || {};
   lineSeq += 1;
@@ -913,6 +1118,15 @@ function addSplitLine(opts) {
     if (elig.length === 1) card._selectedBatches.add(String(elig[0].id));
   }
   card._allocMode = opts.allocMode || 'demand';
+  card._selectedHerds = new Set();
+  if (Array.isArray(opts.herdIds) && opts.herdIds.length) {
+    opts.herdIds.forEach(hid => { if (hid !== '' && hid !== null && hid !== undefined) card._selectedHerds.add(String(hid)); });
+  } else if (opts.herdId !== undefined && opts.herdId !== null && opts.herdId !== '') {
+    card._selectedHerds.add(String(opts.herdId));
+  } else if (kind === 'herd_feed' && FIN_HERDS.length === 1) {
+    card._selectedHerds.add(String(FIN_HERDS[0].id));
+  }
+  card._herdAllocMode = opts.herdAllocMode || 'head';
 
   card.innerHTML =
     '<div class="split-head">' +
@@ -920,6 +1134,7 @@ function addSplitLine(opts) {
         '<option value="general"' + (kind === 'general' ? ' selected' : '') + '>General Farm Expense</option>' +
         '<option value="layer_feed"' + (kind === 'layer_feed' ? ' selected' : '') + '>Laying Flock Feed</option>' +
         (FIN_RECEIPT_BATCHES.length ? '<option value="batch_feed"' + (kind === 'batch_feed' ? ' selected' : '') + '>Meat Batch Feed</option>' : '') +
+        (FIN_HERDS.length ? '<option value="herd_feed"' + (kind === 'herd_feed' ? ' selected' : '') + '>Herd Feed / Hay</option>' : '') +
       '</select>' +
       '<label class="refund-toggle"><input type="checkbox" class="sl-refund"' + (isRefund ? ' checked' : '') + ' onchange="toggleSplitRefund(this)"> Refund / Credit</label>' +
       '<button type="button" class="btn sm danger sl-remove" onclick="removeSplitLine(this)">Remove</button>' +
@@ -931,6 +1146,11 @@ function addSplitLine(opts) {
       '<label class="sl-only sl-only-layer" hidden>Feed Type<select class="sl-ltype" onchange="autoEstimateSplitFeed(this.closest(\'.split-line\'))"><option value="layer">Layer / Waterfowl Feed</option><option value="scratch">Scratch Grains</option><option value="supplement">Grit / Oyster Shell</option></select></label>' +
       '<div class="full sl-only sl-only-layer sl-tags-wrap" hidden><small class="mb-sm">Allocate layer feed to</small><div class="row">' + buildLayerTagCheckboxes(idx, opts.species || '', opts.speciesTags) + '</div></div>' +
 
+      '<label class="sl-only sl-only-herd" hidden>Herd Feed Category<select class="sl-hcat" onchange="onHerdCategoryChange(this)"><option value="grain">Grain / Pellets</option><option value="hay">Hay / Forage</option><option value="supplement">Minerals / Supplement</option></select></label>' +
+      '<label class="sl-only sl-only-herd" hidden>Unit<select class="sl-hunit" onchange="syncHerdWeightEstimate(this.closest(\'.split-line\'), false);renderCardHerdPicker(this.closest(\'.split-line\'))"><option value="bags">Bags (' + FIN_BAG_WT + ' lb)</option><option value="bales">Bales (~45 lb)</option><option value="lbs">Pounds (lb)</option></select></label>' +
+      '<label class="sl-only sl-only-herd" hidden><span class="sl-hqty-label">Qty (bags)</span><input type="number" class="sl-hqty" step="0.5" min="0" value="1" oninput="syncHerdWeightEstimate(this.closest(\'.split-line\'), false)"></label>' +
+      '<label class="sl-only sl-only-herd" hidden><span class="sl-hlbs-label">Est. weight (lb)</span><input type="number" class="sl-hlbs" step="0.1" min="0" value="' + FIN_BAG_WT + '" oninput="this.dataset.manual=\'1\'"></label>' +
+
       '<label class="sl-only sl-only-feed" hidden><span class="sl-bags-label">Bags (' + FIN_BAG_WT + ' lb)</span><input type="number" class="sl-bags" step="0.5" min="0" value="1" oninput="autoEstimateSplitFeed(this.closest(\'.split-line\'))"></label>' +
       '<label class="sl-only sl-only-feed" hidden><span class="sl-lbs-label">Total weight (lb)</span><input type="number" class="sl-lbs" step="0.1" min="0" value="' + FIN_BAG_WT + '"></label>' +
 
@@ -939,7 +1159,8 @@ function addSplitLine(opts) {
       '<label><span class="sl-amt-label">Amount ($)</span><input type="number" class="sl-amount" step="0.01" required placeholder="0.00" value="' + initAmt + '" oninput="onSplitAmountInput(this)"></label>' +
       '<label>Notes (optional)<input class="sl-notes" placeholder="e.g. 2 bags pellets, pine shavings"></label>' +
       '<div class="full sl-batch-picker" hidden></div>' +
-      '<small class="full text-amber sl-feed-tip" hidden>Tip: Use "Meat Batch Feed" or "Laying Flock Feed" above if this feed belongs to livestock/layers so weights &amp; batch costs update together.</small>' +
+      '<div class="full sl-herd-picker" hidden></div>' +
+      '<small class="full text-amber sl-feed-tip" hidden>Tip: Use "Meat Batch Feed", "Laying Flock Feed", or "Herd Feed / Hay" above so weights &amp; livestock costs update together.</small>' +
     '</div>';
 
   if (opts.feedType) {
@@ -947,6 +1168,21 @@ function addSplitLine(opts) {
     const lt = card.querySelector('.sl-ltype');
     if (kind === 'batch_feed' && bp && ['starter', 'grower'].includes(opts.feedType)) bp.value = opts.feedType;
     if (kind === 'layer_feed' && lt && ['layer', 'scratch', 'supplement'].includes(opts.feedType)) lt.value = opts.feedType;
+  }
+  if (opts.feedCategory) {
+    const hc = card.querySelector('.sl-hcat');
+    if (hc && ['grain', 'hay', 'supplement'].includes(opts.feedCategory)) hc.value = opts.feedCategory;
+  }
+  if (opts.unit) {
+    const hu = card.querySelector('.sl-hunit');
+    if (hu && ['bags', 'bales', 'lbs'].includes(opts.unit)) hu.value = opts.unit;
+  } else if (opts.feedCategory === 'hay') {
+    const hu = card.querySelector('.sl-hunit');
+    if (hu) hu.value = 'bales';
+  }
+  if (opts.quantity !== undefined && opts.quantity !== null) {
+    const qEl = card.querySelector('.sl-hqty');
+    if (qEl) qEl.value = String(Math.abs(Number(opts.quantity)));
   }
   if (opts.bags !== undefined && opts.bags !== null) {
     const bagsEl = card.querySelector('.sl-bags');
@@ -966,9 +1202,17 @@ function addSplitLine(opts) {
   if (opts.lbs !== undefined && opts.lbs !== null) {
     const lbsEl = card.querySelector('.sl-lbs');
     if (lbsEl) lbsEl.value = String(Math.abs(Number(opts.lbs)));
+    const hLbsEl = card.querySelector('.sl-hlbs');
+    if (hLbsEl) {
+      hLbsEl.value = String(Math.abs(Number(opts.lbs)));
+      hLbsEl.dataset.manual = '1';
+    }
+  } else if (kind === 'herd_feed') {
+    syncHerdWeightEstimate(card, true);
   }
   syncSplitRefundUi(card);
   updateBatchAllocPreview(card);
+  updateHerdAllocPreview(card);
   refreshRemoveButtons();
   updateAllocBar();
 }
@@ -982,6 +1226,7 @@ function syncSplitLine(card, keepAmount) {
   const isFeed = kind === 'batch_feed' || kind === 'layer_feed';
   card.querySelectorAll('.sl-only-batch').forEach(el => { el.hidden = kind !== 'batch_feed'; });
   card.querySelectorAll('.sl-only-layer').forEach(el => { el.hidden = kind !== 'layer_feed'; });
+  card.querySelectorAll('.sl-only-herd').forEach(el => { el.hidden = kind !== 'herd_feed'; });
   card.querySelectorAll('.sl-only-feed').forEach(el => { el.hidden = !isFeed; });
   card.querySelectorAll('.sl-only-gen').forEach(el => { el.hidden = kind !== 'general'; });
   if (kind === 'batch_feed' && getCardSelectedBatchIds(card).length === 0) {
@@ -992,12 +1237,20 @@ function syncSplitLine(card, keepAmount) {
       card._selectedBatches.add(String(elig[0].id));
     }
   }
+  if (kind === 'herd_feed' && getCardSelectedHerdIds(card).length === 0 && FIN_HERDS.length === 1) {
+    card._selectedHerds = card._selectedHerds || new Set();
+    card._selectedHerds.add(String(FIN_HERDS[0].id));
+  }
   renderCardBatchPicker(card);
+  renderCardHerdPicker(card);
   syncGeneralFeedTip(card);
   if (isFeed && !keepAmount) {
     autoEstimateSplitFeed(card);
+  } else if (kind === 'herd_feed') {
+    syncHerdWeightEstimate(card, false);
   }
   updateBatchAllocPreview(card);
+  updateHerdAllocPreview(card);
   updateAllocBar();
 }
 
@@ -1201,6 +1454,23 @@ const OCR_CATEGORY_MAP = {
   general: 'Other',
 };
 
+function matchHerdIdsFromHint(hint) {
+  const q = String(hint || '').trim().toLowerCase();
+  if (!q || !FIN_HERDS.length) return [];
+  const exact = FIN_HERDS.filter(h => (
+    h.name.toLowerCase() === q
+    || h.species.toLowerCase() === q
+    || (h.species_label || '').toLowerCase() === q
+  ));
+  if (exact.length === 1) return [exact[0].id];
+  const fuzzy = FIN_HERDS.filter(h => (
+    q.includes(h.name.toLowerCase())
+    || q.includes(h.species.toLowerCase())
+    || h.name.toLowerCase().includes(q)
+  ));
+  return fuzzy.length === 1 ? [fuzzy[0].id] : [];
+}
+
 function applyParsedReceipt(data) {
   if (data.date) {
     const dEl = document.getElementById('rcpt-date');
@@ -1249,6 +1519,9 @@ function applyParsedReceipt(data) {
     let kind = 'general';
     let category = OCR_CATEGORY_MAP[sp.schedule_f_category || 'supplies'] || 'Supplies & Equipment';
     let feedType = sp.feed_type || '';
+    let feedCategory = sp.feed_category || 'grain';
+    let unit = sp.unit || '';
+    let matchedHerds = [];
     if (sp.split_type === 'laying_flock_feed') {
       kind = 'layer_feed';
       if (!['layer', 'scratch', 'supplement'].includes(feedType)) feedType = 'layer';
@@ -1260,16 +1533,29 @@ function applyParsedReceipt(data) {
         kind = 'general';
         category = 'Feed';
       }
+    } else if (sp.split_type === 'herd_feed') {
+      if (FIN_HERDS.length) {
+        kind = 'herd_feed';
+        matchedHerds = matchHerdIdsFromHint(sp.herd_hint || sp.notes || '');
+      } else {
+        kind = 'general';
+        category = 'Feed';
+      }
     }
     const amtNum = Number(sp.amount || 0);
     const isRefund = amtNum < 0;
     const hasBags = sp.bags !== null && sp.bags !== undefined;
+    const hasQty = sp.quantity !== null && sp.quantity !== undefined;
     const hasLbs = sp.total_weight_lb !== null && sp.total_weight_lb !== undefined;
     addSplitLine({
       kind,
       category,
       feedType,
+      feedCategory,
+      unit,
+      herdIds: matchedHerds,
       isRefund,
+      quantity: hasQty ? Math.abs(Number(sp.quantity)) : (hasBags ? Math.abs(Number(sp.bags)) : (isRefund ? 0 : undefined)),
       bags: hasBags ? Math.abs(Number(sp.bags)) : (isRefund ? 0 : undefined),
       lbs: hasLbs ? Math.abs(Number(sp.total_weight_lb)) : (isRefund ? 0 : undefined),
       amount: amtNum !== 0 ? Math.abs(amtNum).toFixed(2) : '',
@@ -1346,7 +1632,7 @@ function setReceiptModalEditState(opts) {
   }
 }
 
-function openReceiptModal(mode, batchId, species) {
+function openReceiptModal(mode, batchId, species, herdId) {
   resetReceiptOcrUi();
   setReceiptModalEditState({ editMode: '' });
   const container = document.getElementById('rcpt-lines');
@@ -1363,6 +1649,8 @@ function openReceiptModal(mode, batchId, species) {
     addSplitLine({ kind: 'batch_feed', batchId: batchId });
   } else if (mode === 'layers') {
     addSplitLine({ kind: 'layer_feed', species: species });
+  } else if (mode === 'herd' && FIN_HERDS.length) {
+    addSplitLine({ kind: 'herd_feed', herdId: herdId });
   } else {
     addSplitLine({ kind: 'general' });
   }
@@ -1428,10 +1716,16 @@ async function openEditReceiptModal(btn) {
         kind: ln.kind || 'general',
         category: ln.category || 'Other',
         batchId: ln.batch_id !== undefined && ln.batch_id !== null ? ln.batch_id : '',
+        herdId: ln.herd_id !== undefined && ln.herd_id !== null ? ln.herd_id : '',
         feedType: ln.feed_type || '',
+        feedCategory: ln.feed_category || '',
+        unit: ln.unit || '',
+        quantity: ln.quantity !== undefined && ln.quantity !== null ? Math.abs(Number(ln.quantity)) : undefined,
         speciesTags: Array.isArray(ln.species_tags) ? ln.species_tags : undefined,
         bags: ln.bags !== undefined && ln.bags !== null ? Math.abs(Number(ln.bags)) : undefined,
-        lbs: ln.feed_lbs !== undefined && ln.feed_lbs !== null ? Math.abs(Number(ln.feed_lbs)) : undefined,
+        lbs: (ln.weight_lbs !== undefined && ln.weight_lbs !== null)
+          ? Math.abs(Number(ln.weight_lbs))
+          : (ln.feed_lbs !== undefined && ln.feed_lbs !== null ? Math.abs(Number(ln.feed_lbs)) : undefined),
         isRefund: amtNum < 0,
         amount: amtNum !== 0 ? Math.abs(amtNum).toFixed(2) : '',
         notes: ln.notes || '',
@@ -1505,6 +1799,48 @@ function submitReceiptForm() {
         feed_lbs: signedLbs,
         notes,
       });
+    } else if (kind === 'herd_feed') {
+      const selectedHerds = getCardSelectedHerdIds(card);
+      if (!selectedHerds.length) {
+        validationError = 'Choose at least one herd for each Herd Feed / Hay line.';
+        return;
+      }
+      const rawQty = Math.abs(parseFloat((card.querySelector('.sl-hqty') || {}).value || '0') || 0);
+      const rawHLbs = Math.abs(parseFloat((card.querySelector('.sl-hlbs') || {}).value || '0') || 0);
+      const signedQty = amount < 0 ? (rawQty ? -rawQty : 0) : rawQty;
+      const signedHLbs = amount < 0 ? (rawHLbs ? -rawHLbs : 0) : rawHLbs;
+      const feed_category = (card.querySelector('.sl-hcat') || {}).value || 'grain';
+      const unit = (card.querySelector('.sl-hunit') || {}).value || 'bags';
+      if (selectedHerds.length === 1) {
+        lines.push({
+          kind: 'herd_feed',
+          amount,
+          herd_id: selectedHerds[0],
+          feed_category,
+          unit,
+          quantity: signedQty,
+          weight_lbs: signedHLbs,
+          notes,
+        });
+      } else {
+        const mode = getCardHerdAllocMode(card);
+        const weights = computeCardHerdWeights(card, selectedHerds, mode);
+        if (weights.reduce((a, b) => a + b, 0) <= 0) {
+          validationError = 'Enter a positive split weight for at least one selected herd.';
+          return;
+        }
+        lines.push({
+          kind: 'herd_feed',
+          amount,
+          feed_category,
+          unit,
+          quantity: signedQty,
+          weight_lbs: signedHLbs,
+          notes,
+          alloc_mode: mode,
+          allocations: selectedHerds.map((hid, i) => ({ herd_id: Number(hid), weight: weights[i] })),
+        });
+      }
     } else {
       const category = (card.querySelector('.sl-cat') || {}).value || 'Other';
       if (selected.length <= 1) {
@@ -1546,7 +1882,7 @@ function submitReceiptForm() {
 }
 
 if (FIN_PRESET.autoOpen) {
-  openReceiptModal(FIN_PRESET.mode, FIN_PRESET.batchId, FIN_PRESET.species);
+  openReceiptModal(FIN_PRESET.mode, FIN_PRESET.batchId, FIN_PRESET.species, FIN_PRESET.herdId);
 }
 </script>
 {% endblock %}

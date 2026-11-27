@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}Perennial Herds · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow">BREEDING STOCK &amp; FIBER HERDS</div>
+<div class="pagehead">
+  <div>
+    <h1>Perennial Herds</h1>
+    <p class="sub">Track breeding pairs, named alpacas, grain bags, and hay bales without creating endless batches.</p>
+  </div>
+  {% if can_manage %}
+  <div class="row">
+    <button type="button" class="btn sm" onclick="openQuickHerd('Breeding Pigs', 'pig', 'breeding', 2)">+ Breeding Pigs</button>
+    <button type="button" class="btn sm" onclick="openQuickHerd('Alpaca Herd', 'alpaca', 'fiber', 0)">+ Alpaca Herd</button>
+    <button type="button" class="btn primary" onclick="openNewHerdModal()">+ New herd</button>
+  </div>
+  {% endif %}
+</div>
+
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
+
+{% if herds %}
+<div class="tab-bar">
+  <div class="seg-group" role="tablist" aria-label="Herds">
+    {% for h in herds %}
+    <a href="/herds?herd_id={{ h.id }}"
+       class="seg-btn{{ ' on' if selected_herd and h.id == selected_herd.id }}">
+      <span>{{ h.name }}</span>
+      <span class="seg-badge">{{ h.effective_head_count }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if selected_herd %}
+<div class="cards four">
+  <div class="card">
+    <small>Active Animals</small>
+    <div class="big">{{ selected_herd.effective_head_count }}</div>
+    <small>{{ selected_herd.species_label }} · {{ selected_herd.herd_type|title }}{% if selected_herd.total_animal_count %} ({{ selected_herd.total_animal_count }} named){% endif %}</small>
+  </div>
+  <div class="card">
+    <small>YTD Feed &amp; Hay</small>
+    <div class="big">{{ selected_herd.ytd_feed_cost|money }}</div>
+    <small>Grain {{ selected_herd.ytd_grain_cost|money }} · Hay {{ selected_herd.ytd_hay_cost|money }}{% if selected_herd.ytd_supp_cost %} · Supp {{ selected_herd.ytd_supp_cost|money }}{% endif %}</small>
+  </div>
+  <div class="card">
+    <small>YTD Feed Volume</small>
+    <div class="big">{{ '%.1f'|format(selected_herd.ytd_grain_bags) }} <small class="inline">bags</small> · {{ '%.0f'|format(selected_herd.ytd_hay_bales) }} <small class="inline">bales</small></div>
+    <small>{{ '%.0f'|format(selected_herd.ytd_weight_lbs) }} total lb logged</small>
+  </div>
+  <div class="card">
+    <small>Trailing 12-Mo / Head</small>
+    <div class="big">{{ selected_herd.trailing_12m_per_head|money }}</div>
+    <small>{{ selected_herd.trailing_12m_cost|money }} total over 12 months</small>
+  </div>
+</div>
+
+<div class="card flex-between mb-md" style="flex-wrap:wrap;gap:10px">
+  <div>
+    <b>{{ selected_herd.name }}</b>
+    <small class="inline muted">· Schedule F Line 16 (Feed) tracks all grain &amp; hay automatically.</small>
+    {% if selected_herd.notes %}<br><small class="muted">{{ selected_herd.notes }}</small>{% endif %}
+  </div>
+  {% if can_manage %}
+  <div class="row">
+    <a href="/financials?tab=taxes&amp;new=1&amp;preset=herd&amp;herd_id={{ selected_herd.id }}" class="btn sm primary">+ Log feed / hay receipt</a>
+    {% if selected_herd.herd_type == 'breeding' %}
+    <a href="/batches?from_herd={{ selected_herd.id }}" class="btn sm">Start Pig Litter Batch →</a>
+    {% endif %}
+    <button type="button" class="btn sm" onclick='openEditHerdModal({{ selected_herd|tojson }})'>Edit herd</button>
+    <form method="post" action="/herds/{{ selected_herd.id }}/delete" class="inline-form"
+          onsubmit="return confirm('Remove this herd and all its animal and feed logs?')">
+      <button class="btn sm danger">Remove</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if selected_herd.herd_type == 'breeding' and can_manage %}
+<div class="notice mb-md">
+  <b>Breeding-Pair Overhead Helper:</b> Trailing 12-month upkeep for <b>{{ selected_herd.name }}</b> is <b>{{ selected_herd.trailing_12m_cost|money }}</b>.
+  Click <a href="/batches?from_herd={{ selected_herd.id }}"><b>Start Pig Litter Batch →</b></a> to pre-fill a new farrowing/grow-out batch with a suggested per-piglet acquisition cost.
+</div>
+{% endif %}
+
+<div class="cards two">
+  <!-- Named Animals Roster -->
+  <div class="card">
+    <div class="flex-between mb-sm">
+      <div>
+        <h2 class="mb-0">Named Animal Roster</h2>
+        <small>{% if selected_herd.species == 'alpaca' %}Track individual alpacas &amp; fleece colors for annual shearing lots.{% else %}Keep your named breeding stock organized year-round.{% endif %}</small>
+      </div>
+    </div>
+
+    {% if can_manage %}
+    <form method="post" action="/herds/{{ selected_herd.id }}/animals/save" class="fgrid mb-md" style="padding:10px;background:var(--surface-soft);border:1px solid var(--line);border-radius:10px">
+      <input type="hidden" name="animal_id" id="anm-id">
+      <label>Name<input name="name" id="anm-name" placeholder="{% if selected_herd.species == 'alpaca' %}e.g. Luna{% else %}e.g. Penelope (Sow){% endif %}" required></label>
+      <label>Role / Sex<input name="sex_role" id="anm-role" placeholder="{% if selected_herd.species == 'alpaca' %}Female / Gelding{% else %}Sow / Boar{% endif %}"></label>
+      <label>Color / Fleece Grade<input name="color" id="anm-color" placeholder="{% if selected_herd.species == 'alpaca' %}White, Dark Chocolate, Fawn…{% else %}Black &amp; White…{% endif %}"></label>
+      <label>Birth Year<input type="number" name="birth_year" id="anm-year" min="1990" max="2100" placeholder="2023"></label>
+      <label class="full">Notes<input name="notes" id="anm-notes" placeholder="Registry ID, temperament, fleece micron notes…"></label>
+      <div class="row full" style="justify-content:flex-end">
+        <button type="button" class="btn sm" id="anm-cancel" hidden onclick="resetAnimalForm()">Cancel edit</button>
+        <button type="submit" class="btn sm primary" id="anm-submit">+ Add animal</button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if animals %}
+    <div class="hist-list">
+      {% for a in animals %}
+      <details class="hist-row">
+        <summary>
+          <div class="hist-left">
+            <b>{{ a.name }}{% if not a.active %} <span class="pill gray">Retired</span>{% endif %}</b>
+            <small>
+              {% if a.sex_role %}{{ a.sex_role }}{% endif %}
+              {% if a.color %}{% if a.sex_role %} · {% endif %}{{ a.color }}{% endif %}
+              {% if a.birth_year %}{% if a.sex_role or a.color %} · {% endif %}Born {{ a.birth_year }}{% endif %}
+            </small>
+          </div>
+          <div class="hist-right">
+            {% if a.color %}<span class="pill {{ 'gray' if not a.active else 'green' }}">{{ a.color }}</span>{% endif %}
+            <span class="hist-chev" aria-hidden="true">▾</span>
+          </div>
+        </summary>
+        <div class="hist-body">
+          <div>
+            {% if a.notes %}{{ a.notes }}{% else %}<small class="muted">No notes yet.</small>{% endif %}
+          </div>
+          {% if can_manage %}
+          <div class="row">
+            <button type="button" class="btn sm" onclick='editAnimal({{ a|tojson }})'>Edit</button>
+            <form method="post" action="/herds/{{ selected_herd.id }}/animals/{{ a.id }}/toggle" class="inline-form">
+              <input type="hidden" name="active" value="{{ 0 if a.active else 1 }}">
+              <button class="btn sm">{{ 'Retire' if a.active else 'Reactivate' }}</button>
+            </form>
+            <form method="post" action="/herds/{{ selected_herd.id }}/animals/{{ a.id }}/delete" class="inline-form"
+                  onsubmit="return confirm('Remove this animal from the roster?')">
+              <button class="btn sm danger">Remove</button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No named animals yet. Using manual headcount ({{ selected_herd.head_count }}).</div>
+    {% endif %}
+  </div>
+
+  <!-- Feed & Hay Logs -->
+  <div class="card">
+    <div class="flex-between mb-sm">
+      <div>
+        <h2 class="mb-0">Grain, Hay &amp; Supplement Log</h2>
+        <small>Feed receipts logged under Financials sync here automatically and deduct on Schedule F Line 16.</small>
+      </div>
+      {% if can_manage %}
+      <a href="/financials?tab=taxes&amp;new=1&amp;preset=herd&amp;herd_id={{ selected_herd.id }}" class="btn sm primary">+ Log receipt</a>
+      {% endif %}
+    </div>
+
+    {% if feed_logs %}
+    <div class="hist-list">
+      {% for fl in feed_logs %}
+      <details class="hist-row">
+        <summary>
+          <div class="hist-left">
+            <b>{{ fl.feed_date }} · {{ fl.feed_category|title }} ({{ fl.quantity }} {{ fl.unit }})</b>
+            <small>
+              {% if fl.vendor %}{{ fl.vendor }} · {% endif %}
+              {{ '%.0f'|format(fl.weight_lbs) }} lb
+              {% if fl.notes %} · {{ fl.notes }}{% endif %}
+            </small>
+          </div>
+          <div class="hist-right">
+            <b{{ ' class="text-green"' if fl.cost_total < 0 }}>{{ fl.cost_total|money }}</b>
+            {% if fl.cost_total < 0 %}<span class="pill blue">Refund</span>{% endif %}
+            {% if fl.receipt_url %}<span class="pill green">Receipt</span>{% endif %}
+            <span class="hist-chev" aria-hidden="true">▾</span>
+          </div>
+        </summary>
+        <div class="hist-body">
+          <div>
+            {{ fl.quantity }} {{ fl.unit }} ({{ '%.1f'|format(fl.weight_lbs) }} lb)
+            {% if fl.receipt_url %} · <a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">View receipt ↗</a>{% endif %}
+            {% if fl.notes %}<br>{{ fl.notes }}{% endif %}
+          </div>
+          {% if can_manage %}
+          <form method="post" action="/herds/{{ selected_herd.id }}/feed/{{ fl.id }}/delete" class="inline-form"
+                onsubmit="return confirm('Remove feed log ({{ fl.cost_total|money }})?')">
+            <button class="btn sm danger">Remove</button>
+          </form>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No feed or hay logged for {{ selected_herd.name }} yet. Tap <b>+ Log receipt</b> to allocate grain bags or hay bales.</div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="card">
+  <h2>Set up your ongoing herds</h2>
+  <p class="sub mb-md">Keep perennial breeding stock (like a Kunekune sow &amp; boar) and fiber animals (like alpacas) separate from finite meat batches so grain bags, hay bales, and annual shearing/litter costs stay accurate.</p>
+  {% if can_manage %}
+  <div class="row">
+    <button type="button" class="btn primary" onclick="openQuickHerd('Breeding Pigs', 'pig', 'breeding', 2)">+ Add Breeding Pigs (Pair)</button>
+    <button type="button" class="btn primary" onclick="openQuickHerd('Alpaca Herd', 'alpaca', 'fiber', 4)">+ Add Alpaca Herd</button>
+    <button type="button" class="btn" onclick="openNewHerdModal()">+ Custom Herd</button>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<dialog id="dlg-herd">
+  <div class="modal-head">
+    <h2 id="hm-title">New Herd</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/herds/save" class="fgrid">
+    <input type="hidden" name="herd_id" id="hm-id">
+    <label class="full">Herd Name<input name="name" id="hm-name" placeholder="e.g. Breeding Pigs or Alpacas" required></label>
+    <label>Species
+      <select name="species" id="hm-species">
+        {% for sp in herd_species_options %}
+        <option value="{{ sp }}">{{ sp|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Herd Role
+      <select name="herd_type" id="hm-type">
+        <option value="breeding">Breeding Stock (Pigs, Goats, etc.)</option>
+        <option value="fiber">Fiber / Shearing (Alpacas, Sheep)</option>
+        <option value="other">Other Perennial Herd</option>
+      </select>
+    </label>
+    <label>Default Headcount (overridden if named animals added)
+      <input type="number" name="head_count" id="hm-head" min="0" value="2">
+    </label>
+    <label>Notes
+      <input name="notes" id="hm-notes" placeholder="Pasture, barn, or breed notes">
+    </label>
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary">Save herd</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+function openNewHerdModal() {
+  document.getElementById('hm-title').textContent = 'New Herd';
+  document.getElementById('hm-id').value = '';
+  document.getElementById('hm-name').value = '';
+  document.getElementById('hm-species').value = 'pig';
+  document.getElementById('hm-type').value = 'breeding';
+  document.getElementById('hm-head').value = '2';
+  document.getElementById('hm-notes').value = '';
+  document.getElementById('dlg-herd').showModal();
+}
+function openQuickHerd(name, species, htype, head) {
+  openNewHerdModal();
+  document.getElementById('hm-name').value = name;
+  document.getElementById('hm-species').value = species;
+  document.getElementById('hm-type').value = htype;
+  document.getElementById('hm-head').value = String(head || 0);
+}
+function openEditHerdModal(h) {
+  document.getElementById('hm-title').textContent = 'Edit Herd';
+  document.getElementById('hm-id').value = h.id;
+  document.getElementById('hm-name').value = h.name || '';
+  document.getElementById('hm-species').value = h.species || 'pig';
+  document.getElementById('hm-type').value = h.herd_type || 'breeding';
+  document.getElementById('hm-head').value = String(h.head_count ?? 0);
+  document.getElementById('hm-notes').value = h.notes || '';
+  document.getElementById('dlg-herd').showModal();
+}
+function editAnimal(a) {
+  document.getElementById('anm-id').value = a.id;
+  document.getElementById('anm-name').value = a.name || '';
+  document.getElementById('anm-role').value = a.sex_role || '';
+  document.getElementById('anm-color').value = a.color || '';
+  document.getElementById('anm-year').value = a.birth_year || '';
+  document.getElementById('anm-notes').value = a.notes || '';
+  document.getElementById('anm-submit').textContent = 'Save changes';
+  document.getElementById('anm-cancel').hidden = false;
+  document.getElementById('anm-name').focus();
+}
+function resetAnimalForm() {
+  document.getElementById('anm-id').value = '';
+  document.getElementById('anm-name').value = '';
+  document.getElementById('anm-role').value = '';
+  document.getElementById('anm-color').value = '';
+  document.getElementById('anm-year').value = '';
+  document.getElementById('anm-notes').value = '';
+  document.getElementById('anm-submit').textContent = '+ Add animal';
+  document.getElementById('anm-cancel').hidden = true;
+}
+</script>
+{% endblock %}

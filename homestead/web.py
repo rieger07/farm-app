@@ -31,7 +31,7 @@ MERCHANT_COOKIE = "homestead_merchant"
 NAV = [
     ("radar", "Today", "/"),
     ("batches", "Batches", "/batches"),
-    ("eggs", "Eggs", "/eggs"),
+    ("flocks", "Flocks & Herds", "/eggs"),
     ("customers", "Customers", "/customers"),
     ("farm", "Farm", "/financials"),
 ]
@@ -108,12 +108,21 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
     role = user.get("role") or "owner"
     if not can_access_homestead_page(role, active):
         raise HTTPException(status_code=403, detail="Your role does not have access to this page.")
+    can_flocks = any(can_access_homestead_page(role, p) for p in ("eggs", "herds"))
     can_farm = any(can_access_homestead_page(role, p) for p in ("feed", "financials", "settings"))
     visible_nav = [
         item for item in NAV
-        if (can_farm if item[0] == "farm" else can_access_homestead_page(role, item[0]))
+        if (
+            can_flocks if item[0] == "flocks"
+            else (can_farm if item[0] == "farm" else can_access_homestead_page(role, item[0]))
+        )
     ]
-    nav_active = "farm" if active in ("feed", "financials", "settings") else active
+    if active in ("eggs", "herds"):
+        nav_active = "flocks"
+    elif active in ("feed", "financials", "settings"):
+        nav_active = "farm"
+    else:
+        nav_active = active
     active_count = sum(1 for b in list_batches(user_id=user["id"]) if b.get("active", 1))
     return templates.TemplateResponse(
         request, tpl,

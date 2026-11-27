@@ -63,4 +63,21 @@
   </table>
 </div>
 {% include "_batch_modal.html" %}
+{% if litter_preset %}
+<script>
+(function() {
+  const lp = {{ litter_preset|tojson }};
+  openNewBatchModal();
+  if (lp.species) {
+    document.getElementById('bm-species').value = lp.species;
+    fillSpeciesDefaults();
+  }
+  if (lp.name) document.getElementById('bm-name').value = lp.name;
+  if (lp.lifecycle_type) document.getElementById('bm-life').value = lp.lifecycle_type;
+  if (lp.quantity) document.getElementById('bm-qty').value = String(lp.quantity);
+  if (lp.unit_cost !== undefined && lp.unit_cost !== null) document.getElementById('bm-ucost').value = Number(lp.unit_cost).toFixed(2);
+  if (lp.notes) document.getElementById('bm-notes').value = lp.notes;
+})();
+</script>
+{% endif %}
 {% endblock %}

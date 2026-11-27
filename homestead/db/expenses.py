@@ -5,6 +5,10 @@ import secrets
 
 from homestead.db.core import get_db_connection
 from homestead.db.eggs import normalize_feed_species_tags
+from homestead.db.herds import (
+    normalize_herd_feed_category,
+    normalize_herd_feed_unit,
+)
 
 
 EXPENSE_CATEGORIES = (
@@ -254,6 +258,11 @@ def delete_receipt_group(user_id: int, receipt_group_id: str) -> int:
             (gid, int(user_id)),
         )
         deleted += int(c3.rowcount or 0)
+        c4 = conn.execute(
+            "DELETE FROM herd_feed_logs WHERE user_id = ? AND receipt_group_id = ?",
+            (int(user_id), gid),
+        )
+        deleted += int(c4.rowcount or 0)
         conn.commit()
         return deleted
 
@@ -275,12 +284,14 @@ def list_recent_vendors(user_id: int, limit: int = 10) -> list[str]:
                 WHERE b.user_id = ? AND COALESCE(fl.vendor, '') != ''
                 UNION ALL
                 SELECT vendor, feed_date AS d FROM layer_feed_logs WHERE user_id = ? AND COALESCE(vendor, '') != ''
+                UNION ALL
+                SELECT vendor, feed_date AS d FROM herd_feed_logs WHERE user_id = ? AND COALESCE(vendor, '') != ''
             )
             GROUP BY vendor COLLATE NOCASE
             ORDER BY last_d DESC, vendor ASC
             LIMIT ?
             """,
-            (int(user_id), int(user_id), int(user_id), int(limit)),
+            (int(user_id), int(user_id), int(user_id), int(user_id), int(limit)),
         ).fetchall()
     for r in rows:
         v = str(r["vendor"] or "").strip()
@@ -365,6 +376,21 @@ def get_receipt_for_edit(
             }
         )
 
+    def _append_herd_feed(r) -> None:
+        _collect_meta(r["feed_date"], r["vendor"], r["receipt_url"], r["drive_file_id"])
+        lines.append(
+            {
+                "kind": "herd_feed",
+                "herd_id": int(r["herd_id"]),
+                "feed_category": str(r["feed_category"] or "grain"),
+                "unit": str(r["unit"] or "bags"),
+                "quantity": round(float(r["quantity"] or 0.0), 2),
+                "weight_lbs": round(float(r["weight_lbs"] or 0.0), 1),
+                "amount": round(float(r["cost_total"] or 0.0), 2),
+                "notes": str(r["notes"] or ""),
+            }
+        )
+
     with get_db_connection() as conn:
         if gid:
             edit_mode = "group"
@@ -401,7 +427,18 @@ def get_receipt_for_edit(
                 (uid, gid),
             ).fetchall():
                 _append_layer_feed(r)
-        elif key in ("general", "batch_feed", "layer_feed") and entry_id is not None and int(entry_id) > 0:
+            for r in conn.execute(
+                """
+                SELECT id, herd_id, feed_date, feed_category, unit, quantity, weight_lbs,
+                       cost_total, notes, receipt_url, drive_file_id, vendor
+                FROM herd_feed_logs
+                WHERE user_id = ? AND receipt_group_id = ?
+                ORDER BY id ASC
+                """,
+                (uid, gid),
+            ).fetchall():
+                _append_herd_feed(r)
+        elif key in ("general", "batch_feed", "layer_feed", "herd_feed") and entry_id is not None and int(entry_id) > 0:
             edit_mode = "single"
             eid = int(entry_id)
             if key == "general":
@@ -440,6 +477,18 @@ def get_receipt_for_edit(
                 ).fetchone()
                 if r:
                     _append_layer_feed(r)
+            elif key == "herd_feed":
+                r = conn.execute(
+                    """
+                    SELECT id, herd_id, feed_date, feed_category, unit, quantity, weight_lbs,
+                           cost_total, notes, receipt_url, drive_file_id, vendor
+                    FROM herd_feed_logs
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (eid, uid),
+                ).fetchone()
+                if r:
+                    _append_herd_feed(r)
         else:
             return None
 
@@ -515,6 +564,13 @@ def replace_receipt_entries(
                 ).rowcount
                 or 0
             )
+            deleted += int(
+                conn.execute(
+                    "DELETE FROM herd_feed_logs WHERE user_id = ? AND receipt_group_id = ?",
+                    (uid, gid),
+                ).rowcount
+                or 0
+            )
             if deleted == 0:
                 raise ValueError("Original receipt entry not found.")
             new_group_id = gid if len(expanded_lines) > 1 else ""
@@ -540,6 +596,11 @@ def replace_receipt_entries(
             elif key == "layer_feed":
                 cur = conn.execute(
                     "DELETE FROM layer_feed_logs WHERE id = ? AND user_id = ?",
+                    (eid, uid),
+                )
+            elif key == "herd_feed":
+                cur = conn.execute(
+                    "DELETE FROM herd_feed_logs WHERE id = ? AND user_id = ?",
                     (eid, uid),
                 )
             else:
@@ -602,6 +663,35 @@ def replace_receipt_entries(
                         clean_url,
                         clean_drive,
                         clean_vendor,
+                        new_group_id,
+                        now_iso,
+                    ),
+                )
+            elif kind == "herd_feed":
+                fcat = normalize_herd_feed_category(line.get("feed_category"))
+                funit = normalize_herd_feed_unit(line.get("unit"), fcat)
+                conn.execute(
+                    """
+                    INSERT INTO herd_feed_logs (
+                        user_id, herd_id, feed_date, feed_category, quantity, unit,
+                        weight_lbs, cost_total, vendor, notes, receipt_url,
+                        drive_file_id, receipt_group_id, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uid,
+                        int(line["herd_id"]),
+                        rdate,
+                        fcat,
+                        round(float(line.get("quantity") or 0.0), 2),
+                        funit,
+                        round(float(line.get("weight_lbs") or 0.0), 1),
+                        round(float(line["amount"]), 2),
+                        clean_vendor,
+                        notes,
+                        clean_url,
+                        clean_drive,
                         new_group_id,
                         now_iso,
                     ),

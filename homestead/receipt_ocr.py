@@ -12,6 +12,11 @@ from typing import Any
 
 import httpx
 
+from homestead.db.herds import (
+    normalize_herd_feed_category,
+    normalize_herd_feed_unit,
+)
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_OCR_MODEL = "gemini-3.8-flash"
@@ -42,7 +47,12 @@ _EXT_TO_MIME = {
     ".pdf": "application/pdf",
 }
 
-VALID_SPLIT_TYPES = ("general_farm_expense", "laying_flock_feed", "meat_batch_feed")
+VALID_SPLIT_TYPES = (
+    "general_farm_expense",
+    "laying_flock_feed",
+    "meat_batch_feed",
+    "herd_feed",
+)
 VALID_SCHEDULE_F_CATEGORIES = (
     "supplies",
     "capital_equipment",
@@ -60,10 +70,13 @@ RECEIPT_OCR_SYSTEM_PROMPT = (
     "(e.g. 'TSC' or 'Neighbor\\'s Club' -> 'Tractor Supply').\n"
     "3. If a screenshot shows multiple orders in a list, extract ONLY the primary expanded order "
     "and ignore partially visible adjacent orders.\n"
-    "4. Group receipt items into logical 'splits' matching the three supported types: "
-    "'laying_flock_feed', 'meat_batch_feed', and 'general_farm_expense'. For feed lines, extract "
-    "'bags' and 'total_weight_lb' when visible (e.g. '2x 50lb' -> bags: 2, total_weight_lb: 100), "
-    "and set 'feed_type' to 'layer', 'scratch', or 'supplement' for laying_flock_feed or 'starter' / 'grower' for meat_batch_feed.\n"
+    "4. Group receipt items into logical 'splits' matching the four supported types: "
+    "'laying_flock_feed', 'meat_batch_feed', 'herd_feed', and 'general_farm_expense'. "
+    "Use 'herd_feed' for ongoing breeding pigs/swine feed, alpaca pellets/grain, hay bales, or herd minerals/supplements. "
+    "For poultry feed lines, extract 'bags' and 'total_weight_lb' when visible (e.g. '2x 50lb' -> bags: 2, total_weight_lb: 100), "
+    "and set 'feed_type' to 'layer', 'scratch', or 'supplement' for laying_flock_feed or 'starter' / 'grower' for meat_batch_feed. "
+    "For 'herd_feed', set 'feed_category' ('grain' | 'hay' | 'supplement'), 'unit' ('bags' | 'bales' | 'lbs'), "
+    "'quantity' (count of bags/bales/lbs), 'total_weight_lb' when known, and 'herd_hint' (e.g. 'Breeding Pigs' or 'Alpacas').\n"
     "5. Sales Tax (NJ Farm Exemption): Most qualifying farm receipts have $0 tax — use exact line-item totals. "
     "If sales tax IS present (e.g. non-exempt items, mixed receipts, or missed exemption), return the tax amount "
     "in 'tax_charged' and apply tax only to taxed line items (often marked 'T' on paper receipts) or pro-rate it "
@@ -110,6 +123,10 @@ RECEIPT_RESPONSE_SCHEMA = {
                         "enum": list(VALID_SCHEDULE_F_CATEGORIES),
                     },
                     "feed_type": {"type": "STRING", "nullable": True},
+                    "feed_category": {"type": "STRING", "nullable": True},
+                    "unit": {"type": "STRING", "nullable": True},
+                    "quantity": {"type": "NUMBER", "nullable": True},
+                    "herd_hint": {"type": "STRING", "nullable": True},
                     "bags": {"type": "NUMBER", "nullable": True},
                     "total_weight_lb": {"type": "NUMBER", "nullable": True},
                 },
@@ -280,12 +297,27 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
             feed_type = str(feed_type_raw).strip().lower()[:40] if feed_type_raw else None
             bags = _safe_signed_float(item.get("bags"))
             lbs = _safe_signed_float(item.get("total_weight_lb"))
+            qty = _safe_signed_float(item.get("quantity"))
             if amt_round < 0:
                 bags = (-abs(bags) if bags else 0.0) if bags is not None else None
                 lbs = (-abs(lbs) if lbs else 0.0) if lbs is not None else None
+                qty = (-abs(qty) if qty else 0.0) if qty is not None else None
             else:
                 bags = abs(bags) if bags is not None else None
                 lbs = abs(lbs) if lbs is not None else None
+                qty = abs(qty) if qty is not None else None
+
+            if stype == "herd_feed":
+                feed_category: str | None = normalize_herd_feed_category(item.get("feed_category"))
+                unit: str | None = normalize_herd_feed_unit(item.get("unit"), feed_category)
+                if qty is None and bags is not None and unit == "bags":
+                    qty = bags
+                raw_hint = str(item.get("herd_hint") or "").strip()[:80]
+                herd_hint: str | None = raw_hint or None
+            else:
+                feed_category = None
+                unit = None
+                herd_hint = None
 
             clean_splits.append(
                 {
@@ -294,6 +326,10 @@ def normalize_parsed_receipt(raw: dict[str, Any]) -> dict[str, Any]:
                     "notes": notes,
                     "schedule_f_category": cat,
                     "feed_type": feed_type,
+                    "feed_category": feed_category,
+                    "unit": unit,
+                    "quantity": round(qty, 2) if qty is not None else None,
+                    "herd_hint": herd_hint,
                     "bags": round(bags, 2) if bags is not None else None,
                     "total_weight_lb": round(lbs, 2) if lbs is not None else None,
                 }
