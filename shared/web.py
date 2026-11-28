@@ -78,5 +78,8 @@ def safe_redirect(
             if k != "msg"
         ]
         params.append(("msg", str(msg)))
-        target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
-    return RedirectResponse(target, status_code=status_code)
+        target = urlunsplit(("", "", parts.path or "/", urlencode(params), ""))
+    target = target.replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        return RedirectResponse(target, status_code=status_code)
+    return RedirectResponse("/", status_code=status_code)
