@@ -51,6 +51,7 @@
     <div class="big">{{ s.harvested_head }} / {{ s.surviving_quantity }}</div>
     <small>
       {{ '%.1f'|format(s.actual_dressed_lbs) }} lb {{ 'hanging' if (b.sale_unit == 'shares') else 'dressed' }} · vs. {{ '%.1f'|format(s.expected_meat_lbs) }} lb plan
+      {% if s.live_sold_head > 0 %}<br>{{ s.live_sold_head }} sold live{% endif %}
       {% if s.harvested_head > 0 %}<br>Avg {{ '%.1f'|format(s.actual_avg_yield_per_head) }} vs. {{ '%.1f'|format(s.expected_yield_per_head) }} lb/hd{% endif %}
     </small>
   </div>
@@ -178,27 +179,37 @@
   </div>
 </div>
 
-<details class="card" style="margin-top:4px">
+<details class="card" style="margin-top:4px"{{ ' open' if sales }}>
   <summary style="cursor:pointer;font-weight:600;font-size:14px">
-    Manual Bulk / Cut-Meat Sales &amp; Butcher Processing Invoices
-    <small class="inline muted" style="font-weight:400;margin-left:6px">(optional — for whole {{ u.plural }}, use Stage 3 Harvest &amp; Pick and Stage 4 Pickup Day)</small>
+    Live / Pet Animal Sales, Manual Bulk Sales &amp; Butcher Processing Invoices
+    <small class="inline muted" style="font-weight:400;margin-left:6px">(for live head/pet sales or bulk cut-meat entries; whole/share meat sales use Harvest Tally &amp; Pickup Day)</small>
   </summary>
   <div class="cards two" style="margin-top:14px">
     <div>
-      <h3 style="margin:0 0 8px;font-size:15px">Manual Bulk Sales &amp; Freezer Packs</h3>
+      <h3 style="margin:0 0 8px;font-size:15px">Live / Pet Sales, Bulk Meat &amp; Freezer Packs</h3>
       <form method="post" action="/batches/log-sale" class="fgrid" style="margin-bottom:12px">
         <input type="hidden" name="batch_id" value="{{ b.id }}">
         <input type="hidden" name="next_url" value="/batches/{{ b.id }}">
-        <label>Date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
+        <label>Sale / entry date<input type="date" name="entry_date" value="{{ today_iso }}" required></label>
         <label>Type
-          <select name="allocation_type">
-            <option value="sale">Customer sale</option>
-            <option value="freezer">Home freezer</option>
+          <select name="allocation_type" id="ms-alloc" onchange="syncManualSaleUi()">
+            <option value="sale">Customer sale (meat / lb)</option>
+            <option value="live">Live animal / pet sale (head)</option>
+            <option value="freezer">Home freezer (meat / lb)</option>
           </select>
         </label>
-        <label>Weight (lb)<input type="number" name="weight_lbs" step="0.1" min="0.1" required></label>
-        <label>Revenue ($)<input type="number" name="revenue" step="0.01" min="0" value="0"></label>
-        <label>Payment method
+        <label id="ms-head-wrap" hidden>Head count<input type="number" name="head_count" id="ms-head" min="1" value="1"></label>
+        <label id="ms-wt-wrap">Weight (lb)<input type="number" name="weight_lbs" id="ms-wt" step="0.1" min="0.1" required></label>
+        <label>Revenue ($)<input type="number" name="revenue" id="ms-rev" step="0.01" min="0" value="0"></label>
+        <label id="ms-cust-wrap" hidden>Customer (optional)
+          <select name="customer_id">
+            <option value="">— Walk-in / Unspecified —</option>
+            {% for c in customers %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label id="ms-pm-wrap">Payment method
           <select name="payment_method">
             <option value="cash">Cash</option>
             <option value="venmo">Venmo</option>
@@ -207,22 +218,40 @@
             <option value="check">Check</option>
           </select>
         </label>
-        <label>Notes<input name="notes" placeholder="Cut-meat / bulk pack notes"></label>
-        <div class="full"><button class="btn primary sm">+ Add manual entry</button></div>
+        <label class="full">Notes<input name="notes" placeholder="Pet / breeding piglet, cut-meat pack notes..."></label>
+        <div class="full"><button class="btn primary sm">+ Add sale / freezer entry</button></div>
       </form>
       {% if sales %}
+      <div class="table-scroll">
       <table>
-        <thead><tr><th>Date</th><th>Type</th><th class="num">Weight</th><th class="num">Revenue</th><th>Payment</th><th></th></tr></thead>
+        <thead><tr><th>Type / Customer</th><th class="num">Qty / Wt</th><th class="num">Revenue</th><th>Sale Date &amp; Payment</th><th></th></tr></thead>
         <tbody>
         {% for sa in sales %}
           <tr>
-            <td>{{ sa.entry_date }}</td>
-            <td><span class="pill {{ 'green' if sa.allocation_type == 'Customer Sale' else 'gray' }}">{{ 'Customer Sale' if sa.allocation_type == 'Customer Sale' else 'Home Freezer' }}</span>{% if sa.notes %} <small class="inline muted">{{ sa.notes }}</small>{% endif %}</td>
-            <td class="num">{{ '%.1f'|format(sa.weight_lbs) }} lb</td>
+            <td>
+              {% if sa.allocation_type == 'Live Sale' %}
+                <span class="pill blue">Live Sale ({{ sa.head_count }} hd)</span>
+                {% if sa.customer_name %}<small class="inline"><b>{{ sa.customer_name }}</b></small>{% endif %}
+              {% elif sa.allocation_type == 'Customer Sale' %}
+                <span class="pill green">Customer Sale</span>
+                {% if sa.customer_name %}<small class="inline"><b>{{ sa.customer_name }}</b></small>{% endif %}
+              {% else %}
+                <span class="pill gray">Home Freezer</span>
+              {% endif %}
+              {% if sa.notes %}<small class="muted">{{ sa.notes }}</small>{% endif %}
+            </td>
+            <td class="num">
+              {% if sa.allocation_type == 'Live Sale' and sa.weight_lbs <= 0 %}
+                {{ sa.head_count }} hd
+              {% else %}
+                {{ '%.1f'|format(sa.weight_lbs) }} lb
+              {% endif %}
+            </td>
             <td class="num">${{ '%.2f'|format(sa.revenue) }}</td>
             <td>
-              {% if sa.allocation_type == 'Customer Sale' %}
-              <form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/payment-method" style="display:flex;align-items:center;gap:6px;margin:0">
+              {% if sa.allocation_type in ('Customer Sale', 'Live Sale') %}
+              <form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/payment-method" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0">
+                <input type="date" name="entry_date" value="{{ sa.entry_date }}" aria-label="Sale date" style="padding:4px 6px;font-size:12px;width:auto">
                 <select name="payment_method" style="padding:4px 6px;font-size:12px">
                   {% if not sa.payment_method %}
                   <option value="" selected>— Untagged —</option>
@@ -234,7 +263,7 @@
                 <button class="btn sm">Save</button>
               </form>
               {% else %}
-              <small class="muted">—</small>
+              <small class="muted">{{ sa.entry_date }}</small>
               {% endif %}
             </td>
             <td class="num"><form method="post" action="/batches/{{ b.id }}/sales/{{ sa.id }}/delete"><button class="link">Remove</button></form></td>
@@ -242,6 +271,7 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
     </div>
 
@@ -281,4 +311,23 @@
 </details>
 
 {% include "_batch_modal.html" %}
+<script>
+function syncManualSaleUi() {
+  const mode = (document.getElementById('ms-alloc') || {}).value || 'sale';
+  const headWrap = document.getElementById('ms-head-wrap');
+  const wtWrap = document.getElementById('ms-wt-wrap');
+  const wtIn = document.getElementById('ms-wt');
+  const custWrap = document.getElementById('ms-cust-wrap');
+  const pmWrap = document.getElementById('ms-pm-wrap');
+  if (headWrap) headWrap.hidden = mode !== 'live';
+  if (wtWrap) wtWrap.hidden = mode === 'live';
+  if (wtIn) {
+    wtIn.required = mode !== 'live';
+    if (mode === 'live' && !wtIn.value) wtIn.value = '0';
+  }
+  if (custWrap) custWrap.hidden = mode === 'freezer';
+  if (pmWrap) pmWrap.hidden = mode === 'freezer';
+}
+syncManualSaleUi();
+</script>
 {% endblock %}

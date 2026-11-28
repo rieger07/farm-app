@@ -1,0 +1,823 @@
+{% extends "base.html" %}
+{% block title %}Bulk Receipt Upload &amp; Import · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/financials?tab=taxes" style="text-decoration:none">← BACK TO FINANCIALS &amp; TAXES</a></div>
+<div class="pagehead">
+  <div>
+    <h1>Bulk Receipt Upload &amp; Import</h1>
+    <p class="sub">Upload historical receipt photos/PDFs with optional AI scanning, or import a CSV spreadsheet.</p>
+  </div>
+</div>
+
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
+
+<div class="tab-bar">
+  <div class="seg-group" role="tablist" aria-label="Bulk import methods">
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'files' }}" data-tab="files" onclick="switchBulkTab('files')">
+      Multi-File Receipt Queue
+    </button>
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'csv' }}" data-tab="csv" onclick="switchBulkTab('csv')">
+      CSV Spreadsheet Import
+    </button>
+  </div>
+</div>
+
+<!-- ==================== TAB 1: MULTI-FILE QUEUE ==================== -->
+<section id="bulk-pane-files"{{ ' hidden' if active_tab != 'files' }}>
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 class="mb-0">1. Add Receipt Photos, Screenshots, or PDFs</h2>
+        <small class="muted">Select multiple files at once{% if gdrive_connected %} — saved files automatically archive to Google Drive{% else %} — connect Google Drive in Settings if you also want image files archived{% endif %}.</small>
+      </div>
+      {% if receipt_batches %}
+      <label class="batch-scope-toggle">
+        <input type="checkbox" id="bulk-show-all-batches" onchange="refreshAllBulkBatchSelects()">
+        Show all batches (incl. archived / future)
+      </label>
+      {% endif %}
+    </div>
+
+    <div id="bulk-dropzone" class="bulk-dropzone" tabindex="0" role="button" aria-label="Choose or drop receipt files"
+         onclick="document.getElementById('bulk-file-input').click()">
+      <div><b>Drop receipt photos or PDFs here</b>, or click to select multiple files</div>
+      <small class="muted">Supports JPG, PNG, WebP, HEIC, and PDF up to 12 MB each</small>
+      <input type="file" id="bulk-file-input" multiple accept="image/*,.pdf" hidden onchange="addFilesToQueue(this.files); this.value='';">
+    </div>
+
+    <div class="toolbar mt-md" style="justify-content:space-between">
+      <div id="bulk-summary" class="bulk-progress">No receipts in queue yet.</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        {% if ocr_enabled %}
+        <button type="button" class="btn sm" id="bulk-scan-all-btn" onclick="scanAllQueued()" disabled>✨ Scan All with AI</button>
+        {% endif %}
+        <button type="button" class="btn sm" id="bulk-dup-btn" onclick="checkQueueDuplicates()" disabled>Check Duplicates</button>
+        <button type="button" class="btn sm primary" id="bulk-save-all-btn" onclick="saveAllQueued()" disabled>Save All Checked</button>
+        <button type="button" class="btn sm" id="bulk-clear-saved-btn" onclick="clearSavedFromQueue()" hidden>Clear Saved</button>
+      </div>
+    </div>
+  </div>
+
+  <datalist id="bulk-vendor-list">
+    {% for v in recent_vendors %}
+    <option value="{{ v }}">
+    {% endfor %}
+  </datalist>
+
+  <div id="bulk-queue-list" class="stack"></div>
+</section>
+
+<!-- ==================== TAB 2: CSV IMPORT ==================== -->
+<section id="bulk-pane-csv"{{ ' hidden' if active_tab != 'csv' }}>
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 class="mb-0">CSV Spreadsheet Import</h2>
+        <small class="muted">Best for spreadsheets or bank/vendor exports from past years.</small>
+      </div>
+      <a href="/financials/bulk-receipts/template.csv" class="btn sm">Download CSV Template</a>
+    </div>
+    <p class="muted mb-md">
+      Columns: <code>date, vendor, kind, category, batch_or_herd, feed_type, quantity, unit, weight_lbs, amount, notes, receipt_url</code>.
+      Supported <code>kind</code> values: <code>general</code>, <code>batch_feed</code>, <code>layer_feed</code>, <code>herd_feed</code>.
+    </p>
+    <form method="post" action="/financials/bulk-receipts/csv-preview" enctype="multipart/form-data" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="file" name="csv_file" accept=".csv,text/csv" required>
+      <button type="submit" class="btn primary sm">Preview CSV Rows</button>
+    </form>
+  </div>
+
+  {% if csv_error %}
+  <div class="notice err">{{ csv_error }}</div>
+  {% endif %}
+
+  {% if csv_preview %}
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 class="mb-0">Preview ({{ csv_preview.rows|length }} rows)</h2>
+        <small class="muted">
+          {{ csv_preview.valid_count }} valid
+          {% if csv_preview.duplicate_count %} · <span class="text-amber">{{ csv_preview.duplicate_count }} possible duplicate{{ '' if csv_preview.duplicate_count == 1 else 's' }} unchecked by default</span>{% endif %}
+          {% if csv_preview.error_count %} · <span class="text-red">{{ csv_preview.error_count }} error{{ '' if csv_preview.error_count == 1 else 's' }}</span>{% endif %}
+        </small>
+      </div>
+      <form id="csv-commit-form" method="post" action="/financials/bulk-receipts/csv-commit" onsubmit="return packReceiptCsvRows()">
+        <input type="hidden" name="rows_json" id="csv-rows-json">
+        <button type="submit" class="btn primary sm">Import Selected Rows</button>
+      </form>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Import</th><th>#</th><th>Date</th><th>Vendor</th><th>Type / Allocation</th><th class="num">Amount</th><th>Notes</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for r in csv_preview.rows %}
+          <tr>
+            <td>
+              <input type="checkbox" class="rcpt-csv-cb" data-idx="{{ loop.index0 }}"
+                     {{ 'checked' if (r.is_valid and not r.is_duplicate) else '' }}
+                     {{ 'disabled' if not r.is_valid else '' }}>
+            </td>
+            <td>{{ r.row_num }}</td>
+            <td>{{ r.date }}</td>
+            <td>{{ r.vendor }}</td>
+            <td>{{ r.alloc_label }}</td>
+            <td class="num">${{ '%.2f'|format(r.amount) }}</td>
+            <td class="muted">{{ r.notes or '—' }}</td>
+            <td>
+              {% if not r.is_valid %}
+              <span class="pill red">{{ r.errors|join('; ') }}</span>
+              {% elif r.is_duplicate %}
+              <span class="pill amber">Possible duplicate</span>
+              {% else %}
+              <span class="pill green">Ready</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<script>
+const BULK_BATCHES = {{ receipt_batches|tojson }};
+const BULK_HERDS = {{ all_herds|tojson }};
+const BULK_CATEGORIES = {{ expense_category_options|tojson }};
+const BULK_BAG_WT = {{ bag_weight|int }};
+const BULK_TODAY = {{ today_iso|tojson }};
+const BULK_OCR_ENABLED = {{ ocr_enabled|tojson }};
+const CSV_PREVIEW_ROWS = {{ (csv_preview.rows if csv_preview else [])|tojson }};
+
+const OCR_CAT_MAP = {
+  supplies: 'Supplies & Equipment',
+  capital_equipment: 'Capital Equipment / Depreciation',
+  livestock: 'Livestock / Chicks',
+  processing: 'Processing',
+  market: 'Market / Selling Fees',
+  general: 'Other',
+};
+
+let bulkQueue = [];
+let bulkSeq = 0;
+
+function switchBulkTab(tab) {
+  document.querySelectorAll('.tab-bar .seg-btn[data-tab]').forEach(btn => {
+    btn.classList.toggle('on', btn.dataset.tab === tab);
+  });
+  ['files', 'csv'].forEach(name => {
+    const pane = document.getElementById('bulk-pane-' + name);
+    if (pane) pane.hidden = (name !== tab);
+  });
+}
+
+function packReceiptCsvRows() {
+  const chosen = [];
+  document.querySelectorAll('.rcpt-csv-cb:checked').forEach(cb => {
+    const r = CSV_PREVIEW_ROWS[Number(cb.dataset.idx)];
+    if (r && r.is_valid) chosen.push(r);
+  });
+  if (!chosen.length) {
+    alert('Select at least one valid row to import.');
+    return false;
+  }
+  document.getElementById('csv-rows-json').value = JSON.stringify(chosen);
+  return true;
+}
+
+const dropEl = document.getElementById('bulk-dropzone');
+if (dropEl) {
+  ['dragenter', 'dragover'].forEach(ev => {
+    dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.add('dragover'); });
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.remove('dragover'); });
+  });
+  dropEl.addEventListener('drop', e => {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      addFilesToQueue(e.dataTransfer.files);
+    }
+  });
+}
+
+function compressImageIfNeeded(file) {
+  return new Promise(resolve => {
+    if (!file || !file.type || !file.type.startsWith('image/') || file.size < 350000) {
+      resolve(file);
+      return;
+    }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        const maxDim = 1600;
+        let w = img.width;
+        let h = img.height;
+        if (w <= maxDim && h <= maxDim) {
+          URL.revokeObjectURL(url);
+          resolve(file);
+          return;
+        }
+        const scale = Math.min(maxDim / w, maxDim / h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(blob => {
+          URL.revokeObjectURL(url);
+          if (!blob) { resolve(file); return; }
+          const outName = (file.name || 'receipt.jpg').replace(/\.[^.]+$/, '.jpg');
+          resolve(new File([blob], outName, { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.86);
+      } catch (_) {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+async function addFilesToQueue(fileList) {
+  const files = Array.from(fileList || []);
+  for (const f of files) {
+    const prepared = await compressImageIfNeeded(f);
+    bulkSeq += 1;
+    const item = {
+      uid: bulkSeq,
+      file: prepared,
+      origName: f.name || ('receipt-' + bulkSeq),
+      isImage: Boolean(f.type && f.type.startsWith('image/')),
+      previewUrl: (f.type && f.type.startsWith('image/')) ? URL.createObjectURL(prepared) : '',
+      checked: true,
+      status: 'queued',
+      statusText: 'Ready',
+      isDuplicate: false,
+      date: BULK_TODAY,
+      vendor: '',
+      receiptUrl: '',
+      lines: [{ kind: 'general', category: 'Supplies & Equipment', amount: '', notes: '' }],
+    };
+    bulkQueue.push(item);
+  }
+  renderQueue();
+}
+
+function getEligibleBatches(rdate, selectedId) {
+  const showAll = Boolean((document.getElementById('bulk-show-all-batches') || {}).checked);
+  return BULK_BATCHES.filter(b => {
+    if (showAll || (selectedId && String(b.id) === String(selectedId))) return true;
+    if (!rdate) return Boolean(b.active);
+    return b.start_date <= rdate && rdate <= b.end_date;
+  });
+}
+
+function populateBatchOptions(selEl, rdate, selectedId, includeNone) {
+  selEl.textContent = '';
+  if (includeNone) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '— Farm-wide (unassigned) —';
+    selEl.appendChild(opt);
+  }
+  const elig = getEligibleBatches(rdate, selectedId);
+  elig.forEach(b => {
+    const opt = document.createElement('option');
+    opt.value = String(b.id);
+    opt.textContent = b.name + (b.active ? '' : ' [Archived]');
+    if (selectedId && String(b.id) === String(selectedId)) opt.selected = true;
+    selEl.appendChild(opt);
+  });
+  if (!includeNone && !elig.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No batches match date (check Show all batches)';
+    selEl.appendChild(opt);
+  }
+}
+
+function refreshAllBulkBatchSelects() {
+  renderQueue();
+}
+
+function makeField(labelText, inputEl) {
+  const lbl = document.createElement('label');
+  lbl.textContent = labelText;
+  lbl.appendChild(inputEl);
+  return lbl;
+}
+
+function buildLineEditor(item, line, lineIdx) {
+  const box = document.createElement('div');
+  box.className = 'split-line';
+  box.style.marginTop = '8px';
+
+  const row = document.createElement('div');
+  row.className = 'fgrid';
+
+  // Kind select
+  const kindSel = document.createElement('select');
+  [
+    ['general', 'General / Supplies / Processing'],
+    ['batch_feed', 'Meat Batch Feed'],
+    ['layer_feed', 'Laying Flock Feed'],
+    ['herd_feed', 'Perennial Herd Feed / Hay'],
+  ].forEach(([val, txt]) => {
+    const o = document.createElement('option');
+    o.value = val;
+    o.textContent = txt;
+    if (line.kind === val) o.selected = true;
+    kindSel.appendChild(o);
+  });
+  kindSel.onchange = () => { line.kind = kindSel.value; renderQueue(); };
+  row.appendChild(makeField('Split Type', kindSel));
+
+  // Target / Category depending on kind
+  if (line.kind === 'general') {
+    const catSel = document.createElement('select');
+    BULK_CATEGORIES.forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val;
+      o.textContent = txt;
+      if ((line.category || 'Other') === val) o.selected = true;
+      catSel.appendChild(o);
+    });
+    catSel.onchange = () => { line.category = catSel.value; };
+    row.appendChild(makeField('Category', catSel));
+
+    const bSel = document.createElement('select');
+    populateBatchOptions(bSel, item.date, line.batch_id, true);
+    bSel.onchange = () => { line.batch_id = bSel.value; };
+    row.appendChild(makeField('Batch (optional)', bSel));
+  } else if (line.kind === 'batch_feed') {
+    const bSel = document.createElement('select');
+    populateBatchOptions(bSel, item.date, line.batch_id, false);
+    if (!line.batch_id && bSel.value) line.batch_id = bSel.value;
+    bSel.onchange = () => { line.batch_id = bSel.value; };
+    row.appendChild(makeField('Meat Batch', bSel));
+
+    const phSel = document.createElement('select');
+    [['grower', 'Grower'], ['starter', 'Starter']].forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = txt;
+      if ((line.feed_type || 'grower') === val) o.selected = true;
+      phSel.appendChild(o);
+    });
+    phSel.onchange = () => { line.feed_type = phSel.value; };
+    row.appendChild(makeField('Feed Phase', phSel));
+  } else if (line.kind === 'layer_feed') {
+    const ltSel = document.createElement('select');
+    [['layer', 'Layer Feed'], ['scratch', 'Scratch Grain'], ['supplement', 'Supplements']].forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = txt;
+      if ((line.feed_type || 'layer') === val) o.selected = true;
+      ltSel.appendChild(o);
+    });
+    ltSel.onchange = () => { line.feed_type = ltSel.value; };
+    row.appendChild(makeField('Layer Feed Type', ltSel));
+  } else if (line.kind === 'herd_feed') {
+    const hSel = document.createElement('select');
+    BULK_HERDS.forEach(h => {
+      const o = document.createElement('option');
+      o.value = String(h.id);
+      o.textContent = h.name + ' (' + (h.species_label || h.species) + ')';
+      if (line.herd_id && String(h.id) === String(line.herd_id)) o.selected = true;
+      hSel.appendChild(o);
+    });
+    if (!line.herd_id && hSel.value) line.herd_id = hSel.value;
+    hSel.onchange = () => { line.herd_id = hSel.value; };
+    row.appendChild(makeField('Perennial Herd', hSel));
+
+    const hcSel = document.createElement('select');
+    [['grain', 'Grain / Pellets'], ['hay', 'Hay Bales'], ['supplement', 'Minerals / Supp']].forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = txt;
+      if ((line.feed_category || 'grain') === val) o.selected = true;
+      hcSel.appendChild(o);
+    });
+    hcSel.onchange = () => { line.feed_category = hcSel.value; };
+    row.appendChild(makeField('Feed Category', hcSel));
+
+    const huSel = document.createElement('select');
+    [['bags', 'Bags'], ['bales', 'Bales'], ['lbs', 'Lbs']].forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = txt;
+      if ((line.unit || 'bags') === val) o.selected = true;
+      huSel.appendChild(o);
+    });
+    huSel.onchange = () => { line.unit = huSel.value; };
+    row.appendChild(makeField('Unit', huSel));
+  }
+
+  if (line.kind !== 'general') {
+    const qtyIn = document.createElement('input');
+    qtyIn.type = 'number'; qtyIn.step = '0.1'; qtyIn.min = '0';
+    const qtyVal = line.kind === 'herd_feed' ? line.quantity : line.bags;
+    qtyIn.value = (qtyVal !== undefined && qtyVal !== null) ? String(qtyVal) : '';
+    qtyIn.oninput = () => {
+      if (line.kind === 'herd_feed') line.quantity = qtyIn.value;
+      else line.bags = qtyIn.value;
+    };
+    row.appendChild(makeField(line.kind === 'herd_feed' ? 'Qty' : 'Bags', qtyIn));
+
+    const lbsIn = document.createElement('input');
+    lbsIn.type = 'number'; lbsIn.step = '0.1'; lbsIn.min = '0';
+    const lbsVal = line.kind === 'herd_feed' ? line.weight_lbs : line.feed_lbs;
+    lbsIn.value = (lbsVal !== undefined && lbsVal !== null) ? String(lbsVal) : '';
+    lbsIn.oninput = () => {
+      if (line.kind === 'herd_feed') line.weight_lbs = lbsIn.value;
+      else line.feed_lbs = lbsIn.value;
+    };
+    row.appendChild(makeField('Total Weight (lb)', lbsIn));
+  }
+
+  const amtIn = document.createElement('input');
+  amtIn.type = 'number'; amtIn.step = '0.01';
+  amtIn.placeholder = '0.00';
+  amtIn.value = (line.amount !== undefined && line.amount !== null) ? String(line.amount) : '';
+  amtIn.oninput = () => { line.amount = amtIn.value; };
+  row.appendChild(makeField('Amount ($ · negative = refund)', amtIn));
+
+  const notesIn = document.createElement('input');
+  notesIn.type = 'text';
+  notesIn.placeholder = 'Optional line notes';
+  notesIn.value = line.notes || '';
+  notesIn.oninput = () => { line.notes = notesIn.value; };
+  const nLbl = makeField('Notes', notesIn);
+  if (item.lines.length > 1) {
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'link';
+    rmBtn.textContent = 'Remove line';
+    rmBtn.onclick = () => { item.lines.splice(lineIdx, 1); renderQueue(); };
+    nLbl.appendChild(rmBtn);
+  }
+  row.appendChild(nLbl);
+
+  box.appendChild(row);
+  return box;
+}
+
+function renderQueue() {
+  const listEl = document.getElementById('bulk-queue-list');
+  listEl.textContent = '';
+
+  const total = bulkQueue.length;
+  const savedCnt = bulkQueue.filter(i => i.status === 'saved').length;
+  const checkedUnsaved = bulkQueue.filter(i => i.checked && i.status !== 'saved').length;
+  const sumEl = document.getElementById('bulk-summary');
+  if (sumEl) {
+    sumEl.textContent = total
+      ? `${total} file${total === 1 ? '' : 's'} queued · ${savedCnt} saved · ${checkedUnsaved} ready`
+      : 'No receipts in queue yet.';
+  }
+  const scanAllBtn = document.getElementById('bulk-scan-all-btn');
+  if (scanAllBtn) scanAllBtn.disabled = total === 0 || checkedUnsaved === 0;
+  const dupBtn = document.getElementById('bulk-dup-btn');
+  if (dupBtn) dupBtn.disabled = total === 0;
+  const saveAllBtn = document.getElementById('bulk-save-all-btn');
+  if (saveAllBtn) saveAllBtn.disabled = checkedUnsaved === 0;
+  const clearBtn = document.getElementById('bulk-clear-saved-btn');
+  if (clearBtn) clearBtn.hidden = savedCnt === 0;
+
+  bulkQueue.forEach((item, idx) => {
+    const card = document.createElement('div');
+    card.className = 'bulk-queue-card';
+
+    const head = document.createElement('div');
+    head.className = 'bulk-queue-head';
+
+    const left = document.createElement('div');
+    left.className = 'row';
+    left.style.gap = '10px';
+    left.style.alignItems = 'center';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = item.checked;
+    cb.disabled = item.status === 'saved';
+    cb.onchange = () => { item.checked = cb.checked; renderQueue(); };
+    left.appendChild(cb);
+
+    if (item.isImage && item.previewUrl) {
+      const img = document.createElement('img');
+      img.className = 'bulk-thumb';
+      img.src = item.previewUrl;
+      img.alt = item.origName;
+      left.appendChild(img);
+    } else {
+      const pdfBox = document.createElement('div');
+      pdfBox.className = 'bulk-thumb';
+      pdfBox.textContent = 'PDF';
+      left.appendChild(pdfBox);
+    }
+
+    const titleWrap = document.createElement('div');
+    const nameEl = document.createElement('b');
+    nameEl.textContent = item.origName;
+    const sizeEl = document.createElement('small');
+    sizeEl.className = 'muted';
+    sizeEl.textContent = Math.max(1, Math.round(item.file.size / 1024)) + ' KB';
+    titleWrap.append(nameEl, sizeEl);
+    left.appendChild(titleWrap);
+    head.appendChild(left);
+
+    const right = document.createElement('div');
+    right.className = 'row';
+    right.style.gap = '6px';
+    right.style.alignItems = 'center';
+
+    const badge = document.createElement('span');
+    badge.className = 'pill ' + (
+      item.status === 'saved' ? 'green'
+      : (item.status === 'error' ? 'red'
+      : (item.isDuplicate ? 'amber' : 'gray'))
+    );
+    badge.textContent = item.status === 'saved'
+      ? '✓ Saved'
+      : (item.isDuplicate ? '⚠ Possible duplicate' : item.statusText);
+    right.appendChild(badge);
+
+    if (BULK_OCR_ENABLED && item.status !== 'saved') {
+      const scBtn = document.createElement('button');
+      scBtn.type = 'button'; scBtn.className = 'btn sm';
+      scBtn.textContent = '✨ Scan';
+      scBtn.onclick = () => scanSingleItem(item);
+      right.appendChild(scBtn);
+    }
+    if (item.status !== 'saved') {
+      const svBtn = document.createElement('button');
+      svBtn.type = 'button'; svBtn.className = 'btn sm primary';
+      svBtn.textContent = 'Save';
+      svBtn.onclick = () => saveSingleItem(item);
+      right.appendChild(svBtn);
+    }
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button'; rmBtn.className = 'link';
+    rmBtn.textContent = 'Remove';
+    rmBtn.onclick = () => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      bulkQueue.splice(idx, 1);
+      renderQueue();
+    };
+    right.appendChild(rmBtn);
+    head.appendChild(right);
+    card.appendChild(head);
+
+    if (item.status === 'saved') {
+      const doneNote = document.createElement('small');
+      doneNote.className = 'text-green';
+      doneNote.textContent = item.statusText + (item.receiptUrl ? ' (Drive link attached)' : '');
+      card.appendChild(doneNote);
+      listEl.appendChild(card);
+      return;
+    }
+
+    const metaGrid = document.createElement('div');
+    metaGrid.className = 'fgrid';
+
+    const dtIn = document.createElement('input');
+    dtIn.type = 'date'; dtIn.value = item.date || BULK_TODAY;
+    dtIn.onchange = () => { item.date = dtIn.value; renderQueue(); };
+    metaGrid.appendChild(makeField('Receipt Date', dtIn));
+
+    const vIn = document.createElement('input');
+    vIn.type = 'text'; vIn.placeholder = 'Tractor Supply, Local Feed Mill...';
+    vIn.setAttribute('list', 'bulk-vendor-list');
+    vIn.value = item.vendor || '';
+    vIn.oninput = () => { item.vendor = vIn.value; };
+    metaGrid.appendChild(makeField('Vendor / Store', vIn));
+
+    card.appendChild(metaGrid);
+
+    item.lines.forEach((ln, li) => {
+      card.appendChild(buildLineEditor(item, ln, li));
+    });
+
+    const addLineBtn = document.createElement('button');
+    addLineBtn.type = 'button';
+    addLineBtn.className = 'btn sm mt-sm';
+    addLineBtn.textContent = '+ Add split line';
+    addLineBtn.onclick = () => {
+      item.lines.push({ kind: 'general', category: 'Supplies & Equipment', amount: '', notes: '' });
+      renderQueue();
+    };
+    card.appendChild(addLineBtn);
+
+    listEl.appendChild(card);
+  });
+}
+
+function itemLinePayload(item) {
+  return item.lines.map(ln => {
+    const amt = parseFloat(ln.amount || '0') || 0;
+    const out = { kind: ln.kind, amount: amt, notes: ln.notes || '' };
+    if (ln.kind === 'general') {
+      out.category = ln.category || 'Other';
+      if (ln.batch_id) out.batch_id = ln.batch_id;
+    } else if (ln.kind === 'batch_feed') {
+      out.batch_id = ln.batch_id || '';
+      out.feed_type = ln.feed_type || 'grower';
+      out.bags = parseFloat(ln.bags || '0') || 0;
+      out.feed_lbs = parseFloat(ln.feed_lbs || '0') || 0;
+    } else if (ln.kind === 'layer_feed') {
+      out.feed_type = ln.feed_type || 'layer';
+      out.species_tags = ['all'];
+      out.bags = parseFloat(ln.bags || '0') || 0;
+      out.feed_lbs = parseFloat(ln.feed_lbs || '0') || 0;
+    } else if (ln.kind === 'herd_feed') {
+      out.herd_id = ln.herd_id || '';
+      out.feed_category = ln.feed_category || 'grain';
+      out.unit = ln.unit || 'bags';
+      out.quantity = parseFloat(ln.quantity || '0') || 0;
+      out.weight_lbs = parseFloat(ln.weight_lbs || '0') || 0;
+    }
+    return out;
+  });
+}
+
+function applyOcrToQueueItem(item, data) {
+  if (data.date) item.date = data.date;
+  if (data.vendor) item.vendor = data.vendor;
+  const splits = Array.isArray(data.splits) ? data.splits : [];
+  if (!splits.length) {
+    const tot = Number(data.receipt_total || 0);
+    item.lines = [{
+      kind: 'general',
+      category: 'Supplies & Equipment',
+      amount: tot !== 0 ? tot.toFixed(2) : '',
+      notes: data.vendor || '',
+    }];
+    return;
+  }
+  item.lines = splits.map(sp => {
+    const amt = Number(sp.amount || 0);
+    if (sp.split_type === 'laying_flock_feed') {
+      return {
+        kind: 'layer_feed',
+        feed_type: ['layer', 'scratch', 'supplement'].includes(sp.feed_type) ? sp.feed_type : 'layer',
+        bags: sp.bags != null ? sp.bags : '',
+        feed_lbs: sp.total_weight_lb != null ? sp.total_weight_lb : '',
+        amount: amt !== 0 ? amt.toFixed(2) : '',
+        notes: sp.notes || '',
+      };
+    }
+    if (sp.split_type === 'meat_batch_feed' && BULK_BATCHES.length) {
+      const elig = getEligibleBatches(item.date, '');
+      return {
+        kind: 'batch_feed',
+        batch_id: elig.length ? String(elig[0].id) : '',
+        feed_type: sp.feed_type === 'starter' ? 'starter' : 'grower',
+        bags: sp.bags != null ? sp.bags : '',
+        feed_lbs: sp.total_weight_lb != null ? sp.total_weight_lb : '',
+        amount: amt !== 0 ? amt.toFixed(2) : '',
+        notes: sp.notes || '',
+      };
+    }
+    if (sp.split_type === 'herd_feed' && BULK_HERDS.length) {
+      return {
+        kind: 'herd_feed',
+        herd_id: String(BULK_HERDS[0].id),
+        feed_category: sp.feed_category || 'grain',
+        unit: sp.unit || 'bags',
+        quantity: sp.quantity != null ? sp.quantity : (sp.bags != null ? sp.bags : ''),
+        weight_lbs: sp.total_weight_lb != null ? sp.total_weight_lb : '',
+        amount: amt !== 0 ? amt.toFixed(2) : '',
+        notes: sp.notes || '',
+      };
+    }
+    return {
+      kind: 'general',
+      category: OCR_CAT_MAP[sp.schedule_f_category || 'supplies'] || 'Supplies & Equipment',
+      amount: amt !== 0 ? amt.toFixed(2) : '',
+      notes: sp.notes || '',
+    };
+  });
+}
+
+async function scanSingleItem(item) {
+  if (!BULK_OCR_ENABLED || item.status === 'saved') return;
+  item.status = 'scanning';
+  item.statusText = 'Scanning…';
+  renderQueue();
+  try {
+    const fd = new FormData();
+    fd.append('file', item.file, item.origName);
+    const resp = await fetch('/api/receipts/parse', { method: 'POST', body: fd });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data || !Array.isArray(data.splits)) {
+      item.status = 'error';
+      item.statusText = data.error || 'Scan failed';
+    } else {
+      applyOcrToQueueItem(item, data);
+      item.status = 'scanned';
+      item.statusText = 'AI filled (' + item.lines.length + ' line' + (item.lines.length === 1 ? '' : 's') + ')';
+    }
+  } catch (err) {
+    item.status = 'error';
+    item.statusText = (err && err.message) || 'Scan error';
+  }
+  renderQueue();
+}
+
+async function scanAllQueued() {
+  for (const item of bulkQueue) {
+    if (item.checked && item.status !== 'saved') {
+      await scanSingleItem(item);
+    }
+  }
+  await checkQueueDuplicates();
+}
+
+async function checkQueueDuplicates() {
+  const candidates = bulkQueue.map(item => {
+    const tot = item.lines.reduce((s, ln) => s + (parseFloat(ln.amount || '0') || 0), 0);
+    return { date: item.date || '', vendor: item.vendor || '', total: tot };
+  });
+  try {
+    const resp = await fetch('/api/receipts/check-duplicates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: candidates }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const dupSet = new Set(Array.isArray(data.duplicates) ? data.duplicates : []);
+      bulkQueue.forEach((item, idx) => {
+        item.isDuplicate = dupSet.has(idx);
+        if (item.isDuplicate && item.status !== 'saved') {
+          item.checked = false;
+        }
+      });
+      renderQueue();
+    }
+  } catch (_) {}
+}
+
+async function saveSingleItem(item) {
+  if (item.status === 'saved') return true;
+  if (!String(item.vendor || '').trim()) {
+    item.status = 'error';
+    item.statusText = 'Enter Vendor before saving';
+    renderQueue();
+    return false;
+  }
+  item.status = 'saving';
+  item.statusText = 'Saving…';
+  renderQueue();
+  try {
+    const fd = new FormData();
+    fd.append('receipt_date', item.date || BULK_TODAY);
+    fd.append('vendor', item.vendor || '');
+    fd.append('lines_json', JSON.stringify(itemLinePayload(item)));
+    fd.append('receipt_file', item.file, item.origName);
+    const resp = await fetch('/api/receipts/save', { method: 'POST', body: fd });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      item.status = 'error';
+      item.statusText = data.error || 'Save failed';
+      renderQueue();
+      return false;
+    }
+    item.status = 'saved';
+    item.receiptUrl = data.receipt_url || '';
+    item.statusText = `Saved ${data.saved_count} line(s) · $${Number(data.total_amount || 0).toFixed(2)}`
+      + (data.warning ? ` (Drive note: ${data.warning})` : '');
+    renderQueue();
+    return true;
+  } catch (err) {
+    item.status = 'error';
+    item.statusText = (err && err.message) || 'Network error';
+    renderQueue();
+    return false;
+  }
+}
+
+async function saveAllQueued() {
+  for (const item of bulkQueue) {
+    if (item.checked && item.status !== 'saved') {
+      await saveSingleItem(item);
+    }
+  }
+}
+
+function clearSavedFromQueue() {
+  bulkQueue = bulkQueue.filter(item => {
+    if (item.status === 'saved') {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return false;
+    }
+    return true;
+  });
+  renderQueue();
+}
+</script>
+{% endblock %}

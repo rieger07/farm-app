@@ -128,15 +128,21 @@
         <thead><tr><th>Date</th><th>Batch</th><th class="num">Weight</th><th class="num">Paid / Calc</th><th>Status</th></tr></thead>
         <tbody>
         {% for b in sel_birds %}
+          {% set pd = (b.paid_at or '')[:10] %}
           <tr>
-            <td>{{ b.harvest_date }}</td>
             <td>
-              <a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a>
+              {{ pd or b.harvest_date }}
+              {% if pd and pd != b.harvest_date %}<small class="muted">Harv {{ b.harvest_date }}</small>{% endif %}
+            </td>
+            <td>
+              <a href="/batches/{{ b.batch_id }}{{ '' if b.is_live_sale else '/harvest' }}"><b>{{ b.batch_name }}</b></a>
               {% if b.share_label %}<span class="pill blue" style="margin-left:4px">{{ b.share_label }}</span>{% endif %}
               <small>{{ b.species|species_name }}</small>
             </td>
             <td class="num">
-              {% if b.is_share and b.dressed_lbs <= 0 %}
+              {% if b.is_live_sale %}
+                {{ b.head_count }} live head
+              {% elif b.is_share and b.dressed_lbs <= 0 %}
                 <span class="pill amber">Pending hanging wt</span>
               {% else %}
                 {{ '%.2f'|format(b.dressed_lbs) }} lb <small>{{ b.weight_basis if b.weight_basis == 'hanging' else b.lb_oz }}</small>

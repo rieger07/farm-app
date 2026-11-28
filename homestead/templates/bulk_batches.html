@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Import Historical Batches · Homestead Planner{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
+<div class="pagehead">
+  <div>
+    <h1>Import Historical Batches</h1>
+    <p class="sub">Record closed cohorts from past years (saved as Archived so they populate Financials, Insights &amp; Customer history without cluttering Today).</p>
+  </div>
+</div>
+
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
+
+<div class="tab-bar">
+  <div class="seg-group" role="tablist" aria-label="Historical batch entry methods">
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'quick' }}" data-tab="quick" onclick="switchHbTab('quick')">
+      Quick Historical Batch
+    </button>
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'csv' }}" data-tab="csv" onclick="switchHbTab('csv')">
+      CSV Spreadsheet Import
+    </button>
+  </div>
+</div>
+
+<!-- ==================== TAB 1: QUICK HISTORICAL BATCH ==================== -->
+<section id="hb-pane-quick"{{ ' hidden' if active_tab != 'quick' }}>
+  <form method="post" action="/batches/import/quick" class="card">
+    <h2>Closed Batch Summary (Saved as Archived)</h2>
+    <p class="muted mb-md">Enter aggregate placement, feed, losses, live/pet sales, harvest weights, and meat revenue in one pass. You can always refine individual entries later on the batch detail page.</p>
+
+    <div class="cards two">
+      <div>
+        <h3>1. Batch Identity &amp; Placement</h3>
+        <div class="fgrid">
+          <label class="full">Batch name
+            <input name="name" placeholder="e.g. Kune Winter Litter (2025)" required>
+          </label>
+          <label>Species
+            <select name="species" id="hb-species" onchange="syncHbDefaults()">
+              {% for sp, cfg in species_catalog.items() %}
+              <option value="{{ sp }}">{{ sp|species_preset }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Sale mode
+            <select name="sale_unit" id="hb-sale-unit">
+              <option value="whole">Whole animals</option>
+              <option value="shares">Shares — ½ &amp; Whole (pigs, beef)</option>
+            </select>
+          </label>
+          <label>Start / birth / arrival date
+            <input type="date" name="start_date" required>
+          </label>
+          <label>Initial head placed
+            <input type="number" name="initial_quantity" min="1" value="10" required>
+          </label>
+          <label>Unit placement cost ($/hd)
+            <input type="number" name="unit_cost" step="0.01" min="0" value="0">
+          </label>
+          <label>Losses (head)
+            <input type="number" name="losses" min="0" value="0">
+          </label>
+          <label class="full">Notes
+            <input name="notes" placeholder="e.g. Sold 2 live as pets in 2025, butchered 4 in Jan 2026">
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <h3>2. Feed, Live Sales &amp; Meat Harvest</h3>
+        <div class="fgrid">
+          <label>Total feed (lb)
+            <input type="number" name="feed_lbs" step="0.1" min="0" value="0">
+          </label>
+          <label>Total feed cost ($)
+            <input type="number" name="feed_cost" step="0.01" min="0" value="0">
+          </label>
+          <label>Live / pet head sold
+            <input type="number" name="live_sold_head" min="0" value="0">
+          </label>
+          <label>Live sale date
+            <input type="date" name="live_sale_date">
+          </label>
+          <label class="full">Live / pet sale revenue ($)
+            <input type="number" name="live_sale_revenue" step="0.01" min="0" value="0">
+          </label>
+          <label>Butcher / harvest date
+            <input type="date" name="harvest_date">
+          </label>
+          <label>Head harvested (for meat)
+            <input type="number" name="harvested_head" min="0" value="0">
+          </label>
+          <label>Total dressed / hanging wt (lb)
+            <input type="number" name="dressed_lbs" step="0.1" min="0" value="0">
+          </label>
+          <label>Farm processing paid ($)
+            <input type="number" name="processing_cost" step="0.01" min="0" value="0">
+          </label>
+          <label>Meat sale / paid date
+            <input type="date" name="meat_sale_date">
+          </label>
+          <label>Meat revenue collected ($)
+            <input type="number" name="meat_sale_revenue" step="0.01" min="0" value="0">
+          </label>
+          <label>Home freezer wt (lb kept)
+            <input type="number" name="freezer_lbs" step="0.1" min="0" value="0">
+          </label>
+          <label>Primary payment method
+            <select name="payment_method">
+              {% for pm in payment_methods %}
+              <option value="{{ pm }}">{{ pm|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="row mt-md" style="justify-content:flex-end">
+      <a href="/batches" class="btn">Cancel</a>
+      <button type="submit" class="btn primary">Save Historical Batch (Archived)</button>
+    </div>
+  </form>
+</section>
+
+<!-- ==================== TAB 2: CSV IMPORT ==================== -->
+<section id="hb-pane-csv"{{ ' hidden' if active_tab != 'csv' }}>
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 class="mb-0">Bulk Batch CSV Import</h2>
+        <small class="muted">Import multiple past-year flocks or litters at once — all imported rows are saved as Archived.</small>
+      </div>
+      <a href="/batches/import/template.csv" class="btn sm">Download CSV Template</a>
+    </div>
+    <p class="muted mb-md">
+      Columns: <code>name, species, start_date, initial_quantity, unit_cost, sale_unit, harvest_date, harvested_head, dressed_lbs, processing_cost, feed_lbs, feed_cost, losses, live_sold_head, live_sale_date, live_sale_revenue, meat_sale_date, meat_sale_revenue, freezer_lbs, payment_method, notes</code>
+    </p>
+    <form method="post" action="/batches/import/csv-preview" enctype="multipart/form-data" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="file" name="csv_file" accept=".csv,text/csv" required>
+      <button type="submit" class="btn primary sm">Preview Batch CSV</button>
+    </form>
+  </div>
+
+  {% if csv_error %}
+  <div class="notice err">{{ csv_error }}</div>
+  {% endif %}
+
+  {% if csv_preview %}
+  <div class="card">
+    <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 class="mb-0">Preview ({{ csv_preview.rows|length }} rows)</h2>
+        <small class="muted">
+          {{ csv_preview.valid_count }} valid
+          {% if csv_preview.error_count %} · <span class="text-red">{{ csv_preview.error_count }} error{{ '' if csv_preview.error_count == 1 else 's' }}</span>{% endif %}
+        </small>
+      </div>
+      <form method="post" action="/batches/import/csv-commit" onsubmit="return packBatchCsvRows()">
+        <input type="hidden" name="rows_json" id="hb-csv-rows-json">
+        <button type="submit" class="btn primary sm">Import Selected Batches</button>
+      </form>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Import</th><th>#</th><th>Batch Name</th><th>Species</th><th>Start</th><th class="num">Placed</th><th class="num">Live / Harv</th><th class="num">Sales Rev</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for r in csv_preview.rows %}
+          <tr>
+            <td>
+              <input type="checkbox" class="hb-csv-cb" data-idx="{{ loop.index0 }}"
+                     {{ 'checked' if r.is_valid else 'disabled' }}>
+            </td>
+            <td>{{ r.row_num }}</td>
+            <td><b>{{ r.name }}</b></td>
+            <td>{{ r.species|species_name }}</td>
+            <td>{{ r.start_date }}</td>
+            <td class="num">{{ r.initial_quantity }}</td>
+            <td class="num">{{ r.live_sold_head }} live / {{ r.harvested_head }} harv ({{ '%.1f'|format(r.dressed_lbs) }} lb)</td>
+            <td class="num">${{ '%.2f'|format(r.live_sale_revenue + r.meat_sale_revenue) }}</td>
+            <td>
+              {% if r.is_valid %}
+              <span class="pill green">Ready (Archived)</span>
+              {% else %}
+              <span class="pill red">{{ r.errors|join('; ') }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<script>
+const HB_CATALOG = {{ species_catalog|tojson }};
+const HB_CSV_ROWS = {{ (csv_preview.rows if csv_preview else [])|tojson }};
+
+function switchHbTab(tab) {
+  document.querySelectorAll('.tab-bar .seg-btn[data-tab]').forEach(btn => {
+    btn.classList.toggle('on', btn.dataset.tab === tab);
+  });
+  ['quick', 'csv'].forEach(name => {
+    const pane = document.getElementById('hb-pane-' + name);
+    if (pane) pane.hidden = (name !== tab);
+  });
+}
+
+function syncHbDefaults() {
+  const sp = (document.getElementById('hb-species') || {}).value || '';
+  const su = document.getElementById('hb-sale-unit');
+  if (su) su.value = /pig|hog|boar|sow|beef|cattle|sheep|lamb/.test(sp.toLowerCase()) ? 'shares' : 'whole';
+}
+syncHbDefaults();
+
+function packBatchCsvRows() {
+  const chosen = [];
+  document.querySelectorAll('.hb-csv-cb:checked').forEach(cb => {
+    const r = HB_CSV_ROWS[Number(cb.dataset.idx)];
+    if (r && r.is_valid) chosen.push(r);
+  });
+  if (!chosen.length) {
+    alert('Select at least one valid batch row to import.');
+    return false;
+  }
+  document.getElementById('hb-csv-rows-json').value = JSON.stringify(chosen);
+  return true;
+}
+</script>
+{% endblock %}

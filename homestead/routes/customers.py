@@ -35,16 +35,23 @@ def customers_page(
         sel_customer = get_customer(user["id"], sel_id)
     sel_birds = list_customer_birds(user["id"], sel_id) if sel_customer else []
     for bird in sel_birds:
-        bird["lb_oz"] = _fmt_lb_oz(bird["dressed_lbs"])
-        calc_p = round(float(bird["dressed_lbs"] or 0) * float(bird["sale_price_per_lb"] or 0), 2)
-        act_p = (
-            round(float(bird["actual_sale_price"]), 2)
-            if bird.get("actual_sale_price") is not None
-            else calc_p
-        )
-        bird["calculated_price"] = calc_p
-        bird["actual_price"] = act_p
-        bird["tip_diff"] = round(act_p - calc_p, 2)
+        if bird.get("is_live_sale"):
+            bird["lb_oz"] = ""
+            act_p = round(float(bird.get("actual_sale_price") or 0.0), 2)
+            bird["calculated_price"] = act_p
+            bird["actual_price"] = act_p
+            bird["tip_diff"] = 0.0
+        else:
+            bird["lb_oz"] = _fmt_lb_oz(bird["dressed_lbs"])
+            calc_p = round(float(bird["dressed_lbs"] or 0) * float(bird["sale_price_per_lb"] or 0), 2)
+            act_p = (
+                round(float(bird["actual_sale_price"]), 2)
+                if bird.get("actual_sale_price") is not None
+                else calc_p
+            )
+            bird["calculated_price"] = calc_p
+            bird["actual_price"] = act_p
+            bird["tip_diff"] = round(act_p - calc_p, 2)
     return _render(
         request, "customers.html", user, "customers",
         customers=customers,

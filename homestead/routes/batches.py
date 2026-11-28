@@ -30,12 +30,12 @@ from homestead.db.batches import (
     list_batch_sales,
     save_batch,
     set_batch_active,
-    update_batch_sale_payment_method,
+    update_batch_sale_details,
 )
 from homestead.db.core import get_bag_weight, get_species_catalog
 from shared.bridge import HOMESTEAD_PAYMENT_METHODS
 from shared.web import safe_redirect
-from homestead.db.customers import batch_preorder_counts
+from homestead.db.customers import batch_preorder_counts, get_customer, list_customers
 from homestead.db.eggs import (
     EGG_SPECIES_DEFAULTS,
     graduate_batch_to_layers,
@@ -144,13 +144,25 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
     stage_info = _batch_stage_info(b, s, user["id"], tally=tally)
     po_summary = stage_info["po_summary"]
     pending_pickup_customers = stage_info["pending_pickup_customers"]
+    customers = list_customers(user["id"])
+    cust_by_id = {int(c["id"]): c for c in customers}
+    sales_enriched = [
+        {
+            **sa,
+            "customer_name": cust_by_id.get(int(sa["customer_id"]), {}).get("name", "")
+            if sa.get("customer_id")
+            else "",
+        }
+        for sa in list_batch_sales(batch_id)
+    ]
 
     return _render(
         request, "batch_detail.html", user, "batches",
         b=b, s=s, gcal_url=gcal_url, gcal_arrival_url=gcal_arrival_url,
         losses=list_batch_losses(batch_id),
         harvests=enriched_harvests,
-        sales=list_batch_sales(batch_id),
+        sales=sales_enriched,
+        customers=customers,
         tally=tally,
         tally_allocations=tally_allocations,
         po_summary=po_summary,
@@ -278,6 +290,7 @@ def batch_save_submit(
     grower_feed_lbs: str = Form(""),
     starter_bag_price: str = Form(""),
     grower_bag_price: str = Form(""),
+    is_archived: str = Form(""),
     notes: str = Form(""),
     next_url: str = Form("/batches"),
     user: dict = Depends(current_user),
@@ -297,6 +310,7 @@ def batch_save_submit(
         "sale_price_per_lb": sale_price_per_lb,
         "processing_cost": processing_cost,
         "lifecycle_type": lifecycle_type,
+        "active": is_archived.strip() not in ("1", "true", "on", "yes"),
         "notes": notes.strip(),
     }
     if sale_unit.strip():
@@ -418,7 +432,9 @@ def batch_log_sale(
     batch_id: int = Form(...),
     entry_date: str = Form(...),
     allocation_type: str = Form("sale"),
-    weight_lbs: float = Form(...),
+    weight_lbs: float = Form(0.0),
+    head_count: int = Form(0),
+    customer_id: str = Form(""),
     revenue: float = Form(0.0),
     payment_method: str = Form("cash"),
     notes: str = Form(""),
@@ -426,10 +442,22 @@ def batch_log_sale(
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
+    cid: int | None = None
+    if customer_id.strip().isdigit():
+        cid = int(customer_id.strip())
+        if not get_customer(user["id"], cid):
+            raise HTTPException(status_code=404, detail="Customer not found.")
     try:
         add_batch_sale(
-            batch_id, entry_date, allocation_type, weight_lbs, revenue,
-            notes.strip(), payment_method=payment_method,
+            batch_id,
+            entry_date,
+            allocation_type,
+            weight_lbs=weight_lbs,
+            revenue=revenue,
+            notes=notes.strip(),
+            payment_method=payment_method,
+            head_count=head_count,
+            customer_id=cid,
         )
         msg = "Saved sale/freezer entry."
     except ValueError as exc:
@@ -442,13 +470,17 @@ def batch_sale_payment_method_submit(
     batch_id: int,
     sale_id: int,
     payment_method: str = Form(""),
+    entry_date: str = Form(""),
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
     try:
-        updated = update_batch_sale_payment_method(batch_id, sale_id, payment_method)
+        updated = update_batch_sale_details(
+            batch_id, sale_id, payment_method, entry_date=entry_date or None
+        )
         lbl = payment_method.strip().capitalize() if payment_method.strip() else "Untagged"
-        msg = f"Updated sale payment method to {lbl}." if updated else "Customer sale not found."
+        date_bit = f" · {entry_date.strip()}" if entry_date.strip() else ""
+        msg = f"Updated sale ({lbl}{date_bit})." if updated else "Customer sale not found."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(f"/batches/{batch_id}?msg=" + quote_plus(msg), status_code=303)

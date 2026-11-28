@@ -382,7 +382,7 @@ def _compute_enterprise_breakdown(
 
     batch_rev = 0.0
     for sa in list_batch_sales(user_id=uid):
-        if sa.get("allocation_type") != "Customer Sale":
+        if sa.get("allocation_type") not in ("Customer Sale", "Live Sale"):
             continue
         if year is not None and _year_of(sa.get("entry_date")) != year:
             continue
@@ -409,14 +409,15 @@ def _compute_enterprise_breakdown(
                 ap = sh.get("actual_sale_price")
                 batch_rev += float(ap) if ap is not None else round(effective_share_weight(sh, carcass_lbs) * sp, 2)
             continue
-        if year is not None and _year_of(hv.get("harvest_date")) != year:
-            continue
         if not bool(hv.get("for_sale", 1)):
             continue
         pay_stat = str(hv.get("payment_status") or "").lower()
         pick_stat = str(hv.get("pickup_status") or "").lower()
         ap = hv.get("actual_sale_price")
         if not (pay_stat == "paid" or pick_stat == "picked_up" or ap is not None):
+            continue
+        cash_yr = _year_of(hv.get("paid_at")) or _year_of(hv.get("harvest_date"))
+        if year is not None and cash_yr != year:
             continue
         if ap is not None:
             batch_rev += float(ap)

@@ -240,7 +240,9 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
 
     harvested_head = sum(int(h.get("head_count") or 0) for h in harvests)
     surviving = int(s["surviving_quantity"])
-    remaining = max(0, surviving - harvested_head)
+    live_sold_head = int(s.get("live_sold_head") or 0)
+    harvest_target = max(0, surviving - live_sold_head)
+    remaining = max(0, harvest_target - harvested_head)
     total_lbs = round(sum(float(h.get("dressed_lbs") or 0) for h in harvests), 2)
     per_bird = [
         round(float(h["dressed_lbs"]) / max(1, int(h["head_count"])), 2)
@@ -251,8 +253,8 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
     min_lbs = min(per_bird) if per_bird else 0.0
     max_lbs = max(per_bird) if per_bird else 0.0
     sale_price = float(batch.get("sale_price_per_lb") or 0.0)
-    est_total_lbs = round(surviving * float(batch.get("avg_dressed_weight") or 0.0), 1)
-    progress_pct = min(100, round(harvested_head / surviving * 100)) if surviving > 0 else 0
+    est_total_lbs = round(harvest_target * float(batch.get("avg_dressed_weight") or 0.0), 1)
+    progress_pct = min(100, round(harvested_head / harvest_target * 100)) if harvest_target > 0 else 0
 
     for_sale_lbs = 0.0
     for_sale_value = 0.0
@@ -432,6 +434,8 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         "butcher_email": str(batch.get("butcher_email") or ""),
         "harvested_head": harvested_head,
         "surviving_quantity": surviving,
+        "live_sold_head": live_sold_head,
+        "harvest_target_head": harvest_target,
         "remaining_head": remaining,
         "progress_pct": progress_pct,
         "total_lbs": total_lbs,

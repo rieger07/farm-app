@@ -38,8 +38,8 @@
   <div class="cards four" style="margin-bottom:10px">
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
       <small>{{ 'Carcasses Harvested' if tally.is_share_mode else 'Harvested' }}</small>
-      <div style="font:600 22px Georgia,serif" id="t-head">{{ tally.harvested_head }} / {{ tally.surviving_quantity }}</div>
-      <small id="t-rem">{{ tally.remaining_head }} remaining</small>
+      <div style="font:600 22px Georgia,serif" id="t-head">{{ tally.harvested_head }} / {{ tally.harvest_target_head }}</div>
+      <small id="t-rem">{{ tally.remaining_head }} remaining{% if tally.live_sold_head %} · {{ tally.live_sold_head }} sold live{% endif %}</small>
     </div>
     <div style="background:#faf9f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
       <small>{{ 'Total Hanging Wt' if tally.is_share_mode else 'Total dressed' }}</small>
@@ -261,7 +261,7 @@
           <option value="picked_up">Picked up</option>
         </select>
       </label>
-      <label class="full">Payment method
+      <label>Payment method
         <select id="am-pay-method">
           <option value="">— Untagged —</option>
           <option value="cash">Cash</option>
@@ -271,6 +271,7 @@
           <option value="check">Check</option>
         </select>
       </label>
+      <label>Paid / sale date<input id="am-paid-date" type="date"></label>
       <div class="full" style="background:#faf9f3;border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center">
         <div>
           <span style="font-size:13px">Balance due</span>
@@ -374,6 +375,7 @@
           <option value="picked_up">Picked up</option>
         </select>
       </label>
+      <label>Paid / sale date<input id="sm-paid-date" type="date"></label>
       <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
         <input type="checkbox" id="sm-bnot" style="width:auto">
         <span><b>Butcher notified / released</b> (confirmed with butcher that farm balance is paid)</span>
@@ -453,8 +455,10 @@ function matchesFilter(e) {
 
 function renderTally(t) {
   TALLY = t;
-  document.getElementById('t-head').textContent = `${t.harvested_head} / ${t.surviving_quantity}`;
-  document.getElementById('t-rem').textContent = `${t.remaining_head} remaining`;
+  const targetHd = (t.harvest_target_head !== undefined && t.harvest_target_head !== null) ? t.harvest_target_head : t.surviving_quantity;
+  document.getElementById('t-head').textContent = `${t.harvested_head} / ${targetHd}`;
+  const liveSuffix = t.live_sold_head > 0 ? ` · ${t.live_sold_head} sold live` : '';
+  document.getElementById('t-rem').textContent = `${t.remaining_head} remaining${liveSuffix}`;
   document.getElementById('t-lbs').textContent = `${Number(t.total_lbs).toFixed(1)} lb`;
   const pendNote = t.is_share_mode && t.pending_weight_count ? ` · ${t.pending_weight_count} pending wt` : '';
   document.getElementById('t-avg').textContent = `Avg ${Number(t.avg_lbs).toFixed(2)} lb` + (t.entries.length ? ` (${Number(t.min_lbs).toFixed(1)}–${Number(t.max_lbs).toFixed(1)})` : '') + pendNote;
@@ -523,7 +527,8 @@ function renderTally(t) {
       let pLbl = e.pickup_status === 'picked_up' ? 'Picked up' : (e.payment_status === 'paid' ? 'Paid' : 'Assigned');
       if (e.payment_status === 'paid' || e.pickup_status === 'picked_up') {
         const pmTxt = e.payment_method ? (e.payment_method.charAt(0).toUpperCase() + e.payment_method.slice(1)) : 'Untagged';
-        pLbl += ` · ${pmTxt}`;
+        const pdTxt = e.paid_at ? ` · ${String(e.paid_at).slice(0, 10)}` : '';
+        pLbl += ` · ${pmTxt}${pdTxt}`;
       }
       const statPill = document.createElement('span');
       statPill.className = `pill ${pCls}`;
@@ -633,13 +638,16 @@ function renderShareCarcasses(t) {
       const wtTxt = sh.effective_lbs > 0
         ? `${Number(sh.effective_lbs).toFixed(1)} lb · $${Number(sh.effective_price).toFixed(2)}`
         : 'Pending hanging wt';
+      const paidDateTxt = (sh.paid_at && (sh.payment_status === 'paid' || sh.pickup_status === 'picked_up'))
+        ? ` · <small class="inline muted">Paid ${escapeHtml(String(sh.paid_at).slice(0, 10))}</small>`
+        : '';
       const cutTxt = sh.cut_sheet_notes ? ` · <small class="inline muted">${escapeHtml(sh.cut_sheet_notes)}</small>` : '';
       const bfeeTxt = sh.customer_butcher_fee > 0 ? ` · <small class="inline muted">Butcher fee $${Number(sh.customer_butcher_fee).toFixed(2)}</small>` : '';
       row.innerHTML = `
         <div>
           <span class="pill blue">${escapeHtml(sh.slot_label)}</span>
           ${statusHtml}
-          <small class="muted" style="display:block;margin-top:2px">${wtTxt}${bfeeTxt}${cutTxt}</small>
+          <small class="muted" style="display:block;margin-top:2px">${wtTxt}${paidDateTxt}${bfeeTxt}${cutTxt}</small>
         </div>
         <span class="link">Assign / Edit</span>
       `;
@@ -725,6 +733,7 @@ function openAssignModal(bird) {
   document.getElementById('am-pay').value = bird.payment_status || 'unpaid';
   document.getElementById('am-pickup').value = bird.pickup_status || 'unassigned';
   document.getElementById('am-pay-method').value = bird.payment_method || '';
+  document.getElementById('am-paid-date').value = (bird.paid_at || '').slice(0, 10);
   document.getElementById('am-notes').value = bird.notes || '';
   document.getElementById('am-new-cust').hidden = true;
   syncAssignUI();
@@ -800,6 +809,7 @@ async function saveAssignment(ev) {
       payment_status: document.getElementById('am-pay').value,
       pickup_status: document.getElementById('am-pickup').value,
       payment_method: document.getElementById('am-pay-method').value,
+      paid_date: document.getElementById('am-paid-date').value || null,
       notes: document.getElementById('am-notes').value.trim(),
     }),
   });
@@ -886,6 +896,7 @@ function openShareModal(carcass, sh) {
   document.getElementById('sm-pay').value = sh.payment_status || 'unpaid';
   document.getElementById('sm-pm').value = sh.payment_method || '';
   document.getElementById('sm-pickup').value = sh.pickup_status || 'unassigned';
+  document.getElementById('sm-paid-date').value = (sh.paid_at || '').slice(0, 10);
   document.getElementById('sm-bnot').checked = !!sh.butcher_notified;
   document.getElementById('sm-notes').value = sh.cut_sheet_notes || '';
   document.getElementById('sm-new-cust').hidden = true;
@@ -950,6 +961,7 @@ async function saveShareAssignment(ev) {
       payment_status: document.getElementById('sm-pay').value,
       payment_method: document.getElementById('sm-pm').value,
       pickup_status: document.getElementById('sm-pickup').value,
+      paid_date: document.getElementById('sm-paid-date').value || null,
       butcher_notified: document.getElementById('sm-bnot').checked,
       cut_sheet_notes: document.getElementById('sm-notes').value.trim(),
     }),

@@ -7,10 +7,40 @@
   <div class="row">
     <a href="/customers" class="btn">Customers</a>
     <a href="/calendar.ics" class="btn">Export .ics</a>
+    {% if (user.role or 'owner') in ('owner', 'manager') %}
+    <a href="/batches/import" class="btn">Import historical</a>
+    {% endif %}
     <button class="btn primary" onclick="openNewBatchModal()">+ New batch</button>
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+{% set batch_years = [] %}
+{% for s in schedules %}
+  {% set y = (s.batch.start_date or '')[:4] %}
+  {% if y and y not in batch_years %}{% set _ = batch_years.append(y) %}{% endif %}
+{% endfor %}
+
+{% if schedules %}
+<div class="toolbar mb-md">
+  <div class="seg-group" id="batch-status-filter" role="tablist" aria-label="Filter batches by status">
+    <button type="button" class="seg-btn on" data-flt="all" onclick="setBatchStatusFilter('all', this)">All ({{ schedules|length }})</button>
+    <button type="button" class="seg-btn" data-flt="active" onclick="setBatchStatusFilter('active', this)">Active / Planned</button>
+    <button type="button" class="seg-btn" data-flt="archived" onclick="setBatchStatusFilter('archived', this)">Archived</button>
+  </div>
+  {% if batch_years|length > 1 %}
+  <label class="inline-form">
+    <span class="muted">Year</span>
+    <select id="batch-year-filter" onchange="filterBatchRows()" aria-label="Filter batches by year">
+      <option value="all">All years</option>
+      {% for yr in batch_years|sort(reverse=True) %}
+      <option value="{{ yr }}">{{ yr }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="card table-card">
   <table>
@@ -18,7 +48,7 @@
     <tbody>
     {% for s in schedules %}
       {% set b = s.batch %}
-      <tr>
+      <tr class="batch-row" data-status="{{ 'active' if b.active else 'archived' }}" data-year="{{ (b.start_date or '')[:4] }}">
         <td><a href="/batches/{{ b.id }}"><b>{{ b.name }}</b></a></td>
         <td>{{ b.species|species_name }}</td>
         <td>{{ b.start_date }}</td>
@@ -63,6 +93,22 @@
   </table>
 </div>
 {% include "_batch_modal.html" %}
+<script>
+let batchStatusFilter = 'all';
+function setBatchStatusFilter(val, btn) {
+  batchStatusFilter = val;
+  document.querySelectorAll('#batch-status-filter .seg-btn').forEach(b => b.classList.toggle('on', b === btn));
+  filterBatchRows();
+}
+function filterBatchRows() {
+  const yr = ((document.getElementById('batch-year-filter') || {}).value || 'all');
+  document.querySelectorAll('tr.batch-row').forEach(row => {
+    const sOk = batchStatusFilter === 'all' || row.dataset.status === batchStatusFilter;
+    const yOk = yr === 'all' || row.dataset.year === yr;
+    row.hidden = !(sOk && yOk);
+  });
+}
+</script>
 {% if litter_preset %}
 <script>
 (function() {

@@ -9,6 +9,7 @@ from homestead.db.core import init_db
 from homestead.routes import (
     auth,
     batches,
+    bulk_import,
     customers,
     eggs,
     farm_ops,
@@ -42,6 +43,7 @@ def _on_login_redirect(_, __):
 for _router in (
     auth.router,
     radar.router,
+    bulk_import.router,
     batches.router,
     harvest_picking.router,
     customers.router,

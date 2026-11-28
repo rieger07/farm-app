@@ -178,15 +178,19 @@ def compute_batch_schedule(
             s_dt = date.fromisoformat(str(sl["entry_date"]))
         except ValueError:
             s_dt = end_dt
+        alloc_type = str(sl.get("allocation_type", "Customer Sale"))
+        raw_hc = max(0, int(sl.get("head_count") or 0))
+        if alloc_type == "Live Sale" and raw_hc <= 0:
+            raw_hc = 1
         parsed_sales.append(
             {
                 "id": sl.get("id", 0),
                 "batch_id": batch_id,
                 "entry_date": s_dt,
                 "entry_date_str": s_dt.isoformat(),
-                "allocation_type": str(
-                    sl.get("allocation_type", "Customer Sale")
-                ),
+                "allocation_type": alloc_type,
+                "head_count": raw_hc,
+                "customer_id": int(sl["customer_id"]) if sl.get("customer_id") else None,
                 "weight_lbs": max(0.0, float(sl.get("weight_lbs", 0.0))),
                 "revenue": max(0.0, float(sl.get("revenue", 0.0))),
                 "notes": str(sl.get("notes", "")),
@@ -201,7 +205,7 @@ def compute_batch_schedule(
         return max(0, initial_quantity - lost_so_far)
 
     def feeding_on_date(d: date) -> int:
-        """Animals still on feed on date `d` (subtracts losses up to `d` and harvests strictly before `d`)."""
+        """Animals still on feed on date `d` (subtracts losses up to `d`, prior harvests, and live sales)."""
         lost_so_far = sum(
             item["count"] for item in parsed_losses if item["loss_date"] <= d
         )
@@ -210,7 +214,12 @@ def compute_batch_schedule(
             for item in parsed_harvests
             if item["harvest_date"] < d
         )
-        return max(0, initial_quantity - lost_so_far - harvested_before)
+        live_sold_before = sum(
+            item["head_count"]
+            for item in parsed_sales
+            if item["allocation_type"] == "Live Sale" and item["entry_date"] < d
+        )
+        return max(0, initial_quantity - lost_so_far - harvested_before - live_sold_before)
 
     total_lost = min(
         initial_quantity, sum(item["count"] for item in parsed_losses)
@@ -390,11 +399,21 @@ def compute_batch_schedule(
     # -----------------------------------------------------------------------
     # Actual Harvest, Feed Override & Sales / Home Freezer Reconciliation
     # -----------------------------------------------------------------------
+    live_sold_head = min(
+        surviving_quantity,
+        sum(
+            item["head_count"]
+            for item in parsed_sales
+            if item["allocation_type"] == "Live Sale"
+        ),
+    )
     harvested_head = min(
         surviving_quantity,
         sum(item["head_count"] for item in parsed_harvests),
     )
-    unharvested_surviving_head = max(0, surviving_quantity - harvested_head)
+    unharvested_surviving_head = max(
+        0, surviving_quantity - harvested_head - live_sold_head
+    )
     is_fully_harvested = (
         surviving_quantity > 0 and unharvested_surviving_head == 0
     )
@@ -644,7 +663,7 @@ def compute_batch_schedule(
         sum(
             item["revenue"]
             for item in parsed_sales
-            if item["allocation_type"] == "Customer Sale"
+            if item["allocation_type"] in ("Customer Sale", "Live Sale")
         )
         + harvest_sales_revenue,
         2,
@@ -863,7 +882,8 @@ def compute_batch_schedule(
         "actual_fcr": actual_fcr,
         "is_planned": start_dt > date.today(),
         "days_until_start": max(0, (start_dt - date.today()).days),
-        "on_farm_head": 0 if start_dt > date.today() else max(0, surviving_quantity - harvested_head),
+        "live_sold_head": live_sold_head,
+        "on_farm_head": 0 if start_dt > date.today() else max(0, surviving_quantity - harvested_head - live_sold_head),
         "sold_lbs": sold_lbs,
         "actual_sales_revenue": actual_sales_revenue,
         "freezer_lbs": freezer_lbs,

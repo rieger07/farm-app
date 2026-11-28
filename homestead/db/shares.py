@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import sqlite3
 
 from homestead.db.core import get_db_connection
@@ -13,6 +13,18 @@ SALE_UNITS = ("whole", "shares")
 SHARE_SLOTS = ("whole", "half_a", "half_b")
 PAYMENT_STATUSES = ("unpaid", "deposit", "paid")
 PICKUP_STATUSES = ("unassigned", "assigned", "picked_up")
+
+
+def normalize_paid_date(paid_date: str | None) -> str | None:
+    """Validate optional YYYY-MM-DD sale/paid date string."""
+    s = str(paid_date or "").strip()[:10]
+    if len(s) != 10:
+        return None
+    try:
+        date.fromisoformat(s)
+        return s
+    except ValueError:
+        return None
 
 
 def normalize_sale_unit(value: str | None) -> str:
@@ -505,6 +517,7 @@ def update_share_assignment(
     pickup_status: str = "unassigned",
     butcher_notified: bool | None = None,
     cut_sheet_notes: str | None = None,
+    paid_date: str | None = None,
 ) -> bool:
     """Update customer assignment, weight override, payment, butcher release, and cut-sheet notes."""
     pay = payment_status if payment_status in PAYMENT_STATUSES else "unpaid"
@@ -559,6 +572,7 @@ def update_share_assignment(
         else:
             bnot_val = str(existing["butcher_notified_at"] or "").strip()
 
+        clean_pd = normalize_paid_date(paid_date) if for_sale else None
         set_parts = [
             "customer_id = ?",
             "for_sale = ?",
@@ -569,11 +583,6 @@ def update_share_assignment(
             "payment_status = ?",
             "pickup_status = ?",
             "claimed_at = CASE WHEN ? != '' AND COALESCE(claimed_at, '') = '' THEN ? WHEN ? = '' THEN '' ELSE claimed_at END",
-            """paid_at = CASE
-                WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ?
-                WHEN ? != 'paid' AND ? != 'picked_up' THEN ''
-                ELSE COALESCE(paid_at, '')
-            END""",
             "butcher_notified_at = ?",
         ]
         params: list[object] = [
@@ -588,12 +597,20 @@ def update_share_assignment(
             claimed_at,
             claimed_at,
             claimed_at,
-            pay,
-            now_utc,
-            pay,
-            pstat,
             bnot_val,
         ]
+        if clean_pd and (pay == "paid" or pstat == "picked_up"):
+            set_parts.append("paid_at = ?")
+            params.append(clean_pd)
+        else:
+            set_parts.append(
+                """paid_at = CASE
+                WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ?
+                WHEN ? != 'paid' AND ? != 'picked_up' THEN ''
+                ELSE COALESCE(paid_at, '')
+            END"""
+            )
+            params.extend([pay, now_utc, pay, pstat])
         if pm_val is not None:
             set_parts.append("payment_method = ?")
             params.append(pm_val)
@@ -677,6 +694,7 @@ def settle_customer_shares(
     mark_picked_up: bool = False,
     share_ids: list[int] | None = None,
     payment_method: str | None = None,
+    paid_date: str | None = None,
 ) -> int:
     """Settle selected (or all) for-sale shares assigned to customer_id in batch_id."""
     clean_ids = [int(x) for x in (share_ids or []) if int(x) > 0]
@@ -685,6 +703,7 @@ def settle_customer_shares(
         if payment_method is not None
         else None
     )
+    clean_pd = normalize_paid_date(paid_date)
     now_utc = _now_utc_iso()
     with get_db_connection() as conn:
         batch = conn.execute(
@@ -760,31 +779,71 @@ def settle_customer_shares(
             bnot_val = str(s.get("butcher_notified_at") or "").strip()
             if mark_butcher_notified and not bnot_val:
                 bnot_val = now_utc
+            paid_clauses = [
+                "payment_status = ?",
+                "pickup_status = ?",
+                "actual_sale_price = ?",
+                "butcher_notified_at = ?",
+            ]
+            paid_params: list[object] = [pay_stat, pick_stat, act_p, bnot_val]
             if pm is not None:
-                conn.execute(
-                    """
-                    UPDATE harvest_shares
-                    SET payment_status = ?, pickup_status = ?, actual_sale_price = ?,
-                        payment_method = ?,
-                        paid_at = CASE WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ? ELSE COALESCE(paid_at, '') END,
-                        butcher_notified_at = ?
-                    WHERE id = ? AND batch_id = ?
-                    """,
-                    (pay_stat, pick_stat, act_p, pm, pay_stat, now_utc, bnot_val, int(s["id"]), int(batch_id)),
-                )
+                paid_clauses.append("payment_method = ?")
+                paid_params.append(pm)
+            if clean_pd and (pay_stat == "paid" or pick_stat == "picked_up"):
+                paid_clauses.append("paid_at = ?")
+                paid_params.append(clean_pd)
             else:
-                conn.execute(
-                    """
-                    UPDATE harvest_shares
-                    SET payment_status = ?, pickup_status = ?, actual_sale_price = ?,
-                        paid_at = CASE WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ? ELSE COALESCE(paid_at, '') END,
-                        butcher_notified_at = ?
-                    WHERE id = ? AND batch_id = ?
-                    """,
-                    (pay_stat, pick_stat, act_p, pay_stat, now_utc, bnot_val, int(s["id"]), int(batch_id)),
+                paid_clauses.append(
+                    "paid_at = CASE WHEN ? = 'paid' AND COALESCE(paid_at, '') = '' THEN ? ELSE COALESCE(paid_at, '') END"
                 )
+                paid_params.extend([pay_stat, now_utc])
+            paid_params.extend([int(s["id"]), int(batch_id)])
+            conn.execute(
+                f"UPDATE harvest_shares SET {', '.join(paid_clauses)} WHERE id = ? AND batch_id = ?",
+                paid_params,
+            )
         conn.commit()
         return len(share_list)
+
+
+def update_customer_share_payment_details(
+    user_id: int,
+    batch_id: int,
+    customer_id: int,
+    payment_method: str,
+    paid_date: str | None = None,
+) -> int:
+    """Update payment_method and optional paid_date across paid/picked-up shares."""
+    pm = normalize_homestead_payment_method(payment_method)
+    clean_pd = normalize_paid_date(paid_date)
+    with get_db_connection() as conn:
+        batch = conn.execute(
+            "SELECT id FROM batches WHERE id = ? AND user_id = ?",
+            (int(batch_id), int(user_id)),
+        ).fetchone()
+        if not batch:
+            return 0
+        set_sql = "payment_method = ?"
+        params: list[object] = [pm]
+        if clean_pd:
+            set_sql += ", paid_at = ?"
+            params.append(clean_pd)
+        params.extend([int(batch_id), int(customer_id)])
+        cur = conn.execute(
+            f"""
+            UPDATE harvest_shares
+            SET {set_sql}
+            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
+              AND (
+                LOWER(COALESCE(payment_status, '')) = 'paid'
+                OR LOWER(COALESCE(pickup_status, '')) = 'picked_up'
+                OR actual_sale_price IS NOT NULL
+              )
+            """,
+            params,
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
 
 
 def update_customer_share_payment_method(
@@ -794,29 +853,7 @@ def update_customer_share_payment_method(
     payment_method: str,
 ) -> int:
     """Update payment_method across paid/picked-up shares for a customer in an owned batch."""
-    pm = normalize_homestead_payment_method(payment_method)
-    with get_db_connection() as conn:
-        batch = conn.execute(
-            "SELECT id FROM batches WHERE id = ? AND user_id = ?",
-            (int(batch_id), int(user_id)),
-        ).fetchone()
-        if not batch:
-            return 0
-        cur = conn.execute(
-            """
-            UPDATE harvest_shares
-            SET payment_method = ?
-            WHERE batch_id = ? AND customer_id = ? AND COALESCE(for_sale, 1) = 1
-              AND (
-                LOWER(COALESCE(payment_status, '')) = 'paid'
-                OR LOWER(COALESCE(pickup_status, '')) = 'picked_up'
-                OR actual_sale_price IS NOT NULL
-              )
-            """,
-            (pm, int(batch_id), int(customer_id)),
-        )
-        conn.commit()
-        return int(cur.rowcount or 0)
+    return update_customer_share_payment_details(user_id, batch_id, customer_id, payment_method)
 
 
 def reopen_customer_shares(

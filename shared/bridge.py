@@ -65,6 +65,15 @@ def _resolve_harvest_timestamp(
     target_tz = tz if tz is not None else timezone.utc
     raw_paid = str(paid_at or "").strip()
     if raw_paid:
+        if len(raw_paid) == 10:
+            iso_paid = _safe_iso_date(raw_paid)
+            if iso_paid:
+                return (
+                    iso_paid,
+                    f"{iso_paid}T12:00:00",
+                    f"{iso_paid}T12:00:00",
+                    "Farm pickup",
+                )
         try:
             dt = datetime.fromisoformat(raw_paid.replace("Z", ""))
             if dt.tzinfo is None:
@@ -415,13 +424,17 @@ def list_homestead_paid_transactions(
 
         batch_sale_rows = conn.execute(
             """
-            SELECT bs.id, bs.batch_id, bs.entry_date, bs.weight_lbs, bs.revenue,
+            SELECT bs.id, bs.batch_id, bs.entry_date, bs.allocation_type,
+                   COALESCE(bs.head_count, 0) AS head_count,
+                   bs.weight_lbs, bs.revenue,
                    COALESCE(bs.payment_method, '') AS payment_method,
                    COALESCE(bs.notes, '') AS notes,
-                   b.name AS batch_name
+                   b.name AS batch_name,
+                   COALESCE(c.name, '') AS customer_name
             FROM batch_sales bs
             JOIN batches b ON b.id = bs.batch_id
-            WHERE b.user_id = ? AND bs.allocation_type = 'Customer Sale'
+            LEFT JOIN customers c ON c.id = bs.customer_id
+            WHERE b.user_id = ? AND bs.allocation_type IN ('Customer Sale', 'Live Sale')
             ORDER BY bs.entry_date DESC, bs.id DESC
             """,
             (owner_uid,),
@@ -606,11 +619,21 @@ def list_homestead_paid_transactions(
         if date_to and d_str > date_to:
             continue
         pm = _safe_pm(r["payment_method"])
+        is_live = str(r["allocation_type"] or "") == "Live Sale"
         lbs = round(float(r["weight_lbs"] or 0.0), 2)
         price_cents = int(round(max(0.0, float(r["revenue"] or 0.0)) * 100))
         note = str(r["notes"] or "").strip()
         bname = str(r["batch_name"] or "Batch")
-        item_name = f"{bname} · {lbs:.2f} lb bulk sale" + (f" ({note})" if note else "")
+        if is_live:
+            units = max(1, int(r["head_count"] or 1))
+            cust_lbl = str(r["customer_name"] or "").strip() or "Live Animal Sale"
+            item_name = f"{bname} · {units} live head sold" + (f" ({note})" if note else "")
+            time_lbl = "Live sale"
+        else:
+            units = 1
+            cust_lbl = str(r["customer_name"] or "").strip() or "Bulk Customer Sale"
+            item_name = f"{bname} · {lbs:.2f} lb bulk sale" + (f" ({note})" if note else "")
+            time_lbl = "Batch sale"
         out.append(
             {
                 "id": f"BS-{int(r['id'])}",
@@ -620,13 +643,13 @@ def list_homestead_paid_transactions(
                 "record_ids_csv": str(int(r["id"])),
                 "batch_id": int(r["batch_id"]),
                 "batch_name": bname,
-                "customer_name": "Bulk Customer Sale",
+                "customer_name": cust_lbl,
                 "date_str": d_str,
                 "occurred_at": f"{d_str}T12:00:00",
                 "sort_ts": f"{d_str}T12:00:00",
-                "time_label": "Batch sale",
+                "time_label": time_lbl,
                 "total_cents": price_cents,
-                "units": 1,
+                "units": units,
                 "total_lbs": lbs,
                 "pay_method": pm,
                 "pay_label": pm.capitalize() if pm else "Untagged",
@@ -638,7 +661,7 @@ def list_homestead_paid_transactions(
                     {
                         "id": int(r["id"]),
                         "name_snapshot": item_name,
-                        "quantity": 1,
+                        "quantity": units,
                         "unit_price_cents": price_cents,
                         "subtotal_cents": price_cents,
                         "is_fee": False,
@@ -684,6 +707,7 @@ def update_homestead_transaction_payment_method(
                 UPDATE batch_sales
                 SET payment_method = ?
                 WHERE id IN ({marks})
+                  AND allocation_type IN ('Customer Sale', 'Live Sale')
                   AND batch_id IN (SELECT id FROM batches WHERE user_id = ?)
                 """,
                 [pm, *ids, owner_uid],

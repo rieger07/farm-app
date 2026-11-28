@@ -4322,6 +4322,440 @@ class FarmWebTest(unittest.TestCase):
             403,
         )
 
+    def test_historical_sale_dates_live_pet_sales_and_edit_archived_batch(self):
+        from zoneinfo import ZoneInfo
+        from homestead.db.batches import list_batch_sales, list_batches, save_batch
+        from homestead.db.customers import save_customer
+        from homestead.db.shares import list_batch_harvest_shares
+        from homestead.scheduling import compute_batch_schedule
+        from homestead.tax_books import build_unified_tax_books
+        from shared.bridge import list_homestead_paid_transactions
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        cust_pet = save_customer(1, name="Alice PetBuyer", phone="555-111-2222")
+        cust_meat = save_customer(1, name="Bob MeatBuyer", phone="555-333-4444")
+
+        # 1. Create a historical batch explicitly saved as Archived
+        r_save = self.c.post(
+            "/batches/save",
+            data={
+                "name": "Kune Winter Litter",
+                "species": "kunekune pigs",
+                "start_date": "2025-07-01",
+                "initial_quantity": "4",
+                "unit_cost": "50.00",
+                "avg_dressed_weight": "100.0",
+                "sale_price_per_lb": "6.00",
+                "processing_cost": "0.00",
+                "lifecycle_type": "mammal_breeding",
+                "sale_unit": "shares",
+                "customer_pays_butcher": "1",
+                "is_archived": "1",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_save.status_code, 303)
+        batch = list_batches(user_id=1)[0]
+        bid = int(batch["id"])
+        self.assertEqual(int(batch["active"]), 0)
+        self.assertNotIn("Kune Winter Litter", self.c.get("/").text)
+
+        # Editing preserves archived flag whether passed explicitly or via API save_batch without 'active'
+        self.c.post(
+            "/batches/save",
+            data={
+                "batch_id": str(bid),
+                "name": "Kune Winter Litter Updated",
+                "species": "kunekune pigs",
+                "start_date": "2025-07-01",
+                "initial_quantity": "4",
+                "unit_cost": "50.00",
+                "avg_dressed_weight": "100.0",
+                "sale_price_per_lb": "6.00",
+                "processing_cost": "0.00",
+                "lifecycle_type": "mammal_breeding",
+                "sale_unit": "shares",
+                "is_archived": "1",
+                "notes": "Updated notes",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        b_after = list_batches(user_id=1)[0]
+        self.assertEqual(int(b_after["active"]), 0)
+        b_no_active = {k: v for k, v in b_after.items() if k != "active"}
+        save_batch(b_no_active, batch_id=bid, user_id=1)
+        self.assertEqual(int(list_batches(user_id=1)[0]["active"]), 0)
+
+        # 2. Log 1 loss + 1 Live Sale (sold as pet in July 2025) + 2 harvested pig carcasses in Jan 2026
+        self.c.post(
+            "/batches/log-loss",
+            data={"batch_id": str(bid), "loss_date": "2025-07-05", "count": "1", "reason": "Runt", "next_url": f"/batches/{bid}"},
+            follow_redirects=False,
+        )
+        r_live = self.c.post(
+            "/batches/log-sale",
+            data={
+                "batch_id": str(bid),
+                "entry_date": "2025-07-15",
+                "allocation_type": "live",
+                "weight_lbs": "0",
+                "head_count": "1",
+                "customer_id": str(cust_pet),
+                "revenue": "250.00",
+                "payment_method": "venmo",
+                "notes": "Sold live as pet",
+                "next_url": f"/batches/{bid}",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_live.status_code, 303)
+
+        for idx in (1, 2):
+            r_h = self.c.post(
+                f"/api/batches/{bid}/harvest",
+                json={
+                    "harvest_date": "2026-01-10",
+                    "dressed_lbs": 100.0,
+                    "animal_label": f"Pig #{idx}",
+                    "split_mode": "halves",
+                    "weight_basis": "hanging",
+                },
+            )
+            self.assertEqual(r_h.status_code, 200)
+
+        sched = compute_batch_schedule(list_batches(user_id=1)[0])
+        self.assertEqual(sched["surviving_quantity"], 3)
+        self.assertEqual(sched["live_sold_head"], 1)
+        self.assertEqual(sched["on_farm_head"], 0)
+        self.assertAlmostEqual(sched["sold_lbs"], 0.0, places=2)
+        self.assertAlmostEqual(sched["actual_sales_revenue"], 250.0, places=2)
+
+        tally_html = self.c.get(f"/batches/{bid}/harvest").text
+        self.assertIn("2 / 2", tally_html)
+        self.assertIn("1 sold live", tally_html)
+
+        # 3. Assign shares and stamp explicit historical paid_date in Jan 2026
+        shares = list_batch_harvest_shares(bid)
+        sh_a = int(shares[0]["id"])
+        sh_b = int(shares[1]["id"])
+        r_asgn_a = self.c.post(
+            f"/api/batches/{bid}/shares/{sh_a}/assign",
+            json={
+                "customer_id": cust_meat,
+                "for_sale": True,
+                "actual_sale_price": 300.0,
+                "payment_status": "paid",
+                "pickup_status": "picked_up",
+                "payment_method": "cash",
+                "paid_date": "2026-01-18",
+            },
+        )
+        self.assertEqual(r_asgn_a.status_code, 200)
+        r_asgn_b = self.c.post(
+            f"/api/batches/{bid}/shares/{sh_b}/assign",
+            json={
+                "customer_id": cust_meat,
+                "for_sale": True,
+                "actual_sale_price": 300.0,
+                "payment_status": "unpaid",
+                "pickup_status": "assigned",
+            },
+        )
+        self.assertEqual(r_asgn_b.status_code, 200)
+
+        # Settle pending share on Pickup Day with custom paid_date, then edit Completed Pickup paid_date
+        self.assertEqual(
+            self.c.post(
+                f"/batches/{bid}/pickup/{cust_meat}/settle-shares",
+                data={
+                    "collected_today": "300.00",
+                    "payment_method": "check",
+                    "paid_date": "2026-01-19",
+                    "action": "mark_picked_up",
+                    "share_ids": [str(sh_b)],
+                },
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+        self.assertEqual(
+            self.c.post(
+                f"/batches/{bid}/pickup/{cust_meat}/payment-method",
+                data={"payment_method": "venmo", "paid_date": "2026-01-22"},
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+        shares_now = {int(s["id"]): s for s in list_batch_harvest_shares(bid)}
+        self.assertEqual(shares_now[sh_a]["paid_at"], "2026-01-22")
+        self.assertEqual(shares_now[sh_b]["paid_at"], "2026-01-22")
+        self.assertEqual(shares_now[sh_b]["payment_method"], "venmo")
+
+        # Update share B paid_date directly via Harvest Tally API
+        self.assertEqual(
+            self.c.post(
+                f"/api/batches/{bid}/shares/{sh_b}/assign",
+                json={
+                    "customer_id": cust_meat,
+                    "for_sale": True,
+                    "actual_sale_price": 300.0,
+                    "payment_status": "paid",
+                    "pickup_status": "picked_up",
+                    "payment_method": "card",
+                    "paid_date": "2026-01-25",
+                },
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            next(s for s in list_batch_harvest_shares(bid) if int(s["id"]) == sh_b)["paid_at"],
+            "2026-01-25",
+        )
+
+        # 4. Verify Tax Books attributes 2025 vs 2026 cash revenue accurately & Iron Ledger bridge preserves exact dates
+        tb_2025 = build_unified_tax_books(1, tax_year=2025)
+        tb_2026 = build_unified_tax_books(1, tax_year=2026)
+        self.assertAlmostEqual(tb_2025["totals"]["homestead_income"], 250.0, places=2)
+        self.assertAlmostEqual(tb_2026["totals"]["homestead_income"], 600.0, places=2)
+
+        bridge_sales = list_homestead_paid_transactions(1, tz=ZoneInfo("America/New_York"))
+        dates_seen = {s["date_str"] for s in bridge_sales}
+        self.assertIn("2025-07-15", dates_seen)
+        self.assertIn("2026-01-22", dates_seen)
+        self.assertIn("2026-01-25", dates_seen)
+        live_bridge = next(s for s in bridge_sales if s["date_str"] == "2025-07-15")
+        self.assertEqual(live_bridge["customer_name"], "Alice PetBuyer")
+        self.assertEqual(live_bridge["total_cents"], 25000)
+
+        # Customer profile displays historical live sale & paid dates
+        cust_html = self.c.get(f"/customers?selected={cust_pet}").text
+        self.assertIn("2025-07-15", cust_html)
+        self.assertIn("Live Sale (1 hd)", cust_html)
+        self.assertIn("$250.00", cust_html)
+
+        # Edit existing batch_sales date & method inline on batch_detail
+        live_sale_id = int(list_batch_sales(bid)[0]["id"])
+        self.assertEqual(
+            self.c.post(
+                f"/batches/{bid}/sales/{live_sale_id}/payment-method",
+                data={"payment_method": "cash", "entry_date": "2025-07-20"},
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+        updated_bs = list_batch_sales(bid)[0]
+        self.assertEqual(updated_bs["entry_date"], "2025-07-20")
+        self.assertEqual(updated_bs["payment_method"], "cash")
+        bd_html = self.c.get(f"/batches/{bid}").text
+        self.assertIn("1 sold live", bd_html)
+        self.assertIn("Live Sale (1 hd)", bd_html)
+
+    def test_bulk_receipts_api_csv_import_and_historical_batches(self):
+        from unittest.mock import patch
+        from homestead.db.batches import list_batches
+        from homestead.scheduling import compute_batch_schedule
+        from homestead.tax_books import build_unified_tax_books
+
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/settings/members",
+            data={"username": "mom", "display_name": "Mom", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+
+        # Seed existing archived batch & herd for CSV resolution
+        self.c.post(
+            "/batches/save",
+            data={
+                "name": "Old Broilers",
+                "species": "cornish cross",
+                "start_date": "2025-05-01",
+                "initial_quantity": "25",
+                "is_archived": "1",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/herds/save",
+            data={"name": "Sheep Flock", "species": "sheep", "herd_type": "fiber", "head_count": "4"},
+            follow_redirects=False,
+        )
+
+        # 1. Bulk Receipts UI & template download
+        br_resp = self.c.get("/financials/bulk-receipts")
+        self.assertEqual(br_resp.status_code, 200)
+        self.assertIn("Bulk Receipt Upload &amp; Import", br_resp.text)
+        tpl = self.c.get("/financials/bulk-receipts/template.csv")
+        self.assertEqual(tpl.status_code, 200)
+        self.assertIn("batch_or_herd,feed_type", tpl.text)
+
+        # 2. Queue sequential JSON save + Drive upload & duplicate detection API
+        with patch("homestead.gdrive.upload_receipt_to_drive", return_value=("drv-b1", "https://drive.google.com/file/d/drv-b1/view")):
+            r_api = self.c.post(
+                "/api/receipts/save",
+                data={
+                    "receipt_date": "2025-06-14",
+                    "vendor": "Tractor Supply",
+                    "lines_json": json.dumps([
+                        {"kind": "general", "category": "Supplies & Equipment", "amount": 64.95, "notes": "Waterer"}
+                    ]),
+                },
+                files={"receipt_file": ("r1.jpg", b"jpeg-bytes", "image/jpeg")},
+            )
+        self.assertEqual(r_api.status_code, 200)
+        d_api = r_api.json()
+        self.assertTrue(d_api["ok"])
+        self.assertEqual(d_api["saved_count"], 1)
+        self.assertAlmostEqual(d_api["total_amount"], 64.95, places=2)
+
+        r_dup = self.c.post(
+            "/api/receipts/check-duplicates",
+            json={
+                "items": [
+                    {"date": "2025-06-14", "vendor": "tractor supply", "total": 64.95},
+                    {"date": "2025-06-20", "vendor": "tractor supply", "total": 99.00},
+                ]
+            },
+        )
+        self.assertEqual(r_dup.status_code, 200)
+        self.assertEqual(r_dup.json()["duplicates"], [0])
+
+        # 3. Receipt CSV preview (including dup detection + error detection) + commit
+        csv_body = "\n".join([
+            "date,vendor,kind,category,batch_or_herd,feed_type,quantity,unit,weight_lbs,amount,notes,receipt_url",
+            "2025-06-14,Tractor Supply,general,Supplies & Equipment,,,,,,64.95,Dup waterer,",
+            "2025-05-20,Local Mill,batch_feed,,Old Broilers,grower,4,bags,200,88.00,Grower pellets,",
+            "2025-11-05,Country Co-op,layer_feed,,all,layer,2,bags,100,46.00,Layer mash,",
+            "2026-01-10,Valley Hay,herd_feed,,Sheep Flock,hay,10,bales,500,85.00,Winter hay,",
+            "bad-date,Broken Vendor,general,Other,,,,,,12.00,Bad row,",
+        ])
+        prev = self.c.post(
+            "/financials/bulk-receipts/csv-preview",
+            files={"csv_file": ("receipts.csv", csv_body.encode("utf-8"), "text/csv")},
+        )
+        self.assertEqual(prev.status_code, 200)
+        self.assertIn("Possible duplicate", prev.text)
+        self.assertIn("Invalid or missing date", prev.text)
+        self.assertIn("4 valid", prev.text)
+
+        from homestead.bulk_import import parse_receipt_csv
+        from homestead.db.herds import list_herds
+
+        parsed_rcpts = parse_receipt_csv(
+            csv_body.encode("utf-8"),
+            batches=list_batches(user_id=1),
+            herds=list_herds(1, include_inactive=True),
+            bag_weight=50,
+            existing_user_id=1,
+        )
+        to_commit = [r for r in parsed_rcpts["rows"] if r["is_valid"] and not r["is_duplicate"]]
+        self.assertEqual(len(to_commit), 3)
+        r_commit = self.c.post(
+            "/financials/bulk-receipts/csv-commit",
+            data={"rows_json": json.dumps(to_commit)},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_commit.status_code, 303)
+        tb_all = build_unified_tax_books(1, tax_year=None)
+        self.assertAlmostEqual(tb_all["totals"]["total_expenses"], round(64.95 + 88.0 + 46.0 + 85.0, 2), places=2)
+
+        # 4. Historical Batch Quick Form + CSV Import
+        self.assertEqual(self.c.get("/batches/import").status_code, 200)
+        self.assertEqual(self.c.get("/batches/import/template.csv").status_code, 200)
+
+        r_quick = self.c.post(
+            "/batches/import/quick",
+            data={
+                "name": "Kune 2024 Cohort",
+                "species": "kunekune pigs",
+                "start_date": "2024-08-01",
+                "initial_quantity": "6",
+                "unit_cost": "40.00",
+                "sale_unit": "shares",
+                "harvest_date": "2025-02-01",
+                "harvested_head": "3",
+                "dressed_lbs": "250.0",
+                "processing_cost": "100.00",
+                "feed_lbs": "1200.0",
+                "feed_cost": "540.00",
+                "losses": "1",
+                "live_sold_head": "2",
+                "live_sale_date": "2024-10-15",
+                "live_sale_revenue": "300.00",
+                "meat_sale_date": "2025-02-10",
+                "meat_sale_revenue": "750.00",
+                "freezer_lbs": "50.0",
+                "payment_method": "venmo",
+                "notes": "2 pets in 2024 + 3 butchered in 2025",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(r_quick.status_code, 303)
+        kune_b = next(b for b in list_batches(user_id=1) if b["name"] == "Kune 2024 Cohort")
+        self.assertEqual(int(kune_b["active"]), 0)
+        ks = compute_batch_schedule(kune_b)
+        self.assertEqual(ks["surviving_quantity"], 5)
+        self.assertEqual(ks["live_sold_head"], 2)
+        self.assertEqual(ks["harvested_head"], 3)
+        self.assertAlmostEqual(ks["freezer_lbs"], 50.0, places=2)
+        self.assertAlmostEqual(ks["sold_lbs"], 200.0, places=2)
+        self.assertAlmostEqual(ks["actual_sales_revenue"], 1050.0, places=2)
+        self.assertAlmostEqual(build_unified_tax_books(1, tax_year=2024)["totals"]["homestead_income"], 300.0, places=2)
+        self.assertAlmostEqual(build_unified_tax_books(1, tax_year=2025)["totals"]["homestead_income"], 750.0, places=2)
+
+        batch_csv = "\n".join([
+            "name,species,start_date,initial_quantity,unit_cost,sale_unit,harvest_date,harvested_head,dressed_lbs,processing_cost,feed_lbs,feed_cost,losses,live_sold_head,live_sale_date,live_sale_revenue,meat_sale_date,meat_sale_revenue,freezer_lbs,payment_method,notes",
+            "Heritage Turkeys 2024,turkeys,2024-06-01,15,12.00,whole,2024-11-18,14,224.0,112.00,600,264.00,1,0,,0,2024-11-23,1100.00,0,cash,Thanksgiving birds",
+        ])
+        b_prev = self.c.post(
+            "/batches/import/csv-preview",
+            files={"csv_file": ("batches.csv", batch_csv.encode("utf-8"), "text/csv")},
+        )
+        self.assertEqual(b_prev.status_code, 200)
+        self.assertIn("Heritage Turkeys 2024", b_prev.text)
+        from homestead.bulk_import import parse_batch_csv
+        from homestead.db.core import get_species_catalog
+        parsed_b = parse_batch_csv(batch_csv.encode("utf-8"), species_catalog=get_species_catalog(user_id=1))
+        r_bc = self.c.post(
+            "/batches/import/csv-commit",
+            data={"rows_json": json.dumps(parsed_b["rows"])},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_bc.status_code, 303)
+        turk_b = next(b for b in list_batches(user_id=1) if b["name"] == "Heritage Turkeys 2024")
+        self.assertEqual(int(turk_b["active"]), 0)
+        self.assertAlmostEqual(build_unified_tax_books(1, tax_year=2024)["totals"]["homestead_income"], 1400.0, places=2)
+
+        # 5. Staff role RBAC -> 403 on all bulk receipt & batch import endpoints
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "mom", "password": "secret"}, follow_redirects=False)
+        for method, path, kw in [
+            ("GET", "/financials/bulk-receipts", {}),
+            ("GET", "/financials/bulk-receipts/template.csv", {}),
+            ("POST", "/api/receipts/save", {"data": {"lines_json": "[]"}}),
+            ("POST", "/api/receipts/check-duplicates", {"json": {"items": []}}),
+            ("POST", "/financials/bulk-receipts/csv-preview", {"files": {"csv_file": ("a.csv", b"date\n", "text/csv")}}),
+            ("POST", "/financials/bulk-receipts/csv-commit", {"data": {"rows_json": "[]"}}),
+            ("GET", "/batches/import", {}),
+            ("GET", "/batches/import/template.csv", {}),
+            ("POST", "/batches/import/quick", {"data": {"name": "X", "species": "turkeys", "start_date": "2025-01-01", "initial_quantity": "5"}}),
+            ("POST", "/batches/import/csv-preview", {"files": {"csv_file": ("b.csv", b"name\n", "text/csv")}}),
+            ("POST", "/batches/import/csv-commit", {"data": {"rows_json": "[]"}}),
+        ]:
+            resp = c_staff.get(path, follow_redirects=False) if method == "GET" else c_staff.post(path, follow_redirects=False, **kw)
+            self.assertEqual(resp.status_code, 403, f"Expected 403 for staff {method} {path}")
+
 
 if __name__ == "__main__":
     unittest.main()
