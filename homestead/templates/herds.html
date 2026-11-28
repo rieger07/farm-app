@@ -1,6 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Perennial Herds · Homestead Planner{% endblock %}
 {% block content %}
+{% macro fleece_color_picker(prefix, input_name, colors) %}
+<div class="fleece-picker">
+  <input type="hidden" name="{{ input_name }}" id="{{ prefix }}-color">
+  <div class="fleece-picker-head">
+    <span>Fleece Color</span>
+    <span class="fleece-selected">
+      <span class="fleece-dot" id="{{ prefix }}-color-dot" data-swatch="" aria-hidden="true"></span>
+      <span id="{{ prefix }}-color-label" class="muted">Tap a shade (16 AOA colors)</span>
+      <button type="button" class="link" id="{{ prefix }}-color-clear" style="padding:0" hidden onclick="setFleeceColor('{{ prefix }}', '')">Clear</button>
+    </span>
+  </div>
+  <div class="fleece-palette" id="{{ prefix }}-palette" role="group" aria-label="Alpaca fleece colors">
+    {% for c in colors %}
+    <button type="button" class="fleece-swatch" data-color="{{ c.name }}" data-code="{{ c.code }}"
+            title="{{ c.name }} ({{ c.code }})" aria-pressed="false"
+            onclick="setFleeceColor('{{ prefix }}', this.dataset.color)">
+      <span class="fleece-chip-dot" data-swatch="{{ c.code }}" aria-hidden="true"></span>
+      <span>{{ c.short }}</span>
+    </button>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
 <div class="eyebrow">BREEDING STOCK &amp; FIBER HERDS</div>
 <div class="pagehead">
   <div>
@@ -86,7 +109,7 @@
   <div class="row" style="gap:8px;flex-wrap:wrap">
     {% for bc in fiber_dash.by_color %}
     <div style="background:var(--surface-soft);border:1px solid var(--line);border-radius:10px;padding:8px 12px">
-      <b>{{ bc.color }}</b>
+      <span class="fleece-selected"><span class="fleece-dot" data-swatch="{{ bc.color_code }}"></span><b>{{ bc.color }}</b></span>
       <small class="inline muted">· {{ bc.clip_count }} clip{{ '' if bc.clip_count == 1 else 's' }}</small>
       <div style="font:600 17px Georgia,serif;color:var(--green)">{{ '%.1f'|format(bc.remaining_lbs) }} lb <small class="inline muted">avail</small></div>
       <small class="muted">{{ '%.1f'|format(bc.total_lbs) }} lb total shorn</small>
@@ -102,25 +125,54 @@
   {% if can_manage %}
   <div class="card">
     <h2 class="mb-0">Log Annual Shearing</h2>
-    <p class="sub mb-md">Record fleece weights per named alpaca (color auto-fills from the roster).</p>
+    <p class="sub mb-md">Record fleece weights per named animal (color, grade, and markings auto-fill from the roster).</p>
     <form method="post" action="/herds/{{ selected_herd.id }}/shearings/add" class="fgrid">
-      <label>Named Alpaca
+      <label>Named {{ 'Alpaca' if is_alpaca_herd else 'Animal' }}
         <select name="animal_id" id="sh-animal" onchange="onShearingAnimalChange()">
-          <option value="" data-color="">— Herd clip / Unspecified —</option>
+          <option value="" data-color="" data-grade="" data-factors="">— Herd clip / Unspecified —</option>
           {% for a in animals %}
-          <option value="{{ a.id }}" data-color="{{ a.color }}">{{ a.name }}{% if a.color %} ({{ a.color }}){% endif %}{% if not a.active %} [Retired]{% endif %}</option>
+          <option value="{{ a.id }}" data-color="{{ a.color }}" data-grade="{{ a.fiber_grade }}" data-factors="{{ a.fleece_factors }}">{{ a.name }}{% if a.color %} ({{ a.color }}){% endif %}{% if a.fiber_grade_label %} · {{ a.fiber_grade_label }}{% endif %}{% if not a.active %} [Retired]{% endif %}</option>
           {% endfor %}
         </select>
       </label>
       <label>Shear Date
         <input type="date" name="shear_date" value="{{ today_iso }}" required>
       </label>
-      <label>Fleece Color / Grade
-        <input name="fleece_color" id="sh-color" placeholder="e.g. White, Dark Chocolate, Fawn">
+      {% if is_alpaca_herd %}
+      <label>Fiber Grade
+        <select name="fiber_grade" id="sh-grade">
+          <option value="">— Unspecified —</option>
+          {% for gkey, gshort, gfull in alpaca_fiber_grades %}
+          <option value="{{ gkey }}">{{ gfull }}</option>
+          {% endfor %}
+        </select>
       </label>
       <label>Shearing Fee ($)
         <input type="number" name="shearing_fee" step="0.01" min="0" value="0" placeholder="e.g. 35.00">
       </label>
+      <div class="full">
+        {{ fleece_color_picker('sh', 'fleece_color', alpaca_colors) }}
+      </div>
+      <div class="full">
+        <input type="hidden" name="fleece_factors_submitted" value="1">
+        <span class="fleece-field-label">Markings &amp; Clip Factors</span>
+        <div class="fleece-factors-wrap">
+          {% for fkey, flbl, fhint in alpaca_shearing_factors %}
+          <label class="tag-chip" title="{{ fhint }}">
+            <input type="checkbox" name="fleece_factors" class="sh-factor-cb" value="{{ fkey }}">
+            <span>{{ flbl }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <label>Fleece Color
+        <input name="fleece_color" id="sh-color" placeholder="e.g. White, Black, Brown">
+      </label>
+      <label>Shearing Fee ($)
+        <input type="number" name="shearing_fee" step="0.01" min="0" value="0" placeholder="e.g. 35.00">
+      </label>
+      {% endif %}
       <label>Prime Blanket (lb)
         <input type="number" name="prime_lbs" step="0.01" min="0" value="0" placeholder="e.g. 4.8">
       </label>
@@ -147,12 +199,14 @@
           <div class="hist-left">
             <b>{{ sh.shear_date }} · {{ sh.animal_name or 'Herd Clip' }}</b>
             <small>
-              {% if sh.fleece_color %}{{ sh.fleece_color }} · {% endif %}
+              {% if sh.fleece_color %}<span class="fleece-dot" data-swatch="{{ sh.color_code }}"></span> {{ sh.fleece_color }} · {% endif %}
               {{ '%.2f'|format(sh.total_lbs) }} lb total
               {% if sh.prime_lbs or sh.seconds_lbs %} ({{ '%.2f'|format(sh.prime_lbs) }} prime + {{ '%.2f'|format(sh.seconds_lbs) }} 2nds){% endif %}
+              {% if sh.fleece_factor_labels %} · {{ sh.fleece_factor_labels|join(', ') }}{% endif %}
             </small>
           </div>
           <div class="hist-right">
+            {% if sh.fiber_grade_label %}<span class="pill blue">{{ sh.fiber_grade_label }}</span>{% endif %}
             <span class="pill {{ 'green' if sh.remaining_lbs > 0 else 'gray' }}">{{ '%.1f'|format(sh.remaining_lbs) }} lb avail</span>
             {% if sh.shearing_fee > 0 %}<small class="muted">{{ sh.shearing_fee|money }}</small>{% endif %}
             <span class="hist-chev" aria-hidden="true">▾</span>
@@ -160,7 +214,10 @@
         </summary>
         <div class="hist-body">
           <div>
-            Color: <b>{{ sh.fleece_color or 'Unspecified' }}</b> · Allocated to mill: {{ '%.2f'|format(sh.allocated_lbs) }} lb
+            <span class="fleece-pill"><span class="fleece-dot" data-swatch="{{ sh.color_code }}"></span>{{ sh.fleece_color or 'Unspecified' }}</span>
+            {% if sh.fiber_grade_label %}<span class="pill blue">{{ sh.fiber_grade_label }}</span>{% endif %}
+            {% for flbl in sh.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
+            · Allocated to mill: {{ '%.2f'|format(sh.allocated_lbs) }} lb
             {% if sh.shearing_fee > 0 %} · Shearer fee: {{ sh.shearing_fee|money }}{% endif %}
             {% if sh.notes %}<br>{{ sh.notes }}{% endif %}
           </div>
@@ -240,16 +297,22 @@
       <div id="ml-color-warn" class="notice warn mb-sm" hidden>
         Heads up: you selected multiple fleece colors in the same mill lot. Keep distinct colors in separate lots unless blending intentionally.
       </div>
+      <div id="ml-suri-warn" class="notice warn mb-sm" hidden>
+        Heads up: you selected both Suri and non-Suri (Huacaya) fleeces in the same mill lot. Mills normally process Suri separately.
+      </div>
       {% if fiber_dash.available_shearings %}
       <div class="stack" style="gap:6px">
         {% for sh in fiber_dash.available_shearings %}
         <div class="flex-between" style="gap:8px;flex-wrap:wrap;padding:6px 8px;background:var(--card);border:1px solid var(--line);border-radius:8px">
           <label style="display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1">
             <input type="checkbox" name="shearing_ids" value="{{ sh.id }}" class="ml-fleece-cb"
-                   data-color="{{ sh.fleece_color }}" style="width:auto" onchange="syncMillLotColorCheck()">
+                   data-color="{{ sh.fleece_color }}" data-suri="{{ '1' if sh.is_suri else '0' }}"
+                   style="width:auto" onchange="syncMillLotColorCheck()">
             <span>
               <b>{{ sh.animal_name or 'Herd Clip' }}</b>
-              {% if sh.fleece_color %}<span class="pill blue">{{ sh.fleece_color }}</span>{% endif %}
+              {% if sh.fleece_color %}<span class="fleece-pill"><span class="fleece-dot" data-swatch="{{ sh.color_code }}"></span>{{ sh.fleece_color }}</span>{% endif %}
+              {% if sh.fiber_grade_label %}<span class="pill blue">{{ sh.fiber_grade_label }}</span>{% endif %}
+              {% for flbl in sh.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
               <small class="inline muted">· {{ sh.shear_date }} · {{ '%.2f'|format(sh.remaining_lbs) }} lb available</small>
             </span>
           </label>
@@ -292,11 +355,12 @@
     <div class="flex-between mb-sm" style="flex-wrap:wrap;gap:8px">
       <div>
         <b style="font-size:17px">{{ lot.lot_name }}</b>
-        {% if lot.color_group %}<span class="pill blue" style="margin-left:4px">{{ lot.color_group }}</span>{% endif %}
+        {% if lot.color_group %}<span class="fleece-pill" style="margin-left:4px"><span class="fleece-dot" data-swatch="{{ lot.color_code }}"></span>{{ lot.color_group }}</span>{% endif %}
         <span class="pill {{ 'green' if lot.status == 'received' else ('amber' if lot.status == 'sent_to_mill' else 'gray') }}" style="margin-left:4px">
           {{ 'Received' if lot.status == 'received' else ('At Mill' if lot.status == 'sent_to_mill' else 'Draft') }}
         </span>
         {% if lot.mixed_color_warning %}<span class="pill amber" style="margin-left:4px">Mixed Colors</span>{% endif %}
+        {% if lot.mixed_suri_warning %}<span class="pill amber" style="margin-left:4px">Mixed Suri / Huacaya</span>{% endif %}
         <small class="muted" style="display:block;margin-top:2px">
           {% if lot.mill_name %}{{ lot.mill_name }} · {% endif %}
           {% if lot.sent_date %}Sent {{ lot.sent_date }}{% endif %}
@@ -333,7 +397,7 @@
     {% if lot.inputs %}
     <div class="row mb-sm" style="gap:6px;flex-wrap:wrap">
       {% for inp in lot.inputs %}
-      <span class="pill gray">{{ inp.animal_name or 'Clip' }}{% if inp.fleece_color %} ({{ inp.fleece_color }}){% endif %}: {{ '%.2f'|format(inp.raw_lbs_used) }} lb</span>
+      <span class="pill gray"><span class="fleece-dot" data-swatch="{{ inp.color_code }}"></span>{{ inp.animal_name or 'Clip' }}{% if inp.fleece_color %} ({{ inp.fleece_color }}){% endif %}{% if inp.fiber_grade_label %} · {{ inp.fiber_grade_label }}{% endif %}{% if inp.fleece_factor_labels %} · {{ inp.fleece_factor_labels|join(', ') }}{% endif %}: {{ '%.2f'|format(inp.raw_lbs_used) }} lb</span>
       {% endfor %}
     </div>
     {% endif %}
@@ -553,10 +617,36 @@
     {% if can_manage %}
     <form method="post" action="/herds/{{ selected_herd.id }}/animals/save" class="fgrid mb-md" style="padding:10px;background:var(--surface-soft);border:1px solid var(--line);border-radius:10px">
       <input type="hidden" name="animal_id" id="anm-id">
-      <label>Name<input name="name" id="anm-name" placeholder="{% if selected_herd.species == 'alpaca' %}e.g. Luna{% else %}e.g. Penelope (Sow){% endif %}" required></label>
-      <label>Role / Sex<input name="sex_role" id="anm-role" placeholder="{% if selected_herd.species == 'alpaca' %}Female / Gelding{% else %}Sow / Boar{% endif %}"></label>
-      <label>Color / Fleece Grade<input name="color" id="anm-color" placeholder="{% if selected_herd.species == 'alpaca' %}White, Dark Chocolate, Fawn…{% else %}Black &amp; White…{% endif %}"></label>
+      <label>Name<input name="name" id="anm-name" placeholder="{% if is_alpaca_herd %}e.g. Luna{% else %}e.g. Penelope (Sow){% endif %}" required></label>
+      <label>Role / Sex<input name="sex_role" id="anm-role" placeholder="{% if is_alpaca_herd %}Female / Gelding{% else %}Sow / Boar{% endif %}"></label>
+      {% if is_alpaca_herd %}
       <label>Birth Year<input type="number" name="birth_year" id="anm-year" min="1990" max="2100" placeholder="2023"></label>
+      <label>Fiber Grade
+        <select name="fiber_grade" id="anm-grade">
+          <option value="">— Unspecified —</option>
+          {% for gkey, gshort, gfull in alpaca_fiber_grades %}
+          <option value="{{ gkey }}">{{ gfull }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="full">
+        {{ fleece_color_picker('anm', 'color', alpaca_colors) }}
+      </div>
+      <div class="full">
+        <span class="fleece-field-label">Markings &amp; Fleece Factors</span>
+        <div class="fleece-factors-wrap">
+          {% for fkey, flbl, fhint in alpaca_animal_factors %}
+          <label class="tag-chip" title="{{ fhint }}">
+            <input type="checkbox" name="fleece_factors" class="anm-factor-cb" value="{{ fkey }}">
+            <span>{{ flbl }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <label>Color / Markings<input name="color" id="anm-color" placeholder="Black &amp; White…"></label>
+      <label>Birth Year<input type="number" name="birth_year" id="anm-year" min="1990" max="2100" placeholder="2023"></label>
+      {% endif %}
       <label class="full">Notes<input name="notes" id="anm-notes" placeholder="Registry ID, temperament, fleece micron notes…"></label>
       <div class="row full" style="justify-content:flex-end">
         <button type="button" class="btn sm" id="anm-cancel" hidden onclick="resetAnimalForm()">Cancel edit</button>
@@ -574,17 +664,23 @@
             <b>{{ a.name }}{% if not a.active %} <span class="pill gray">Retired</span>{% endif %}</b>
             <small>
               {% if a.sex_role %}{{ a.sex_role }}{% endif %}
-              {% if a.color %}{% if a.sex_role %} · {% endif %}{{ a.color }}{% endif %}
-              {% if a.birth_year %}{% if a.sex_role or a.color %} · {% endif %}Born {{ a.birth_year }}{% endif %}
+              {% if a.fleece_factor_labels %}{% if a.sex_role %} · {% endif %}{{ a.fleece_factor_labels|join(', ') }}{% endif %}
+              {% if a.birth_year %}{% if a.sex_role or a.fleece_factor_labels %} · {% endif %}Born {{ a.birth_year }}{% endif %}
             </small>
           </div>
           <div class="hist-right">
-            {% if a.color %}<span class="pill {{ 'gray' if not a.active else 'green' }}">{{ a.color }}</span>{% endif %}
+            {% if a.color %}<span class="fleece-pill"><span class="fleece-dot" data-swatch="{{ a.color_code }}"></span>{{ a.color }}</span>{% endif %}
+            {% if a.fiber_grade_label %}<span class="pill blue">{{ a.fiber_grade_label }}</span>{% endif %}
             <span class="hist-chev" aria-hidden="true">▾</span>
           </div>
         </summary>
         <div class="hist-body">
           <div>
+            {% if a.fleece_factor_labels %}
+            <div class="row mb-sm" style="gap:4px">
+              {% for flbl in a.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
+            </div>
+            {% endif %}
             {% if a.notes %}{{ a.notes }}{% else %}<small class="muted">No notes yet.</small>{% endif %}
           </div>
           {% if can_manage %}
@@ -742,11 +838,66 @@ function openEditHerdModal(h) {
   document.getElementById('hm-notes').value = h.notes || '';
   document.getElementById('dlg-herd').showModal();
 }
+function setFleeceColor(prefix, colorName) {
+  const input = document.getElementById(prefix + '-color');
+  const palette = document.getElementById(prefix + '-palette');
+  const dot = document.getElementById(prefix + '-color-dot');
+  const lbl = document.getElementById(prefix + '-color-label');
+  const clrBtn = document.getElementById(prefix + '-color-clear');
+  if (!input) return;
+  const val = String(colorName || '').trim();
+  input.value = val;
+  if (!palette) return;
+  let matched = null;
+  palette.querySelectorAll('.fleece-swatch').forEach(btn => {
+    const isMatch = val && String(btn.dataset.color || '').toLowerCase() === val.toLowerCase();
+    btn.classList.toggle('on', Boolean(isMatch));
+    btn.setAttribute('aria-pressed', isMatch ? 'true' : 'false');
+    if (isMatch) matched = btn;
+  });
+  if (matched) {
+    input.value = matched.dataset.color || val;
+    if (dot) dot.dataset.swatch = matched.dataset.code || '';
+    if (lbl) {
+      lbl.textContent = matched.dataset.color || val;
+      lbl.classList.remove('muted');
+    }
+  } else if (val) {
+    if (dot) dot.dataset.swatch = '';
+    if (lbl) {
+      lbl.textContent = val + ' (custom)';
+      lbl.classList.remove('muted');
+    }
+  } else {
+    if (dot) dot.dataset.swatch = '';
+    if (lbl) {
+      lbl.textContent = 'Tap a shade (16 AOA colors)';
+      lbl.classList.add('muted');
+    }
+  }
+  if (clrBtn) clrBtn.hidden = !val;
+}
+function setFactorCheckboxes(selector, rawCsv) {
+  const selected = new Set(
+    String(rawCsv || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+  );
+  document.querySelectorAll(selector).forEach(cb => {
+    cb.checked = selected.has(String(cb.value || '').toLowerCase());
+  });
+}
 function editAnimal(a) {
   document.getElementById('anm-id').value = a.id;
   document.getElementById('anm-name').value = a.name || '';
   document.getElementById('anm-role').value = a.sex_role || '';
-  document.getElementById('anm-color').value = a.color || '';
+  if (document.getElementById('anm-palette')) {
+    setFleeceColor('anm', a.color || '');
+  } else {
+    const colIn = document.getElementById('anm-color');
+    if (colIn) colIn.value = a.color || '';
+  }
+  const grd = document.getElementById('anm-grade');
+  if (grd) grd.value = a.fiber_grade || '';
+  setFactorCheckboxes('.anm-factor-cb', a.fleece_factors || '');
   document.getElementById('anm-year').value = a.birth_year || '';
   document.getElementById('anm-notes').value = a.notes || '';
   document.getElementById('anm-submit').textContent = 'Save changes';
@@ -757,7 +908,15 @@ function resetAnimalForm() {
   document.getElementById('anm-id').value = '';
   document.getElementById('anm-name').value = '';
   document.getElementById('anm-role').value = '';
-  document.getElementById('anm-color').value = '';
+  if (document.getElementById('anm-palette')) {
+    setFleeceColor('anm', '');
+  } else {
+    const colIn = document.getElementById('anm-color');
+    if (colIn) colIn.value = '';
+  }
+  const grd = document.getElementById('anm-grade');
+  if (grd) grd.value = '';
+  setFactorCheckboxes('.anm-factor-cb', '');
   document.getElementById('anm-year').value = '';
   document.getElementById('anm-notes').value = '';
   document.getElementById('anm-submit').textContent = '+ Add animal';
@@ -765,25 +924,40 @@ function resetAnimalForm() {
 }
 function onShearingAnimalChange() {
   const sel = document.getElementById('sh-animal');
-  const colIn = document.getElementById('sh-color');
-  if (!sel || !colIn) return;
+  if (!sel) return;
   const opt = sel.options[sel.selectedIndex];
   const color = opt ? (opt.dataset.color || '') : '';
-  if (color) colIn.value = color;
+  const grade = opt ? (opt.dataset.grade || '') : '';
+  const factors = opt ? (opt.dataset.factors || '') : '';
+  if (document.getElementById('sh-palette')) {
+    setFleeceColor('sh', color);
+  } else {
+    const colIn = document.getElementById('sh-color');
+    if (colIn && color) colIn.value = color;
+  }
+  const grd = document.getElementById('sh-grade');
+  if (grd) grd.value = grade;
+  setFactorCheckboxes('.sh-factor-cb', factors);
 }
 function syncMillLotColorCheck() {
   const checked = Array.from(document.querySelectorAll('.ml-fleece-cb:checked'));
   const colors = [];
   const seen = new Set();
+  let hasSuri = false;
+  let hasNonSuri = false;
   checked.forEach(cb => {
     const c = (cb.dataset.color || '').trim();
     if (c && !seen.has(c.toLowerCase())) {
       seen.add(c.toLowerCase());
       colors.push(c);
     }
+    if (cb.dataset.suri === '1') hasSuri = true;
+    else hasNonSuri = true;
   });
   const warn = document.getElementById('ml-color-warn');
   if (warn) warn.hidden = colors.length <= 1;
+  const suriWarn = document.getElementById('ml-suri-warn');
+  if (suriWarn) suriWarn.hidden = !(hasSuri && hasNonSuri);
   const grpIn = document.getElementById('ml-color-group');
   if (grpIn && !grpIn.dataset.manual && colors.length) {
     grpIn.value = colors.join(', ');
