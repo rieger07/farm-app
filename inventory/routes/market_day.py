@@ -32,6 +32,7 @@ from inventory.web import (
     render,
     require,
 )
+from shared.web import safe_redirect
 
 router = APIRouter()
 
@@ -329,6 +330,4 @@ def market_day_delete_route(
         msg = f"Deleted Market Day ({market_date}){suffix}."
     else:
         msg = f"No Market Day found for {market_date}."
-    target = next_url if (next_url.startswith("/") and not next_url.startswith("//")) else "/market-day"
-    sep = "&" if "?" in target else "?"
-    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+    return safe_redirect(next_url, fallback="/market-day", msg=msg)

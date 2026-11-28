@@ -490,24 +490,66 @@ function renderTally(t) {
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.onclick = () => openAssignModal(e);
-    let badgeHtml = '';
+
+    const tdNum = document.createElement('td');
+    const bNum = document.createElement('b');
+    bNum.textContent = `#${e.num}`;
+    tdNum.appendChild(bNum);
+
+    const tdWt = document.createElement('td');
+    tdWt.className = 'num';
+    const bWt = document.createElement('b');
+    bWt.textContent = `${Number(e.dressed_lbs).toFixed(2)} lb`;
+    const smOz = document.createElement('small');
+    smOz.textContent = String(e.lb_oz || '');
+    tdWt.append(bWt, smOz);
+
+    const tdStat = document.createElement('td');
     if (!e.for_sale) {
-      badgeHtml = '<span class="pill" style="background:#eeece1;color:var(--muted)">Not for sale · Freezer</span>';
+      const nfsPill = document.createElement('span');
+      nfsPill.className = 'pill';
+      nfsPill.style.cssText = 'background:#eeece1;color:var(--muted)';
+      nfsPill.textContent = 'Not for sale · Freezer';
+      tdStat.appendChild(nfsPill);
     } else if (!e.customer_id) {
-      badgeHtml = '<span class="pill green">Available</span>';
+      const avPill = document.createElement('span');
+      avPill.className = 'pill green';
+      avPill.textContent = 'Available';
+      tdStat.appendChild(avPill);
     } else {
+      const custB = document.createElement('b');
+      custB.textContent = String(e.customer_name || '');
       const pCls = e.pickup_status === 'picked_up' ? 'green' : 'amber';
       let pLbl = e.pickup_status === 'picked_up' ? 'Picked up' : (e.payment_status === 'paid' ? 'Paid' : 'Assigned');
       if (e.payment_status === 'paid' || e.pickup_status === 'picked_up') {
         const pmTxt = e.payment_method ? (e.payment_method.charAt(0).toUpperCase() + e.payment_method.slice(1)) : 'Untagged';
         pLbl += ` · ${pmTxt}`;
       }
-      const tipTag = e.tip_diff > 0.005 ? ` <small class="inline" style="color:var(--green)">(+$${Number(e.tip_diff).toFixed(2)})</small>` : '';
-      badgeHtml = `<b></b> <span class="pill ${pCls}" style="margin-left:4px">${pLbl}</span>${tipTag}`;
+      const statPill = document.createElement('span');
+      statPill.className = `pill ${pCls}`;
+      statPill.style.marginLeft = '4px';
+      statPill.textContent = pLbl;
+      tdStat.append(custB, document.createTextNode(' '), statPill);
+      if (e.tip_diff > 0.005) {
+        const tipSm = document.createElement('small');
+        tipSm.className = 'inline';
+        tipSm.style.color = 'var(--green)';
+        tipSm.textContent = `(+$${Number(e.tip_diff).toFixed(2)})`;
+        tdStat.append(document.createTextNode(' '), tipSm);
+      }
     }
-    tr.innerHTML = `<td><b>#${e.num}</b></td><td class="num"><b>${Number(e.dressed_lbs).toFixed(2)} lb</b><small>${e.lb_oz}</small></td><td>${badgeHtml}</td><td></td><td class="num"><span class="link">Assign</span></td>`;
-    if (e.for_sale && e.customer_id) tr.children[2].querySelector('b').textContent = e.customer_name;
-    tr.children[3].textContent = e.notes || '—';
+
+    const tdNotes = document.createElement('td');
+    tdNotes.textContent = e.notes || '—';
+
+    const tdAct = document.createElement('td');
+    tdAct.className = 'num';
+    const actSpan = document.createElement('span');
+    actSpan.className = 'link';
+    actSpan.textContent = 'Assign';
+    tdAct.appendChild(actSpan);
+
+    tr.append(tdNum, tdWt, tdStat, tdNotes, tdAct);
     tb.appendChild(tr);
   });
 }

@@ -283,8 +283,11 @@ async def api_receipt_parse(
         )
     try:
         mime_type = detect_receipt_mime_type(file.content_type, file.filename)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except ValueError:
+        return JSONResponse(
+            {"error": "Unsupported file format. Upload a JPEG/PNG/WebP image or PDF receipt."},
+            status_code=400,
+        )
 
     raw_bytes = await file.read()
     if not raw_bytes:
