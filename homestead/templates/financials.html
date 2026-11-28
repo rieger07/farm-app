@@ -23,6 +23,9 @@
     <button type="button" class="seg-btn{{ ' on' if active_tab == 'economics' }}" data-tab="economics" onclick="switchFinTab('economics')">
       Batch Economics <span class="seg-badge">{{ schedules|length }}</span>
     </button>
+    <button type="button" class="seg-btn{{ ' on' if active_tab == 'insights' }}" data-tab="insights" onclick="switchFinTab('insights')">
+      Insights <span class="seg-badge">{{ insights.feed_kpis.entry_count }}</span>
+    </button>
   </div>
 </div>
 
@@ -326,6 +329,401 @@
   {% endif %}
 </section>
 
+<!-- ==================== TAB 3: INSIGHTS ==================== -->
+<section id="pane-insights"{{ ' hidden' if active_tab != 'insights' }}>
+  {% set ins_yr_lbl = 'All years' if selected_year_str == 'all' else selected_year_str %}
+  <div class="insight-toolbar">
+    <div>
+      <strong>Farm Insights &amp; Unit Economics</strong>
+      <span class="muted"> · {{ ins_yr_lbl }}</span>
+    </div>
+    <div class="toolbar">
+      <label class="inline-form">
+        <span class="muted">Year</span>
+        <select aria-label="Insights Year" onchange="window.location='/financials?tab=insights&year=' + encodeURIComponent(this.value)">
+          {% for yr in tax_books.available_years %}
+          <option value="{{ yr }}"{{ ' selected' if selected_year_str == (yr|string) }}>{{ yr }}</option>
+          {% endfor %}
+          <option value="all"{{ ' selected' if selected_year_str == 'all' }}>All years</option>
+        </select>
+      </label>
+      {% if selected_year_str != 'all' %}
+      <a href="/financials?tab=insights&year=all" class="btn sm">View All Years</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Headline KPIs -->
+  <div class="cards four mb-md">
+    <div class="card kpi">
+      <div class="lbl">Feed &amp; Hay Spend</div>
+      <div class="val">${{ '%.2f'|format(insights.feed_kpis.total_feed_spend) }}</div>
+      <div class="muted">{{ '%.0f'|format(insights.feed_kpis.total_feed_lbs) }} lb across {{ insights.feed_kpis.entry_count }} log{{ '' if insights.feed_kpis.entry_count == 1 else 's' }}</div>
+    </div>
+    <div class="card kpi">
+      <div class="lbl">Weighted Feed $/lb</div>
+      <div class="val">{% if insights.feed_kpis.avg_cost_per_lb is not none %}${{ '%.3f'|format(insights.feed_kpis.avg_cost_per_lb) }}/lb{% else %}—{% endif %}</div>
+      <div class="muted">
+        {% if insights.feed_kpis.avg_bag_equiv is not none %}
+        ${{ '%.2f'|format(insights.feed_kpis.avg_bag_equiv) }} per {{ insights.bag_weight }}-lb bag
+        {% else %}Add weight (lb) on feed receipts{% endif %}
+      </div>
+    </div>
+    <div class="card kpi">
+      <div class="lbl">Hay Spend &amp; Avg Bale</div>
+      <div class="val">${{ '%.2f'|format(insights.feed_kpis.hay_spend) }}</div>
+      <div class="muted">
+        {% if insights.feed_kpis.hay_avg_bale is not none %}
+        {{ '%.0f'|format(insights.feed_kpis.hay_bales) }} bales · ${{ '%.2f'|format(insights.feed_kpis.hay_avg_bale) }}/bale
+        {% else %}{{ '%.0f'|format(insights.feed_kpis.hay_bales) }} bales logged{% endif %}
+      </div>
+    </div>
+    <div class="card kpi">
+      <div class="lbl">Vendors / Egg Feed Cost</div>
+      <div class="val">{{ insights.feed_kpis.vendor_count }} <span class="muted">vendor{{ '' if insights.feed_kpis.vendor_count == 1 else 's' }}</span></div>
+      <div class="muted">
+        {% if insights.egg_cost_summary.avg_cost_per_dozen is not none %}
+        Eggs: ${{ '%.2f'|format(insights.egg_cost_summary.avg_cost_per_dozen) }}/doz avg
+        {% else %}Log vendor names on purchases{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Preset Calibration Nudges -->
+  {% if insights.preset_calibrations %}
+  <div class="card">
+    <h2>Preset Bag Price Calibration</h2>
+    <p class="muted mb-sm">Your trailing 90-day weighted receipt cost differs by at least 5% from saved {{ insights.bag_weight }}-lb bag planning presets.</p>
+    <div class="insight-nudge-list">
+      {% for cal in insights.preset_calibrations %}
+      <div class="insight-nudge-row">
+        <div>
+          <strong>{{ cal.label }}</strong>
+          <span class="muted"> · Actual ${{ '%.2f'|format(cal.actual_bag_price) }}/bag vs. preset ${{ '%.2f'|format(cal.preset_bag_price) }}/bag</span>
+          <span class="{{ 'delta-up' if cal.delta_pct > 0 else 'delta-down' }}">({{ '%+.1f'|format(cal.delta_pct) }}%)</span>
+          <span class="muted"> · {{ cal.sample_count }} log{{ '' if cal.sample_count == 1 else 's' }}</span>
+        </div>
+        <form method="post" action="/financials/insights/sync-preset-price" class="inline-form">
+          <input type="hidden" name="kind" value="{{ cal.kind }}">
+          <input type="hidden" name="price" value="{{ '%.2f'|format(cal.actual_bag_price) }}">
+          <input type="hidden" name="year" value="{{ selected_year_str }}">
+          <button type="submit" class="btn sm primary">Update Preset to ${{ '%.2f'|format(cal.actual_bag_price) }}/bag</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Price Outlier Alerts -->
+  {% if insights.price_outliers %}
+  <div class="card">
+    <h2>Price Outlier Alerts</h2>
+    <div class="notice warn mb-sm">Entries more than 40% above or below the category median $/lb — useful for catching typos (e.g. bags entered as lbs) or sudden supplier price swings.</div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Vendor</th><th>Type</th><th>Allocation</th><th class="text-right">Lbs</th><th class="text-right">Cost</th><th class="text-right">$/lb</th><th class="text-right">Median $/lb</th><th class="text-right">Variance</th></tr>
+        </thead>
+        <tbody>
+          {% for o in insights.price_outliers %}
+          <tr>
+            <td>{{ o.date }}</td>
+            <td>{{ o.vendor }}</td>
+            <td>{{ o.feed_group }}</td>
+            <td><a href="{{ o.source_url }}">{{ o.allocation }}</a></td>
+            <td class="text-right">{{ '%.1f'|format(o.weight_lbs) }}</td>
+            <td class="text-right">${{ '%.2f'|format(o.cost_total) }}</td>
+            <td class="text-right"><strong>${{ '%.3f'|format(o.cost_per_lb) }}</strong></td>
+            <td class="text-right">${{ '%.3f'|format(o.median_per_lb) }}</td>
+            <td class="text-right {{ 'delta-up' if o.pct_diff > 0 else 'delta-down' }}">{{ '%+.0f'|format(o.pct_diff) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Feed Trend Chart & Feed Type Breakdown -->
+  <div class="cards two">
+    <div class="card">
+      <h2>Feed $/lb Over Time</h2>
+      {% if insights.feed_chart %}
+      <p class="muted mb-sm">Weighted monthly cost per pound across batch, layer, herd, and feed tax-book logs.</p>
+      <div class="insight-chart-wrap">
+        <svg class="insight-svg" viewBox="0 0 {{ insights.feed_chart.width }} {{ insights.feed_chart.height }}" role="img" aria-label="Monthly weighted feed cost per pound">
+          <line x1="54" y1="18" x2="578" y2="18" stroke="var(--line)" stroke-dasharray="3 3"/>
+          <line x1="54" y1="79" x2="578" y2="79" stroke="var(--line)" stroke-dasharray="3 3"/>
+          <line x1="54" y1="140" x2="578" y2="140" stroke="var(--line)"/>
+          <text x="48" y="22" text-anchor="end" class="insight-grid-label">${{ '%.2f'|format(insights.feed_chart.y_max) }}</text>
+          <text x="48" y="83" text-anchor="end" class="insight-grid-label">${{ '%.2f'|format(insights.feed_chart.y_mid) }}</text>
+          <text x="48" y="144" text-anchor="end" class="insight-grid-label">${{ '%.2f'|format(insights.feed_chart.y_min) }}</text>
+          <polyline fill="none" stroke="var(--green)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="{{ insights.feed_chart.points }}"/>
+          {% set dot_step = (insights.feed_chart.dots|length // 6) + 1 %}
+          {% for d in insights.feed_chart.dots %}
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="4.5" fill="var(--green)" stroke="var(--card)" stroke-width="1.5">
+            <title>{{ d.label }}: {{ d.val_str }} ({{ d.bag_str }})</title>
+          </circle>
+          {% if insights.feed_chart.dots|length <= 8 or loop.first or loop.last or (loop.index0 % dot_step == 0) %}
+          <text x="{{ d.x }}" y="160" text-anchor="middle" class="insight-grid-label">{{ d.label }}</text>
+          {% endif %}
+          {% endfor %}
+        </svg>
+      </div>
+      {% elif insights.feed_monthly_series %}
+      <p class="muted mb-sm">Need at least 2 weighted months in {{ ins_yr_lbl }} to draw a trend line.</p>
+      {% else %}
+      <p class="muted">No weighted feed or hay purchases recorded for {{ ins_yr_lbl }} yet.</p>
+      {% endif %}
+
+      {% if insights.feed_monthly_series %}
+      <div class="table-scroll mt-md">
+        <table>
+          <thead>
+            <tr><th>Month</th><th class="text-right">Logs</th><th class="text-right">Lbs</th><th class="text-right">Spend</th><th class="text-right">Avg $/lb</th><th class="text-right">{{ insights.bag_weight }}-lb Eq.</th><th class="text-right">Hay $/bale</th></tr>
+          </thead>
+          <tbody>
+            {% for m in insights.feed_monthly_series %}
+            <tr>
+              <td>{{ m.label }}</td>
+              <td class="text-right">{{ m.count }}</td>
+              <td class="text-right">{{ '%.0f'|format(m.total_lbs) }}</td>
+              <td class="text-right">${{ '%.2f'|format(m.total_spend) }}</td>
+              <td class="text-right">{% if m.avg_per_lb is not none %}${{ '%.3f'|format(m.avg_per_lb) }}{% else %}—{% endif %}</td>
+              <td class="text-right">{% if m.avg_bag_equiv is not none %}${{ '%.2f'|format(m.avg_bag_equiv) }}{% else %}—{% endif %}</td>
+              <td class="text-right">{% if m.hay_avg_bale is not none %}${{ '%.2f'|format(m.hay_avg_bale) }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Feed Unit Cost by Type</h2>
+      {% if insights.feed_by_type %}
+      <p class="muted mb-sm">Weighted unit cost across Starter, Grower, Layer, Scratch, Pasture/Herd Feed, and Hay.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Type</th><th class="text-right">Logs</th><th class="text-right">Lbs</th><th class="text-right">Spend</th><th class="text-right">Avg $/lb</th><th class="text-right">Bag / Bale</th><th class="text-right">Trend (1st→Last)</th></tr>
+          </thead>
+          <tbody>
+            {% for ft in insights.feed_by_type %}
+            <tr>
+              <td><strong>{{ ft.group }}</strong></td>
+              <td class="text-right">{{ ft.count }}</td>
+              <td class="text-right">{{ '%.0f'|format(ft.total_lbs) }}</td>
+              <td class="text-right">${{ '%.2f'|format(ft.total_spend) }}</td>
+              <td class="text-right">{% if ft.avg_per_lb is not none %}${{ '%.3f'|format(ft.avg_per_lb) }}{% else %}—{% endif %}</td>
+              <td class="text-right">
+                {% if ft.avg_bag_equiv is not none %}${{ '%.2f'|format(ft.avg_bag_equiv) }}/bag{% endif %}
+                {% if ft.avg_per_bale is not none %}{% if ft.avg_bag_equiv is not none %} · {% endif %}${{ '%.2f'|format(ft.avg_per_bale) }}/bale{% endif %}
+                {% if ft.avg_bag_equiv is none and ft.avg_per_bale is none %}—{% endif %}
+              </td>
+              <td class="text-right">
+                {% if ft.delta_pct is not none %}
+                <span class="{{ 'delta-up' if ft.delta_pct > 0 else 'delta-down' }}">{{ '%+.1f'|format(ft.delta_pct) }}%</span>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="muted">No feed type breakdown available yet for {{ ins_yr_lbl }}.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Vendor Price Comparison -->
+  <div class="card">
+    <h2>Vendor Price Comparison</h2>
+    {% if insights.vendor_comparison %}
+    <p class="muted mb-sm">Compares weighted grain $/lb and per-bale hay cost across suppliers. Add the supplier name when logging feed to track who gives the best unit price.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Vendor</th><th>Feed Types</th><th class="text-right">Logs</th><th class="text-right">Total Lbs</th><th class="text-right">Total Spend</th><th class="text-right">Grain $/lb</th><th class="text-right">{{ insights.bag_weight }}-lb Bag Eq.</th><th class="text-right">Overall $/lb</th><th class="text-right">Hay $/bale</th></tr>
+        </thead>
+        <tbody>
+          {% for v in insights.vendor_comparison %}
+          <tr>
+            <td>
+              <strong>{{ v.vendor }}</strong>
+              {% if v.cheapest_grain %}<span class="pill green">Cheapest Grain $/lb</span>{% endif %}
+            </td>
+            <td class="muted">{{ v.feed_types or '—' }}</td>
+            <td class="text-right">{{ v.count }}</td>
+            <td class="text-right">{{ '%.0f'|format(v.total_lbs) }}</td>
+            <td class="text-right">${{ '%.2f'|format(v.total_spend) }}</td>
+            <td class="text-right">{% if v.grain_avg_per_lb is not none %}<strong>${{ '%.3f'|format(v.grain_avg_per_lb) }}</strong>{% else %}—{% endif %}</td>
+            <td class="text-right">{% if v.avg_bag_equiv is not none %}${{ '%.2f'|format(v.avg_bag_equiv) }}{% else %}—{% endif %}</td>
+            <td class="text-right">{% if v.avg_per_lb is not none %}${{ '%.3f'|format(v.avg_per_lb) }}{% else %}—{% endif %}</td>
+            <td class="text-right">{% if v.hay_avg_bale is not none %}${{ '%.2f'|format(v.hay_avg_bale) }}{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">No feed receipts logged yet for {{ ins_yr_lbl }}.</p>
+    {% endif %}
+  </div>
+
+  <!-- Enterprise Spend & Cash P&L Scorecard -->
+  <div class="card">
+    <h2>Enterprise Spend &amp; Cash P&amp;L Scorecard</h2>
+    {% if insights.enterprises %}
+    <p class="muted mb-sm">Direct feed, batch receipts, flock/herd expenses, and cash/POS revenue across farm enterprises ({{ ins_yr_lbl }}).</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Enterprise</th><th class="text-right">Feed Spend</th><th class="text-right">Other Direct Spend</th><th class="text-right">Total Cash Out</th><th class="text-right">Revenue</th><th class="text-right">Net Cash</th><th class="text-right">Feed Share</th></tr>
+        </thead>
+        <tbody>
+          {% for ent in insights.enterprises %}
+          <tr>
+            <td>
+              <a href="{{ ent.source_url }}"><strong>{{ ent.name }}</strong></a>
+              <div class="muted">{{ ent.subtitle }}</div>
+            </td>
+            <td class="text-right">${{ '%.2f'|format(ent.feed_spend) }}</td>
+            <td class="text-right">${{ '%.2f'|format(ent.other_spend) }}</td>
+            <td class="text-right"><strong>${{ '%.2f'|format(ent.total_spend) }}</strong></td>
+            <td class="text-right">
+              {% if ent.revenue is not none %}<div>${{ '%.2f'|format(ent.revenue) }}</div>{% else %}<div class="muted">—</div>{% endif %}
+              {% if ent.revenue_note %}<div class="muted">{{ ent.revenue_note }}</div>{% endif %}
+            </td>
+            <td class="text-right">
+              {% if ent.net is not none %}<strong class="{{ 'text-green' if ent.net >= 0 else 'text-red' }}">{{ '-$' if ent.net < 0 else '$' }}{{ '%.2f'|format(ent.net|abs) }}</strong>{% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td class="text-right">{% if ent.feed_share_pct is not none %}{{ '%.0f'|format(ent.feed_share_pct) }}%{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if insights.untagged_general_spend > 0 %}
+    <p class="muted mt-sm mb-0">General unallocated farm expenses ({{ ins_yr_lbl }}): <strong>${{ '%.2f'|format(insights.untagged_general_spend) }}</strong> (receipts not linked to a specific batch, flock, or herd).</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">No enterprise activity recorded for {{ ins_yr_lbl }} yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- Egg Feed Cost per Dozen by Month -->
+  <div class="card">
+    <h2>Egg Feed Cost per Dozen by Month</h2>
+    {% if insights.egg_cost_summary.total_eggs > 0 or insights.egg_cost_summary.total_feed_cost > 0 %}
+    <div class="toolbar mb-sm">
+      <span class="tag-chip">{{ insights.egg_cost_summary.total_eggs }} usable eggs ({{ '%.1f'|format(insights.egg_cost_summary.total_dozens) }} doz)</span>
+      <span class="tag-chip">Layer feed: ${{ '%.2f'|format(insights.egg_cost_summary.total_feed_cost) }}</span>
+      {% if insights.egg_cost_summary.avg_cost_per_dozen is not none %}
+      <span class="pill green">Avg: ${{ '%.2f'|format(insights.egg_cost_summary.avg_cost_per_dozen) }}/doz</span>
+      {% endif %}
+      {% if insights.egg_cost_summary.best_month %}
+      <span class="muted">Lowest: {{ insights.egg_cost_summary.best_month.label }} (${{ '%.2f'|format(insights.egg_cost_summary.best_month.cost_per_dozen) }}/doz)</span>
+      {% endif %}
+      {% if insights.egg_cost_summary.worst_month and insights.egg_cost_summary.worst_month != insights.egg_cost_summary.best_month %}
+      <span class="muted">Highest: {{ insights.egg_cost_summary.worst_month.label }} (${{ '%.2f'|format(insights.egg_cost_summary.worst_month.cost_per_dozen) }}/doz)</span>
+      {% endif %}
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Month</th><th class="text-right">Usable Eggs</th><th class="text-right">Dozens</th><th class="text-right">Layer Feed Spend</th><th class="text-right">Feed $/doz</th></tr>
+        </thead>
+        <tbody>
+          {% for m in insights.egg_cost_summary.months %}
+          <tr>
+            <td>{{ m.label }}</td>
+            <td class="text-right">{{ m.usable_eggs }}</td>
+            <td class="text-right">{{ '%.1f'|format(m.dozens) }}</td>
+            <td class="text-right">${{ '%.2f'|format(m.feed_cost) }}</td>
+            <td class="text-right">{% if m.cost_per_dozen is not none %}<strong>${{ '%.2f'|format(m.cost_per_dozen) }}</strong>{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">Log daily eggs and layer feed purchases on the Laying Flock screen to track monthly feed cost per dozen.</p>
+    {% endif %}
+  </div>
+
+  <!-- Batch-to-Batch Actuals & FCR Benchmarks -->
+  <div class="card">
+    <h2>Batch-to-Batch Actuals &amp; FCR Benchmarks</h2>
+    {% if insights.batch_benchmarks %}
+    <p class="muted mb-sm">Compares survival, logged feed (including batch-linked feed receipts), actual feed conversion ratio (FCR), dressed yield, and unit meat cost across batches.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Batch</th><th class="text-right">Survival</th><th class="text-right">Feed Actual vs Plan</th><th class="text-right">Actual FCR</th><th class="text-right">Yield / hd</th><th class="text-right">Cost / lb</th><th class="text-right">Net Cash / Freezer</th></tr>
+        </thead>
+        <tbody>
+          {% for bb in insights.batch_benchmarks %}
+          <tr>
+            <td>
+              <a href="/batches/{{ bb.id }}"><strong>{{ bb.name }}</strong></a>
+              <div class="muted">{{ bb.species_display }}{% if bb.start_date %} · {{ bb.start_date }}{% endif %}</div>
+            </td>
+            <td class="text-right">
+              <div><strong>{{ '%.0f'|format(bb.survival_pct) }}%</strong></div>
+              <div class="muted">{{ bb.surviving_quantity }}/{{ bb.initial_quantity }} hd</div>
+            </td>
+            <td class="text-right">
+              {% if bb.actual_feed_cost is not none %}
+              <div><strong>${{ '%.2f'|format(bb.actual_feed_cost) }}</strong> ({{ '%.0f'|format(bb.logged_feed_lbs) }} lb)</div>
+              <div class="muted">
+                Plan ${{ '%.2f'|format(bb.planned_feed_cost) }}
+                {% if bb.feed_variance_pct is not none %}
+                <span class="{{ 'delta-up' if bb.feed_variance_pct > 0 else 'delta-down' }}">({{ '%+.1f'|format(bb.feed_variance_pct) }}%)</span>
+                {% endif %}
+              </div>
+              {% else %}
+              <div>Plan ${{ '%.2f'|format(bb.planned_feed_cost) }}</div>
+              <div class="muted">{{ '%.0f'|format(bb.planned_feed_lbs) }} lb est.</div>
+              {% endif %}
+            </td>
+            <td class="text-right">
+              {% if bb.actual_fcr is not none %}
+              <strong>{{ '%.2f'|format(bb.actual_fcr) }}</strong>
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-right">
+              {% if bb.harvested_head > 0 %}
+              <div><strong>{{ '%.1f'|format(bb.actual_avg_yield) }} lb</strong></div>
+              <div class="muted">Plan {{ '%.1f'|format(bb.expected_yield) }} lb</div>
+              {% else %}
+              <div class="muted">Plan {{ '%.1f'|format(bb.expected_yield) }} lb</div>
+              {% endif %}
+            </td>
+            <td class="text-right">
+              <div><strong>${{ '%.2f'|format(bb.reconciled_cost_per_lb) }}</strong></div>
+              <div class="muted">Plan ${{ '%.2f'|format(bb.planned_cost_per_lb) }}</div>
+            </td>
+            <td class="text-right">
+              <div class="{{ 'text-green' if bb.actual_cash_profit >= 0 else 'text-red' }}"><strong>{{ '-$' if bb.actual_cash_profit < 0 else '$' }}{{ '%.2f'|format(bb.actual_cash_profit|abs) }}</strong></div>
+              {% if bb.effective_freezer_cost_per_lb is not none %}
+              <div class="muted">${{ '%.2f'|format(bb.effective_freezer_cost_per_lb) }}/lb freezer</div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">No batches in {{ ins_yr_lbl }} yet.</p>
+    {% endif %}
+  </div>
+</section>
+
 <!-- ==================== MODAL 1: UNIFIED / SPLIT RECEIPT LOGGER ==================== -->
 <dialog id="dlg-receipt">
   <div class="modal-head">
@@ -464,7 +862,7 @@ function switchFinTab(tab) {
   document.querySelectorAll('.tab-bar .seg-btn[data-tab]').forEach(btn => {
     btn.classList.toggle('on', btn.dataset.tab === tab);
   });
-  ['taxes', 'economics'].forEach(name => {
+  ['taxes', 'economics', 'insights'].forEach(name => {
     const pane = document.getElementById('pane-' + name);
     if (pane) pane.hidden = (name !== tab);
   });

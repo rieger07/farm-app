@@ -5,7 +5,7 @@ from datetime import date
 import io
 import json
 import secrets
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -23,6 +23,8 @@ from homestead.db.core import (
     get_barrel_capacity,
     set_bag_weight,
     set_barrel_capacity,
+    set_text_setting,
+    update_species_preset_bag_prices,
 )
 from homestead.db.eggs import (
     add_layer_feed_log,
@@ -56,6 +58,7 @@ from homestead.financials import (
     compute_roi_summary_table,
     compute_unified_financials_table,
 )
+from homestead.insights import compute_farm_insights
 from homestead.receipt_allocation import (
     BatchOwnershipError,
     build_receipt_batch_options,
@@ -89,10 +92,10 @@ def _csv_safe(value) -> str:
 def _tax_redirect(year: str, msg: str, tab: str = "taxes") -> RedirectResponse:
     clean_yr = str(year or "").strip()
     yq = f"&year={quote_plus(clean_yr)}" if clean_yr else ""
-    return RedirectResponse(
-        f"/financials?tab={quote_plus(tab)}{yq}&msg={quote_plus(msg)}",
-        status_code=303,
-    )
+    target = f"/financials?tab={quote_plus(tab)}{yq}&msg={quote_plus(msg)}".replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        return RedirectResponse(target, status_code=303)
+    return RedirectResponse("/financials", status_code=303)
 
 
 def _require_financials(user: dict) -> None:
@@ -162,7 +165,7 @@ def financials_page(
     user: dict = Depends(current_user),
 ):
     _require_financials(user)
-    if tab in ("taxes", "economics"):
+    if tab in ("taxes", "economics", "insights"):
         active_tab = tab
     elif include_planned != "":
         active_tab = "economics"
@@ -232,6 +235,14 @@ def financials_page(
         )
         or 1
     )
+    bag_wt = get_bag_weight(user_id=user["id"])
+    insights = compute_farm_insights(
+        user["id"],
+        merchant_id=merchant_id,
+        year=selected_year,
+        schedules=all_user_schedules,
+        bag_weight=bag_wt,
+    )
     return _render(
         request,
         "financials.html",
@@ -247,7 +258,7 @@ def financials_page(
         ),
         receipt_batches=receipt_batches,
         all_herds=list_herds(user["id"], include_inactive=True),
-        bag_weight=get_bag_weight(user_id=user["id"]),
+        bag_weight=bag_wt,
         layer_cfg=get_layer_settings(user["id"]),
         recent_vendors=list_recent_vendors(user["id"]),
         auto_open_receipt=bool(new),
@@ -260,6 +271,7 @@ def financials_page(
         planned_count=planned_count,
         unified_rows=unified_rows,
         roi_rows=roi_rows,
+        insights=insights,
         expense_categories=EXPENSE_CATEGORIES,
         expense_category_options=EXPENSE_CATEGORY_OPTIONS,
         ocr_enabled=is_receipt_ocr_enabled(),
@@ -268,6 +280,35 @@ def financials_page(
         chart_peak=chart_peak,
         msg=msg,
     )
+
+
+@router.post("/financials/insights/sync-preset-price")
+def sync_preset_bag_price_submit(
+    kind: str = Form(...),
+    price: str = Form(...),
+    year: str = Form(""),
+    user: dict = Depends(current_user),
+):
+    _require_financials(user)
+    clean_kind = str(kind or "").strip().lower()
+    if clean_kind not in ("starter", "grower", "layer", "scratch"):
+        raise HTTPException(status_code=400, detail="Unsupported feed preset type.")
+    try:
+        val = round(float(price), 2)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid bag price.") from exc
+    if not (0.0 < val <= 500.0):
+        raise HTTPException(status_code=400, detail="Bag price must be between $0.01 and $500.00.")
+
+    uid = user["id"]
+    if clean_kind == "layer":
+        set_text_setting("layer_bag_price", f"{val:.2f}", user_id=uid)
+    elif clean_kind == "scratch":
+        set_text_setting("layer_scratch_bag_price", f"{val:.2f}", user_id=uid)
+    else:
+        update_species_preset_bag_prices(uid, clean_kind, val)
+
+    return _tax_redirect(year, f"Updated {clean_kind} bag price preset to ${val:.2f}/bag.", tab="insights")
 
 
 @router.post("/api/receipts/parse")

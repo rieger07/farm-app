@@ -18,6 +18,7 @@ from homestead.database import (
     list_batch_losses,
     list_batch_sales,
 )
+from homestead.db.expenses import list_batch_expenses
 from homestead.db.shares import effective_share_weight, list_batch_harvest_shares
 
 
@@ -411,9 +412,49 @@ def compute_batch_schedule(
     )
 
     feed_logs = list_batch_feed_logs(int(batch["id"])) if batch.get("id") is not None else []
-    if feed_logs:
-        actual_feed_lbs_override = round(sum(float(f["feed_lbs"]) for f in feed_logs), 2)
-        actual_feed_cost_override = round(sum(float(f["cost_total"]) for f in feed_logs), 2)
+    batch_expenses = (
+        list_batch_expenses(int(batch["user_id"]), int(batch["id"]))
+        if batch.get("id") is not None and batch.get("user_id") is not None
+        else []
+    )
+    batch_feed_expenses = [e for e in batch_expenses if e.get("category") == "Feed"]
+    batch_other_expenses = [e for e in batch_expenses if e.get("category") != "Feed"]
+    expense_feed_cost = round(sum(float(e.get("amount") or 0.0) for e in batch_feed_expenses), 2)
+    expense_proc_cost = round(
+        sum(float(e.get("amount") or 0.0) for e in batch_expenses if e.get("category") == "Processing"),
+        2,
+    )
+    expense_acq_cost = round(
+        sum(float(e.get("amount") or 0.0) for e in batch_expenses if e.get("category") == "Livestock / Chicks"),
+        2,
+    )
+    expense_other_cost = round(
+        sum(
+            float(e.get("amount") or 0.0)
+            for e in batch_expenses
+            if e.get("category") not in ("Feed", "Processing", "Livestock / Chicks")
+        ),
+        2,
+    )
+
+    logged_feed_lbs = round(sum(float(f.get("feed_lbs") or 0.0) for f in feed_logs), 2)
+    logged_feed_cost = round(
+        sum(float(f.get("cost_total") or 0.0) for f in feed_logs) + expense_feed_cost,
+        2,
+    )
+    has_logged_feed = bool(feed_logs) or abs(expense_feed_cost) > 1e-6
+
+    if has_logged_feed:
+        actual_feed_lbs_override = (
+            logged_feed_lbs
+            if feed_logs
+            else (
+                float(batch["actual_feed_lbs"])
+                if batch.get("actual_feed_lbs") is not None
+                else None
+            )
+        )
+        actual_feed_cost_override = logged_feed_cost
     else:
         actual_feed_lbs_override = (
             float(batch["actual_feed_lbs"])
@@ -436,22 +477,31 @@ def compute_batch_schedule(
         else total_feed_cost_bags
     )
 
-    # Processing cost uses logged actual harvest processing fees + estimated fee for any remaining unharvested head
+    actual_proc_total = round(actual_harvest_proc_cost + expense_proc_cost, 2)
+    # Processing cost uses logged actual harvest/expense processing fees + estimated fee for remaining unharvested head
     if batch.get("customer_pays_butcher"):
-        reconciled_processing_cost = round(actual_harvest_proc_cost, 2)
+        reconciled_processing_cost = actual_proc_total
     else:
         reconciled_processing_cost = (
             round(
-                actual_harvest_proc_cost
-                + (unharvested_surviving_head * processing_cost),
+                actual_proc_total + (unharvested_surviving_head * processing_cost),
                 2,
             )
-            if parsed_harvests
+            if (parsed_harvests or abs(expense_proc_cost) > 1e-6)
             else total_processing_cost
         )
-    reconciled_total_cost = round(
-        acquisition_cost + reconciled_feed_cost + reconciled_processing_cost, 2
+    reconciled_acquisition_cost = (
+        round(expense_acq_cost, 2) if abs(expense_acq_cost) > 1e-6 else acquisition_cost
     )
+    reconciled_total_cost = round(
+        reconciled_acquisition_cost + reconciled_feed_cost + reconciled_processing_cost + expense_other_cost,
+        2,
+    )
+    survival_pct = round((surviving_quantity / initial_quantity) * 100.0, 1) if initial_quantity > 0 else 0.0
+    cost_delta_vs_plan = round(reconciled_total_cost - total_budget_cost, 2)
+    yield_delta_vs_plan = round(actual_dressed_lbs - expected_meat_lbs, 1) if harvested_head > 0 else None
+    fcr_lbs = actual_feed_lbs_override if actual_feed_lbs_override is not None else 0.0
+    actual_fcr = round(fcr_lbs / actual_dressed_lbs, 2) if (fcr_lbs > 0 and actual_dressed_lbs > 0) else None
 
     # Total meat yield blends actual harvested dressed lbs + expected yield for any remaining unharvested animals
     reconciled_meat_lbs = (
@@ -790,12 +840,27 @@ def compute_batch_schedule(
         "actual_harvest_proc_cost": actual_harvest_proc_cost,
         "actual_feed_lbs_override": actual_feed_lbs_override,
         "actual_feed_cost_override": actual_feed_cost_override,
+        "has_actual_feed": actual_feed_cost_override is not None,
+        "logged_feed_lbs": logged_feed_lbs,
+        "logged_feed_cost": logged_feed_cost,
+        "batch_expenses": batch_expenses,
+        "batch_feed_expenses": batch_feed_expenses,
+        "batch_other_expenses": batch_other_expenses,
+        "expense_feed_cost": expense_feed_cost,
+        "expense_proc_cost": expense_proc_cost,
+        "expense_acq_cost": expense_acq_cost,
+        "expense_other_cost": expense_other_cost,
         "reconciled_feed_lbs": reconciled_feed_lbs,
         "reconciled_feed_cost": reconciled_feed_cost,
         "reconciled_processing_cost": reconciled_processing_cost,
+        "reconciled_acquisition_cost": reconciled_acquisition_cost,
         "reconciled_total_cost": reconciled_total_cost,
         "reconciled_meat_lbs": reconciled_meat_lbs,
         "reconciled_cost_per_lb_meat": reconciled_cost_per_lb_meat,
+        "survival_pct": survival_pct,
+        "cost_delta_vs_plan": cost_delta_vs_plan,
+        "yield_delta_vs_plan": yield_delta_vs_plan,
+        "actual_fcr": actual_fcr,
         "is_planned": start_dt > date.today(),
         "days_until_start": max(0, (start_dt - date.today()).days),
         "on_farm_head": 0 if start_dt > date.today() else max(0, surviving_quantity - harvested_head),

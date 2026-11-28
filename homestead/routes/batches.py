@@ -159,6 +159,8 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         batch_stage="grow",
         is_graduated=is_batch_graduated_to_layers(user["id"], batch_id),
         feed_logs=list_batch_feed_logs(batch_id),
+        batch_feed_expenses=s["batch_feed_expenses"],
+        batch_other_expenses=s["batch_other_expenses"],
         bag_weight=bag_weight,
         gdrive_connected=bool(get_google_drive_connection(user["id"])),
         species_catalog=get_species_catalog(user_id=user["id"]),

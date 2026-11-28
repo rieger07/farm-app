@@ -4101,6 +4101,227 @@ class FarmWebTest(unittest.TestCase):
         )
         self.assertEqual(c_other.post(f"/notes/{sop_id}/delete", follow_redirects=False).status_code, 404)
 
+    def test_batch_detail_actuals_vs_planned_linked_financials_receipts_and_insights_phase1(self):
+        from homestead.db.batches import list_batches
+        from homestead.db.eggs import get_layer_settings
+        from homestead.db.herds import list_herds
+
+        # 1. Register owner & add staff user for RBAC check
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/settings/members",
+            data={"username": "mom", "display_name": "Mom", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+
+        # 2. Create meat batch, log loss/harvest/sale, and link both feed + supplies receipts via Financials
+        self.c.post(
+            "/batches/save",
+            data={
+                "name": "Spring Broilers",
+                "species": "cornish cross",
+                "start_date": "2026-10-01",
+                "initial_quantity": "20",
+                "unit_cost": "3.50",
+                "avg_dressed_weight": "4.5",
+                "sale_price_per_lb": "5.50",
+                "processing_cost": "5.00",
+                "lifecycle_type": "live_arrival",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        bid = int(list_batches(user_id=1)[0]["id"])
+
+        self.c.post(
+            "/batches/log-loss",
+            data={"batch_id": str(bid), "loss_date": "2026-10-10", "count": "2", "reason": "Weak chick", "next_url": f"/batches/{bid}"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/batches/log-harvest",
+            data={
+                "batch_id": str(bid),
+                "harvest_date": "2026-11-12",
+                "head_count": "18",
+                "dressed_lbs": "90.0",
+                "processing_cost_total": "90.0",
+                "next_url": f"/batches/{bid}",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/batches/log-sale",
+            data={
+                "batch_id": str(bid),
+                "entry_date": "2026-11-15",
+                "allocation_type": "sale",
+                "weight_lbs": "40.0",
+                "revenue": "200.0",
+                "next_url": f"/batches/{bid}",
+            },
+            follow_redirects=False,
+        )
+
+        # Split receipt on Financials: batch grower feed ($88 / 200 lb) + batch supplies ($45)
+        self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-10-20",
+                "vendor": "Tractor Supply",
+                "lines_json": json.dumps([
+                    {"kind": "batch_feed", "batch_id": str(bid), "feed_type": "grower", "bags": 4, "feed_lbs": 200, "amount": 88.00, "notes": "Broiler grower"},
+                    {"kind": "general", "category": "Supplies & Equipment", "batch_id": str(bid), "amount": 45.00, "notes": "Brooder bulbs"},
+                ]),
+            },
+            follow_redirects=False,
+        )
+        # Additional batch-linked Feed receipt logged as General Farm Expense (category="Feed")
+        self.c.post(
+            "/expenses/receipt",
+            data={
+                "receipt_date": "2026-11-02",
+                "vendor": "Local Feed Mill",
+                "lines_json": json.dumps([
+                    {"kind": "general", "category": "Feed", "batch_id": str(bid), "amount": 60.00, "notes": "Extra bulk pellets"},
+                ]),
+            },
+            follow_redirects=False,
+        )
+
+        bd_resp = self.c.get(f"/batches/{bid}")
+        self.assertEqual(bd_resp.status_code, 200)
+        bd_html = bd_resp.text
+        self.assertIn("18 / 18", bd_html)
+        self.assertIn("90% survival", bd_html)
+        self.assertIn("90.0 lb dressed", bd_html)
+        self.assertIn("$200.00 sales", bd_html)
+        self.assertIn("Actual vs. Planned Cost", bd_html)
+        self.assertIn("$353.00", bd_html)  # 70 acq + 148 feed (88+60) + 90 proc + 45 supplies
+        self.assertIn("200.0 lb ($148.00)", bd_html)
+        self.assertIn("2.22:1", bd_html)  # 200 / 90 dressed lbs
+        self.assertIn("Local Feed Mill", bd_html)
+        self.assertIn("Linked Receipts from Financials (1)", bd_html)
+        self.assertIn("Brooder bulbs", bd_html)
+        self.assertIn("$45.00", bd_html)
+
+        # 3. Seed multi-vendor & multi-month layer/herd feed + eggs for Insights Phase 1
+        self.c.post(
+            "/herds/save",
+            data={"name": "Alpaca Herd", "species": "alpaca", "herd_type": "fiber", "head_count": "3"},
+            follow_redirects=False,
+        )
+        herd_id = int(list_herds(1)[0]["id"])
+
+        for rdate, vendor, lines in [
+            (
+                "2026-09-10",
+                "Country Co-op",
+                [
+                    {"kind": "layer_feed", "feed_type": "layer", "species_tags": ["chicken"], "bags": 2, "feed_lbs": 100, "amount": 52.00, "notes": "Early fall layer"},
+                    {"kind": "layer_feed", "feed_type": "scratch", "species_tags": ["chicken"], "bags": 1, "feed_lbs": 50, "amount": 13.00, "notes": "Sep scratch"},
+                ],
+            ),
+            (
+                "2026-10-12",
+                "Country Co-op",
+                [
+                    {"kind": "layer_feed", "feed_type": "layer", "species_tags": ["chicken"], "bags": 2, "feed_lbs": 100, "amount": 52.00, "notes": "Oct layer"},
+                    {"kind": "herd_feed", "herd_id": str(herd_id), "feed_category": "hay", "unit": "bales", "quantity": 10, "weight_lbs": 500, "amount": 80.00, "notes": "First cut bales"},
+                ],
+            ),
+            (
+                "2026-10-18",
+                "Tractor Supply",
+                [
+                    {"kind": "layer_feed", "feed_type": "scratch", "species_tags": ["chicken"], "bags": 1, "feed_lbs": 50, "amount": 16.00, "notes": "Oct scratch"},
+                ],
+            ),
+            (
+                "2026-11-14",
+                "Country Co-op",
+                [
+                    {"kind": "layer_feed", "feed_type": "layer", "species_tags": ["chicken"], "bags": 2, "feed_lbs": 100, "amount": 52.00, "notes": "Nov layer"},
+                ],
+            ),
+            (
+                "2026-11-18",
+                "Tractor Supply",
+                [
+                    {"kind": "layer_feed", "feed_type": "scratch", "species_tags": ["chicken"], "bags": 1, "feed_lbs": 10, "amount": 25.00, "notes": "Weight typo outlier"},
+                ],
+            ),
+        ]:
+            self.assertEqual(
+                self.c.post(
+                    "/expenses/receipt",
+                    data={"receipt_date": rdate, "vendor": vendor, "lines_json": json.dumps(lines)},
+                    follow_redirects=False,
+                ).status_code,
+                303,
+            )
+
+        self.c.post(
+            "/eggs/log",
+            data={"species": "chicken", "log_date": "2026-10-15", "total_collected": "60", "cracked_unusable": "0"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/eggs/log",
+            data={"species": "chicken", "log_date": "2026-11-16", "total_collected": "120", "cracked_unusable": "0"},
+            follow_redirects=False,
+        )
+
+        # 4. Verify /financials?tab=insights & all sections render cleanly
+        ins_resp = self.c.get("/financials?tab=insights&year=2026")
+        self.assertEqual(ins_resp.status_code, 200)
+        ins_html = ins_resp.text
+        self.assertIn("Farm Insights &amp; Unit Economics", ins_html)
+        self.assertIn("<polyline", ins_html)
+        self.assertIn("Preset Bag Price Calibration", ins_html)
+        self.assertIn("Update Preset to $26.00/bag", ins_html)
+        self.assertIn("Price Outlier Alerts", ins_html)
+        self.assertIn("Country Co-op", ins_html)
+        self.assertIn("Cheapest Grain $/lb", ins_html)
+        self.assertIn("$8.00/bale", ins_html)
+        self.assertIn("Enterprise Spend &amp; Cash P&amp;L Scorecard", ins_html)
+        self.assertIn("Laying Flocks &amp; Eggs", ins_html)
+        self.assertIn("Alpaca &amp; Fiber Herds", ins_html)
+        self.assertIn("Egg Feed Cost per Dozen by Month", ins_html)
+        self.assertIn("$13.60", ins_html)  # Oct: $68 / 5 doz
+        self.assertIn("$7.70", ins_html)   # Nov: $77 / 10 doz
+        self.assertIn("Batch-to-Batch Actuals &amp; FCR Benchmarks", ins_html)
+        self.assertIn("Spring Broilers", ins_html)
+        self.assertIn("2.22", ins_html)
+        self.assertEqual(self.c.get("/financials?tab=insights&year=all").status_code, 200)
+
+        # 5. Apply 1-click preset calibration sync for layer feed
+        r_sync = self.c.post(
+            "/financials/insights/sync-preset-price",
+            data={"kind": "layer", "price": "26.00", "year": "2026"},
+            follow_redirects=False,
+        )
+        self.assertEqual(r_sync.status_code, 303)
+        self.assertIn("tab=insights", r_sync.headers["location"])
+        self.assertAlmostEqual(float(get_layer_settings(1)["bag_price"]), 26.0, places=2)
+
+        # 6. Staff role cannot view Insights or mutate preset prices -> 403
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "mom", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(c_staff.get("/financials?tab=insights").status_code, 403)
+        self.assertEqual(
+            c_staff.post(
+                "/financials/insights/sync-preset-price",
+                data={"kind": "layer", "price": "20.00"},
+                follow_redirects=False,
+            ).status_code,
+            403,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
