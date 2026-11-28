@@ -158,3 +158,11 @@
 .note-comment-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .note-comment-form input[type="text"],.note-comment-form input[name="body"]{flex:1;min-width:190px}
 .note-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.insight-chart-wrap{width:100%;overflow-x:auto;padding-top:4px}
+.insight-svg{width:100%;height:auto;max-height:240px;display:block}
+.insight-grid-label{font-size:11px;fill:var(--muted)}
+.delta-up{color:var(--redink);font-weight:700}
+.delta-down{color:var(--green);font-weight:700}
+.insight-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.insight-nudge-list{display:flex;flex-direction:column;gap:8px}
+.insight-nudge-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 12px;background:var(--surface-soft);border:1px solid var(--line);border-radius:10px}

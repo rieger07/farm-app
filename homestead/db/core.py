@@ -494,6 +494,33 @@ def save_species_preset(
     return normalized
 
 
+def update_species_preset_bag_prices(
+    user_id: int, feed_type: str, bag_price: float
+) -> int:
+    """Sync starter or grower bag price across all species presets for a user."""
+    uid = _resolve_user_id(user_id)
+    if uid is None:
+        return 0
+    get_species_catalog(user_id=uid)
+    clean_price = round(max(0.01, float(bag_price)), 2)
+    ft = str(feed_type or "").strip().lower()
+    with get_db_connection() as conn:
+        if ft == "starter":
+            cur = conn.execute(
+                "UPDATE species_presets SET starter_bag_price = ? WHERE user_id = ?",
+                (clean_price, uid),
+            )
+        elif ft == "grower":
+            cur = conn.execute(
+                "UPDATE species_presets SET grower_bag_price = ? WHERE user_id = ?",
+                (clean_price, uid),
+            )
+        else:
+            raise ValueError("Feed type must be starter or grower.")
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
 def delete_species_preset(species: str, user_id: int | None = None) -> None:
     sp_key = str(species).strip().lower()
     uid = _resolve_user_id(user_id)

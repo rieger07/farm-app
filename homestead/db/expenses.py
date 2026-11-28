@@ -160,6 +160,21 @@ def list_farm_expenses(user_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_batch_expenses(user_id: int, batch_id: int) -> list[dict]:
+    """List Financials receipts (`farm_expenses`) tagged to a specific batch."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM farm_expenses
+            WHERE user_id = ? AND batch_id = ?
+            ORDER BY expense_date DESC, id DESC
+            """,
+            (int(user_id), int(batch_id)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def add_farm_expense(
     user_id: int,
     expense_date: str,

@@ -41,10 +41,42 @@
 {% include "_batch_stage_bar.html" %}
 
 <div class="cards four">
-  <div class="card"><small>Surviving / Initial</small><div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div><small>{{ s.initial_quantity - s.surviving_quantity }} losses</small></div>
-  <div class="card"><small>Harvested</small><div class="big">{{ s.harvested_head }}</div><small>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb {{ 'hanging' if (b.sale_unit == 'shares') else 'dressed' }}</small></div>
-  <div class="card"><small>Sold / Freezer</small><div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div><small>${{ '%.2f'|format(s.actual_sales_revenue) }} sales{% if s.effective_freezer_cost_per_lb is not none %} · {% if s.effective_freezer_cost_per_lb == 0 %}<span style="color:var(--green,#15803d);font-weight:600">$0.00/lb freezer (free!)</span>{% else %}${{ '%.2f'|format(s.effective_freezer_cost_per_lb) }}/lb freezer{% endif %}{% endif %}</small></div>
-  <div class="card"><small>Reconciled Cost</small><div class="big">${{ '%.2f'|format(s.reconciled_total_cost) }}</div><small>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb meat</small></div>
+  <div class="card">
+    <small>Surviving / Initial</small>
+    <div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div>
+    <small>{{ s.initial_quantity - s.surviving_quantity }} losses · {{ '%.0f'|format(s.survival_pct) }}% survival</small>
+  </div>
+  <div class="card">
+    <small>Harvested</small>
+    <div class="big">{{ s.harvested_head }} / {{ s.surviving_quantity }}</div>
+    <small>
+      {{ '%.1f'|format(s.actual_dressed_lbs) }} lb {{ 'hanging' if (b.sale_unit == 'shares') else 'dressed' }} · vs. {{ '%.1f'|format(s.expected_meat_lbs) }} lb plan
+      {% if s.harvested_head > 0 %}<br>Avg {{ '%.1f'|format(s.actual_avg_yield_per_head) }} vs. {{ '%.1f'|format(s.expected_yield_per_head) }} lb/hd{% endif %}
+    </small>
+  </div>
+  <div class="card">
+    <small>Sold / Freezer</small>
+    <div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div>
+    <small>
+      {{ s.actual_sales_revenue|money }} sales (est. {{ s.estimated_revenue|money }})
+      {% if s.effective_freezer_cost_per_lb is not none %} · {% if s.effective_freezer_cost_per_lb == 0 %}<span class="text-green" style="font-weight:600">$0.00/lb freezer (free!)</span>{% else %}${{ '%.2f'|format(s.effective_freezer_cost_per_lb) }}/lb freezer{% endif %}{% endif %}
+    </small>
+  </div>
+  <div class="card">
+    <small>Actual vs. Planned Cost</small>
+    <div class="big" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span>{{ s.reconciled_total_cost|money }}</span>
+      {% if s.has_actual_feed or s.batch_other_expenses or s.harvested_head > 0 %}
+      <span class="pill green" style="font-size:11px">Actual</span>
+      {% else %}
+      <span class="pill gray" style="font-size:11px">Est.</span>
+      {% endif %}
+    </div>
+    <small>
+      Plan {{ s.total_budget_cost|money }}{% if s.cost_delta_vs_plan != 0 %} ({{ '+' if s.cost_delta_vs_plan > 0 }}{{ s.cost_delta_vs_plan|money }}){% endif %}
+      <br>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb vs. ${{ '%.2f'|format(s.total_cost_per_lb_meat) }}/lb plan
+    </small>
+  </div>
 </div>
 
 <div class="cards two">
@@ -56,12 +88,14 @@
       {% endif %}
     </div>
     <p class="sub mb-md">
-      {% set logged_lbs = (feed_logs|sum(attribute='feed_lbs')) if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
-      {% set logged_cost = (feed_logs|sum(attribute='cost_total')) if feed_logs else (b.actual_feed_cost if b.actual_feed_cost is not none else 0.0) %}
+      {% set logged_lbs = s.logged_feed_lbs if feed_logs else (b.actual_feed_lbs if b.actual_feed_lbs is not none else 0.0) %}
+      {% set logged_cost = s.actual_feed_cost_override if s.has_actual_feed else 0.0 %}
       Logged: <b>{{ '%.1f'|format(logged_lbs) }} lb ({{ logged_cost|money }})</b>
       · Planned: {{ '%.1f'|format(s.starter_feed + s.grower_feed) }} lb (${{ '%.2f'|format(s.total_feed_cost_bags) }})
+      {% if s.actual_fcr %} · FCR: <b>{{ '%.2f'|format(s.actual_fcr) }}:1</b>{% endif %}
       · <small class="inline muted">All receipts &amp; feed purchases are logged together under Tax Books.</small>
     </p>
+    <div class="table-scroll">
     <table>
       <thead><tr><th>Date</th><th>Type</th><th class="num">Bags</th><th class="num">Lbs</th><th class="num">Cost</th><th>Receipt</th><th></th></tr></thead>
       <tbody>
@@ -73,11 +107,48 @@
           <td>{% if fl.receipt_url %}<a href="{{ fl.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
           <td class="num"><form method="post" action="/batches/{{ b.id }}/feed-logs/{{ fl.id }}/delete"><button class="link">Remove</button></form></td>
         </tr>
-      {% else %}
-        <tr><td colspan="7" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
       {% endfor %}
+      {% for fe in batch_feed_expenses %}
+        <tr>
+          <td>{{ fe.expense_date }}</td>
+          <td>Feed <small class="inline muted">· {{ fe.vendor or 'Financials' }}</small></td>
+          <td class="num">—</td><td class="num">—</td>
+          <td class="num">{{ fe.amount|money }}{% if fe.amount < 0 %} <span class="pill blue">Refund</span>{% endif %}</td>
+          <td>{% if fe.receipt_url %}<a href="{{ fe.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+          <td class="num"><a href="/financials?tab=taxes" class="link">Edit ↗</a></td>
+        </tr>
+      {% endfor %}
+      {% if not feed_logs and not batch_feed_expenses %}
+        <tr><td colspan="7" class="empty">No feed logged yet — using planned feed estimate.</td></tr>
+      {% endif %}
       </tbody>
     </table>
+    </div>
+
+    {% if batch_other_expenses %}
+    <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+      <div class="flex-between mb-sm">
+        <h3 class="mb-0">Linked Receipts from Financials ({{ batch_other_expenses|length }})</h3>
+        <a href="/financials?tab=taxes" class="link" style="padding:0">Tax Books →</a>
+      </div>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Date</th><th>Category / Vendor</th><th class="num">Amount</th><th>Receipt</th><th></th></tr></thead>
+        <tbody>
+        {% for oe in batch_other_expenses %}
+          <tr>
+            <td>{{ oe.expense_date }}</td>
+            <td>{{ oe.category }}{% if oe.vendor %} <small class="inline muted">· {{ oe.vendor }}</small>{% endif %}{% if oe.notes %}<small class="muted">{{ oe.notes }}</small>{% endif %}</td>
+            <td class="num">{{ oe.amount|money }}{% if oe.amount < 0 %} <span class="pill blue">Refund</span>{% endif %}</td>
+            <td>{% if oe.receipt_url %}<a href="{{ oe.receipt_url }}" target="_blank" rel="noopener">Receipt ↗</a>{% else %}—{% endif %}</td>
+            <td class="num"><a href="/financials?tab=taxes" class="link">Edit ↗</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   <div class="card">

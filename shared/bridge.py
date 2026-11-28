@@ -196,20 +196,26 @@ def delete_ledger_entry(
 def get_sku_completed_sales_summary(
     sku_id: int,
     conn: sqlite3.Connection | None = None,
+    *,
+    year: int | None = None,
 ) -> tuple[float, float]:
     """Return (units_sold, revenue_dollars) across completed sales for a SKU."""
     owns_conn = conn is None
     c = conn if conn is not None else get_connection()
+    yr_clause = " AND substr(s.occurred_at, 1, 4) = ?" if year is not None else ""
+    params: list[object] = [int(sku_id)]
+    if year is not None:
+        params.append(f"{int(year):04d}")
     try:
         row = c.execute(
-            """
+            f"""
             SELECT COALESCE(SUM(si.quantity), 0) AS qty,
                    COALESCE(SUM(si.quantity * si.unit_price_cents), 0) AS rev_cents
             FROM sale_items si
             JOIN sales s ON s.id = si.sale_id
-            WHERE si.sku_id = ? AND s.status = 'completed'
+            WHERE si.sku_id = ? AND s.status = 'completed'{yr_clause}
             """,
-            (int(sku_id),),
+            tuple(params),
         ).fetchone()
         qty = round(float(row["qty"] or 0.0), 1)
         rev = round(float(row["rev_cents"] or 0.0) / 100.0, 2)
