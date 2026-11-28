@@ -8,6 +8,8 @@ jobs:
   test:
     name: Run full test suite
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out the repo
         uses: actions/checkout@v5
@@ -81,6 +83,7 @@ jobs:
     name: Deploy to VPS
     needs: push_to_registry
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Trigger VPS deploy script
         env:

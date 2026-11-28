@@ -21,6 +21,7 @@ from homestead.web import (
     current_user,
     templates,
 )
+from shared.web import safe_redirect
 
 router = APIRouter()
 
@@ -33,8 +34,7 @@ def switch_merchant_submit(
     user: dict = Depends(current_user),
 ):
     allowed = {int(m["merchant_id"]) for m in user.get("merchants", [])}
-    target = next_url if next_url.startswith("/") else "/"
-    resp = RedirectResponse(target, status_code=303)
+    resp = safe_redirect(next_url, fallback="/")
     if int(merchant_id) in allowed:
         resp.set_cookie(
             MERCHANT_COOKIE,

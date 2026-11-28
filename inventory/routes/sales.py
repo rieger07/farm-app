@@ -39,6 +39,7 @@ from shared.bridge import (
     list_homestead_paid_transactions,
     update_homestead_transaction_payment_method,
 )
+from shared.web import safe_redirect
 from inventory.stock import fmt_qty
 from inventory.web import (
     Ctx,
@@ -326,9 +327,7 @@ def market_day_save(
         msg = f"Tagged {market_date} market day."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    target = next_url if next_url.startswith("/") else "/insights"
-    sep = "&" if "?" in target else "?"
-    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+    return safe_redirect(next_url, fallback="/insights", msg=msg)
 
 
 @router.post("/market-days/delete")
@@ -338,23 +337,15 @@ def market_day_delete(
     ctx: Ctx = Depends(require("sales")),
 ):
     delete_market_day_safely(ctx.merchant_id, market_date)
-    target = next_url if next_url.startswith("/") else "/insights"
-    sep = "&" if "?" in target else "?"
-    return RedirectResponse(
-        f"{target}{sep}msg={quote_plus(f'Removed market tag for {market_date}.')}",
-        status_code=303,
+    return safe_redirect(
+        next_url,
+        fallback="/insights",
+        msg=f"Removed market tag for {market_date}.",
     )
 
 
 def _redirect_sales_msg(next_url: str, msg: str, fallback: str = "/sales") -> RedirectResponse:
-    clean = (next_url or "").strip()
-    if not clean.startswith("/") or clean.startswith("//"):
-        clean = fallback
-    parts = urlsplit(clean)
-    params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "msg"]
-    params.append(("msg", msg))
-    target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
-    return RedirectResponse(target, status_code=303)
+    return safe_redirect(next_url, fallback=fallback, msg=msg)
 
 
 @router.post("/sales/homestead/payment-type")
@@ -519,9 +510,7 @@ def sales_void_quick_sale(
         msg = f"Voided Quick sale #{sale_id}{stock_note}."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    target = next_url if next_url.startswith("/") else "/sales"
-    sep = "&" if "?" in target else "?"
-    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+    return safe_redirect(next_url, fallback="/sales", msg=msg)
 
 
 @router.get("/sales/export.csv")

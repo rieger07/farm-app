@@ -34,6 +34,7 @@ from homestead.db.batches import (
 )
 from homestead.db.core import get_bag_weight, get_species_catalog
 from shared.bridge import HOMESTEAD_PAYMENT_METHODS
+from shared.web import safe_redirect
 from homestead.db.customers import batch_preorder_counts
 from homestead.db.eggs import (
     EGG_SPECIES_DEFAULTS,
@@ -311,8 +312,7 @@ def batch_save_submit(
         if raw.strip():
             payload[k] = cast(raw)
     save_batch(payload, batch_id=bid, user_id=user["id"])
-    target = next_url if next_url.startswith("/") else "/batches"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(f"Saved {name.strip()}."), status_code=303)
+    return safe_redirect(next_url, fallback="/batches", msg=f"Saved {name.strip()}.")
 
 
 @router.post("/batches/{batch_id}/toggle-active")
@@ -338,8 +338,7 @@ def batch_start_now(
     updated["end_date"] = (today + timedelta(days=win_days)).isoformat()
     updated["active"] = 1
     save_batch(updated, batch_id=batch_id, user_id=user["id"])
-    target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(f"Started {b['name']} today."), status_code=303)
+    return safe_redirect(next_url, fallback="/", msg=f"Started {b['name']} today.")
 
 
 @router.post("/batches/{batch_id}/delete")
@@ -362,8 +361,7 @@ def batch_log_loss(
 ):
     _get_owned_batch(batch_id, user)
     add_batch_loss(batch_id, loss_date, max(1, count), reason.strip())
-    target = next_url if next_url.startswith("/") else "/"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(f"Logged {count} loss."), status_code=303)
+    return safe_redirect(next_url, fallback="/", msg=f"Logged {count} loss.")
 
 
 @router.post("/batches/{batch_id}/losses/{loss_id}/delete")
@@ -400,11 +398,10 @@ async def batch_log_harvest(
         receipt_url=r_url,
         drive_file_id=drive_id,
     )
-    target = next_url if next_url.startswith("/") else "/"
     msg = f"Logged {head_count} harvested."
     if warn:
         msg += f" (Receipt not uploaded: {warn})"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
+    return safe_redirect(next_url, fallback="/", msg=msg)
 
 
 @router.post("/batches/{batch_id}/harvests/{harvest_id}/delete")
@@ -427,7 +424,6 @@ def batch_log_sale(
     user: dict = Depends(current_user),
 ):
     _get_owned_batch(batch_id, user)
-    target = next_url if next_url.startswith("/") else "/"
     try:
         add_batch_sale(
             batch_id, entry_date, allocation_type, weight_lbs, revenue,
@@ -436,7 +432,7 @@ def batch_log_sale(
         msg = "Saved sale/freezer entry."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
+    return safe_redirect(next_url, fallback="/", msg=msg)
 
 
 @router.post("/batches/{batch_id}/sales/{sale_id}/payment-method")
@@ -487,11 +483,10 @@ async def batch_log_feed(
         batch_id, fdate, feed_type, bags, feed_lbs, cost_total, notes,
         receipt_url=r_url, drive_file_id=drive_id,
     )
-    target = next_url if next_url.startswith("/") else "/"
     msg = "Logged feed purchase."
     if warn:
         msg += f" (Receipt not uploaded: {warn})"
-    return RedirectResponse(f"{target}?msg=" + quote_plus(msg), status_code=303)
+    return safe_redirect(next_url, fallback="/", msg=msg)
 
 
 @router.post("/batches/{batch_id}/feed-logs/{log_id}/delete")

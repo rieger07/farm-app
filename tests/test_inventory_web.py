@@ -1805,6 +1805,25 @@ class WebTest(unittest.TestCase):
         self.assertAlmostEqual(books["totals"]["ledger_income"], pos_only_dollars, places=2)
         self.assertAlmostEqual(books["totals"]["gross_income"], round(165.50 + pos_only_dollars, 2), places=2)
 
+    def test_inventory_open_redirect_validation(self):
+        owner = self.client("zach")
+        for bad in ("//evil.com", "/\\evil.com", "https://evil.com/phish"):
+            r_sw = owner.post(
+                "/switch-merchant",
+                data={"merchant_id": str(self.mid), "next_url": bad},
+            )
+            self.assertEqual(r_sw.status_code, 303)
+            self.assertEqual(r_sw.headers["location"], "/")
+            self.assertNotIn("evil.com", r_sw.headers["location"])
+
+            r_md = owner.post(
+                "/market-day/delete",
+                data={"market_date": "2026-06-01", "next_url": bad},
+            )
+            self.assertEqual(r_md.status_code, 303)
+            self.assertTrue(r_md.headers["location"].startswith("/market-day?msg="))
+            self.assertNotIn("evil.com", r_md.headers["location"])
+
 
 if __name__ == "__main__":
     unittest.main()

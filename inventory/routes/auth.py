@@ -29,6 +29,7 @@ from shared.auth import (
     delete_user_session,
     get_user_by_username,
 )
+from shared.web import safe_redirect
 
 router = APIRouter()
 
@@ -123,8 +124,7 @@ def switch_merchant(
     target = get_membership(ctx.user["id"], merchant_id=merchant_id, is_admin=ctx.is_admin)
     if not target:
         raise HTTPException(403, "Not allowed to access that workspace.")
-    dest = next_url if next_url.startswith("/") else "/"
-    resp = RedirectResponse(dest, status_code=303)
+    resp = safe_redirect(next_url, fallback="/")
     resp.set_cookie(
         MERCHANT_COOKIE,
         str(target["merchant_id"]),

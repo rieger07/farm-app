@@ -3564,6 +3564,61 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Livestock, feed &amp; processing", econ_page)
         self.assertNotIn("Chicks, feed &amp; processing", econ_page)
 
+    def test_open_redirect_validation_blocks_external_and_backslash_targets(self):
+        from homestead.database import list_batches
+        from shared.web import safe_redirect_path
+
+        # 1. Pure sanitizer checks
+        self.assertEqual(safe_redirect_path("//evil.com/phish", "/batches"), "/batches")
+        self.assertEqual(safe_redirect_path("/\\evil.com", "/batches"), "/batches")
+        self.assertEqual(safe_redirect_path("https://evil.com", "/"), "/")
+        self.assertEqual(safe_redirect_path("///evil.com", "/"), "/")
+        self.assertEqual(safe_redirect_path("/\r\nLocation: https://evil.com", "/"), "/")
+        self.assertEqual(safe_redirect_path("/batches/5?tab=grow", "/"), "/batches/5?tab=grow")
+
+        # 2. HTTP route checks on Homestead POST endpoints accepting next_url
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"})
+        self.c.post(
+            "/batches/save",
+            data={
+                "name": "Redirect Test Batch",
+                "species": "turkey chicks",
+                "start_date": "2026-06-01",
+                "initial_quantity": "5",
+                "next_url": "/batches",
+            },
+            follow_redirects=False,
+        )
+        bid = int(list_batches()[0]["id"])
+
+        for bad in ("//evil.com", "/\\evil.com", "https://evil.com/login"):
+            r_sw = self.c.post(
+                "/switch-merchant",
+                data={"merchant_id": "1", "next_url": bad},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_sw.status_code, 303)
+            self.assertEqual(r_sw.headers["location"], "/")
+            self.assertNotIn("evil.com", r_sw.headers["location"])
+
+            r_loss = self.c.post(
+                "/batches/log-loss",
+                data={"batch_id": str(bid), "loss_date": "2026-06-15", "count": "1", "next_url": bad},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_loss.status_code, 303)
+            self.assertTrue(r_loss.headers["location"].startswith("/?msg="))
+            self.assertNotIn("evil.com", r_loss.headers["location"])
+
+            r_egg = self.c.post(
+                "/eggs/log",
+                data={"species": "chicken", "log_date": "2026-06-15", "total_collected": "6", "next_url": bad},
+                follow_redirects=False,
+            )
+            self.assertEqual(r_egg.status_code, 303)
+            self.assertTrue(r_egg.headers["location"].startswith("/eggs?species=chicken"))
+            self.assertNotIn("evil.com", r_egg.headers["location"])
+
 
 if __name__ == "__main__":
     unittest.main()

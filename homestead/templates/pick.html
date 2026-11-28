@@ -140,18 +140,40 @@
       const shareTooBig = CUSTOMER && effMax && IS_SHARE_MODE && (claimedEquiv + Number(b.share_fraction || 1) > effMax + 1e-6);
       const disabled = !CUSTOMER || atLimit || shareTooBig;
       const btnText = !CUSTOMER ? 'Enter info above' : ((atLimit || shareTooBig) ? 'Limit reached' : ('Claim ' + UNIT_SG));
-      const btnHtml = claimed
-        ? '<span class="pill" style="background:#e5e2d5;color:var(--muted)">Claimed</span>'
-        : `<button type="button" class="btn sm primary wide" ${disabled ? 'disabled' : ''} onclick="claimBird(${b.id})">${btnText}</button>`;
-      const titleLbl = escapeHtml(b.label || (UNIT_SG_TITLE + ' #' + b.num));
-      const wtHtml = b.weight_pending
-        ? `<div style="font:600 18px Georgia,serif;margin:4px 0">Pending wt</div><small style="margin-bottom:8px">$${Number(PRICE).toFixed(2)}/lb hanging</small>`
-        : `<div style="font:600 22px Georgia,serif;margin:4px 0">${Number(b.dressed_lbs).toFixed(2)} lb</div><small style="margin-bottom:8px">${IS_SHARE_MODE ? 'hanging' : escapeHtml(b.lb_oz)} · <b>$${Number(b.est_price).toFixed(2)}</b></small>`;
-      card.innerHTML = `
-        <small>${titleLbl}</small>
-        ${wtHtml}
-        ${btnHtml}
-      `;
+      const titleEl = document.createElement('small');
+      titleEl.textContent = b.label || (UNIT_SG_TITLE + ' #' + b.num);
+      const wtDiv = document.createElement('div');
+      const wtSub = document.createElement('small');
+      wtSub.style.marginBottom = '8px';
+      if (b.weight_pending) {
+        wtDiv.style.cssText = 'font:600 18px Georgia,serif;margin:4px 0';
+        wtDiv.textContent = 'Pending wt';
+        wtSub.textContent = `$${Number(PRICE).toFixed(2)}/lb hanging`;
+      } else {
+        wtDiv.style.cssText = 'font:600 22px Georgia,serif;margin:4px 0';
+        wtDiv.textContent = `${Number(b.dressed_lbs).toFixed(2)} lb`;
+        wtSub.textContent = `${IS_SHARE_MODE ? 'hanging' : String(b.lb_oz || '')} · `;
+        const priceB = document.createElement('b');
+        priceB.textContent = `$${Number(b.est_price).toFixed(2)}`;
+        wtSub.appendChild(priceB);
+      }
+      card.append(titleEl, wtDiv, wtSub);
+      if (claimed) {
+        const pill = document.createElement('span');
+        pill.className = 'pill';
+        pill.style.cssText = 'background:#e5e2d5;color:var(--muted)';
+        pill.textContent = 'Claimed';
+        card.appendChild(pill);
+      } else {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn sm primary wide';
+        btn.disabled = !!disabled;
+        btn.textContent = btnText;
+        const itemId = Number(b.id);
+        btn.addEventListener('click', () => claimBird(itemId));
+        card.appendChild(btn);
+      }
       grid.appendChild(card);
     });
   }

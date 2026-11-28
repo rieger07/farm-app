@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -37,3 +39,44 @@ def mount_shared_static(app: FastAPI, templates: Jinja2Templates) -> None:
         name="shared_static",
     )
     templates.env.globals["shared_asset"] = shared_asset
+
+
+def safe_redirect_path(raw: str | None, fallback: str = "/") -> str:
+    """Validate an internal redirect target, blocking scheme, host, backslash, and control-char bypasses."""
+    candidate = str(raw or "").strip()
+    if (
+        not candidate
+        or "\\" in candidate
+        or any(ord(ch) < 32 for ch in candidate)
+        or not candidate.startswith("/")
+        or candidate.startswith("//")
+    ):
+        return fallback
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+    path = parsed.path or fallback
+    if not path.startswith("/") or path.startswith("//"):
+        return fallback
+    return urlunsplit(("", "", path, parsed.query, ""))
+
+
+def safe_redirect(
+    next_url: str | None,
+    *,
+    fallback: str = "/",
+    msg: str | None = None,
+    status_code: int = 303,
+) -> RedirectResponse:
+    """Return a 303 RedirectResponse strictly to a validated relative path, optionally updating ?msg=."""
+    target = safe_redirect_path(next_url, fallback=fallback)
+    if msg is not None:
+        parts = urlsplit(target)
+        params = [
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k != "msg"
+        ]
+        params.append(("msg", str(msg)))
+        target = urlunsplit(("", "", parts.path or fallback, urlencode(params), ""))
+    return RedirectResponse(target, status_code=status_code)

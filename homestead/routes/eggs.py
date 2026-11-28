@@ -27,6 +27,7 @@ from homestead.web import (
     _resolve_receipt_attachment,
     current_user,
 )
+from shared.web import safe_redirect, safe_redirect_path
 
 router = APIRouter()
 
@@ -65,10 +66,10 @@ def eggs_log_submit(
 ):
     sp = normalize_egg_species(species)
     sp_label = EGG_SPECIES_DEFAULTS[sp]["label"].lower()
-    target = next_url if next_url.startswith("/") else f"/eggs?species={sp}"
+    default_target = f"/eggs?species={sp}"
+    target = safe_redirect_path(next_url, fallback=default_target)
     if target == "/eggs":
-        target = f"/eggs?species={sp}"
-    sep = "&" if "?" in target else "?"
+        target = default_target
     try:
         add_egg_log(
             user["id"],
@@ -83,7 +84,7 @@ def eggs_log_submit(
         msg = f"Logged {total_collected} {sp_label} egg{'s' if int(total_collected) != 1 else ''}."
     except ValueError as exc:
         msg = f"Error: {exc}"
-    return RedirectResponse(f"{target}{sep}msg={quote_plus(msg)}", status_code=303)
+    return safe_redirect(target, fallback=default_target, msg=msg)
 
 
 @router.post("/eggs/log/{log_id}/delete")
