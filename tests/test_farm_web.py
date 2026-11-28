@@ -3619,6 +3619,207 @@ class FarmWebTest(unittest.TestCase):
             self.assertTrue(r_egg.headers["location"].startswith("/eggs?species=chicken"))
             self.assertNotIn("evil.com", r_egg.headers["location"])
 
+    def test_alpaca_16_color_picker_fleece_factors_and_fiber_grade(self):
+        from datetime import date
+
+        from homestead.db.fiber import (
+            ALPACA_ANIMAL_FACTORS,
+            ALPACA_CLIP_EXTRA_FACTORS,
+            ALPACA_FIBER_GRADES,
+            ALPACA_FLEECE_COLORS,
+            list_fiber_mill_lots,
+            list_fiber_shearings,
+        )
+        from homestead.db.herds import list_herd_animals, list_herds
+
+        today_iso = date.today().isoformat()
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+
+        # 1. Verify official 16 AOA color palette, 7 grades, 6 animal + 2 clip factors
+        self.assertEqual(len(ALPACA_FLEECE_COLORS), 16)
+        self.assertEqual(len({c["name"] for c in ALPACA_FLEECE_COLORS}), 16)
+        self.assertEqual(len({c["code"] for c in ALPACA_FLEECE_COLORS}), 16)
+        self.assertEqual(len(ALPACA_FIBER_GRADES), 7)
+        self.assertEqual(len(ALPACA_ANIMAL_FACTORS), 6)
+        self.assertEqual(len(ALPACA_CLIP_EXTRA_FACTORS), 2)
+
+        # 2. Create Alpaca herd and Breeding Pigs herd
+        self.c.post(
+            "/herds/save",
+            data={"name": "Alpaca Herd", "species": "alpaca", "herd_type": "fiber", "head_count": "2"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/herds/save",
+            data={"name": "Breeding Pigs", "species": "pig", "herd_type": "breeding", "head_count": "2"},
+            follow_redirects=False,
+        )
+        herds_by_name = {h["name"]: int(h["id"]) for h in list_herds(1)}
+        alp_id = herds_by_name["Alpaca Herd"]
+        pig_id = herds_by_name["Breeding Pigs"]
+
+        # 3. Save & edit named alpaca with 16-color swatch, separate fiber_grade, and factors
+        self.c.post(
+            f"/herds/{alp_id}/animals/save",
+            data={
+                "name": "Clover",
+                "sex_role": "Female",
+                "color": "Medium Rose Grey",
+                "fiber_grade": "grade_2",
+                "fleece_factors": ["tuxedoed", "suri"],
+                "birth_year": "2022",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/animals/save",
+            data={
+                "name": "Apollo",
+                "sex_role": "Male",
+                "color": "True Black",
+                "fiber_grade": "grade_3",
+                "fleece_factors": ["roan"],
+                "birth_year": "2021",
+            },
+            follow_redirects=False,
+        )
+
+        animals = {a["name"]: a for a in list_herd_animals(1, herd_id=alp_id)}
+        clover = animals["Clover"]
+        apollo = animals["Apollo"]
+        self.assertEqual(clover["color"], "Medium Rose Grey")
+        self.assertEqual(clover["color_code"], "MRG")
+        self.assertEqual(clover["fiber_grade"], "grade_2")
+        self.assertEqual(clover["fiber_grade_label"], "Grade 2 · Baby")
+        self.assertEqual(clover["fleece_factor_list"], ["tuxedoed", "suri"])
+        self.assertEqual(clover["fleece_factor_labels"], ["Tuxedoed", "Suri"])
+
+        # Edit Clover to add pinto, keeping color and grade intact
+        self.c.post(
+            f"/herds/{alp_id}/animals/save",
+            data={
+                "animal_id": str(clover["id"]),
+                "name": "Clover",
+                "sex_role": "Female",
+                "color": "Medium Rose Grey",
+                "fiber_grade": "grade_2",
+                "fleece_factors": ["tuxedoed", "pinto", "suri"],
+                "birth_year": "2022",
+            },
+            follow_redirects=False,
+        )
+        clover_edited = {a["name"]: a for a in list_herd_animals(1, herd_id=alp_id)}["Clover"]
+        self.assertEqual(clover_edited["fleece_factor_list"], ["tuxedoed", "pinto", "suri"])
+
+        # Alpaca Overview page renders all 16 swatches, color dot MRG, grade, and factor chips
+        alp_overview = self.c.get(f"/herds?herd_id={alp_id}").text
+        self.assertIn('id="anm-palette"', alp_overview)
+        for c in ALPACA_FLEECE_COLORS:
+            self.assertIn(f'data-color="{c["name"]}"', alp_overview)
+        self.assertIn('data-swatch="MRG"', alp_overview)
+        self.assertIn("Grade 2 · Baby", alp_overview)
+        self.assertIn("Tuxedoed", alp_overview)
+        self.assertIn("Suri", alp_overview)
+
+        # Breeding Pigs Overview stays simple without alpaca color palette or grade dropdown
+        pig_overview = self.c.get(f"/herds?herd_id={pig_id}").text
+        self.assertNotIn('id="anm-palette"', pig_overview)
+        self.assertNotIn('id="anm-grade"', pig_overview)
+
+        # 4. Shearing auto-inherits color, grade & factors when omitted; explicit override clears/replaces
+        self.c.post(
+            f"/herds/{alp_id}/shearings/add",
+            data={
+                "animal_id": str(clover["id"]),
+                "shear_date": today_iso,
+                "prime_lbs": "4.2",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/shearings/add",
+            data={
+                "animal_id": str(clover["id"]),
+                "shear_date": today_iso,
+                "fleece_color": "Medium Rose Grey",
+                "fiber_grade": "grade_3",
+                "fleece_factors_submitted": "1",
+                "fleece_factors": ["heavy_vm"],
+                "prime_lbs": "3.5",
+                "notes": "Explicit override clip",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/shearings/add",
+            data={
+                "animal_id": str(apollo["id"]),
+                "shear_date": today_iso,
+                "prime_lbs": "5.0",
+            },
+            follow_redirects=False,
+        )
+
+        shearings = list_fiber_shearings(1, herd_id=alp_id)
+        inherited = next(s for s in shearings if s["animal_id"] == clover["id"] and not s["notes"])
+        overridden = next(s for s in shearings if s["notes"] == "Explicit override clip")
+        apollo_sh = next(s for s in shearings if s["animal_id"] == apollo["id"])
+
+        self.assertEqual(inherited["fleece_color"], "Medium Rose Grey")
+        self.assertEqual(inherited["color_code"], "MRG")
+        self.assertEqual(inherited["fiber_grade"], "grade_2")
+        self.assertEqual(inherited["fleece_factor_list"], ["tuxedoed", "pinto", "suri"])
+        self.assertTrue(inherited["is_suri"])
+
+        self.assertEqual(overridden["fiber_grade"], "grade_3")
+        self.assertEqual(overridden["fleece_factor_list"], ["heavy_vm"])
+        self.assertFalse(overridden["is_suri"])
+
+        sh_page = self.c.get(f"/herds?herd_id={alp_id}&tab=shearing").text
+        self.assertIn('id="sh-palette"', sh_page)
+        self.assertIn('id="sh-grade"', sh_page)
+        self.assertIn("Heavy VM", sh_page)
+        self.assertIn("Tender / Break", sh_page)
+        self.assertIn("Tuxedoed", sh_page)
+
+        # 5. Mill lot mixing Suri (inherited Clover) + non-Suri (Apollo) triggers mixed_suri_warning;
+        #    single-type lot has mixed_suri_warning=False
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/save",
+            data={
+                "lot_name": "Mixed Suri Test Lot",
+                "inputs_submitted": "1",
+                "shearing_ids": [str(inherited["id"]), str(apollo_sh["id"])],
+                f"raw_lbs_{inherited['id']}": "2.0",
+                f"raw_lbs_{apollo_sh['id']}": "2.0",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/herds/{alp_id}/mill-lots/save",
+            data={
+                "lot_name": "Single Type Lot",
+                "inputs_submitted": "1",
+                "shearing_ids": [str(overridden["id"])],
+                f"raw_lbs_{overridden['id']}": "3.0",
+            },
+            follow_redirects=False,
+        )
+
+        lots_by_name = {l["lot_name"]: l for l in list_fiber_mill_lots(1, herd_id=alp_id)}
+        self.assertTrue(lots_by_name["Mixed Suri Test Lot"]["mixed_suri_warning"])
+        self.assertTrue(lots_by_name["Mixed Suri Test Lot"]["mixed_color_warning"])
+        self.assertFalse(lots_by_name["Single Type Lot"]["mixed_suri_warning"])
+        self.assertFalse(lots_by_name["Single Type Lot"]["mixed_color_warning"])
+
+        mill_html = self.c.get(f"/herds?herd_id={alp_id}&tab=mill").text
+        self.assertIn("Mixed Suri / Huacaya", mill_html)
+        self.assertIn("Grade 2 · Baby", mill_html)
+
 
 if __name__ == "__main__":
     unittest.main()

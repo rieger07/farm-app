@@ -5,6 +5,15 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from homestead.db.core import get_db_connection
+from homestead.db.fiber import (
+    fiber_grade_label,
+    fleece_factor_labels,
+    get_alpaca_color_code,
+    get_alpaca_color_hex,
+    normalize_fiber_grade,
+    normalize_fleece_factors,
+    parse_fleece_factors,
+)
 from shared.bridge import delete_ledger_entry
 
 HERD_TYPES = ("breeding", "fiber", "other")
@@ -304,7 +313,22 @@ def list_herd_animals(
             """,
             tuple(params),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out: list[dict] = []
+        for r in rows:
+            d = dict(r)
+            clr = str(d.get("color") or "").strip()
+            fgrade = normalize_fiber_grade(d.get("fiber_grade"))
+            ffactors = normalize_fleece_factors(d.get("fleece_factors"))
+            d["color"] = clr
+            d["color_code"] = get_alpaca_color_code(clr)
+            d["color_hex"] = get_alpaca_color_hex(clr)
+            d["fiber_grade"] = fgrade
+            d["fiber_grade_label"] = fiber_grade_label(fgrade)
+            d["fleece_factors"] = ffactors
+            d["fleece_factor_list"] = parse_fleece_factors(ffactors)
+            d["fleece_factor_labels"] = fleece_factor_labels(ffactors)
+            out.append(d)
+        return out
 
 
 def save_herd_animal(
@@ -313,6 +337,8 @@ def save_herd_animal(
     name: str,
     sex_role: str = "",
     color: str = "",
+    fiber_grade: str = "",
+    fleece_factors: str | list[str] | tuple[str, ...] = "",
     birth_year: int | None = None,
     notes: str = "",
     active: bool = True,
@@ -322,6 +348,8 @@ def save_herd_animal(
     if not clean_name:
         raise ValueError("Animal name is required.")
     yr_val = int(birth_year) if birth_year and 1900 <= int(birth_year) <= 2200 else None
+    clean_grade = normalize_fiber_grade(fiber_grade)
+    clean_factors = normalize_fleece_factors(fleece_factors)
     now_iso = datetime.utcnow().isoformat(timespec="seconds")
 
     with get_db_connection() as conn:
@@ -335,13 +363,16 @@ def save_herd_animal(
             cur = conn.execute(
                 """
                 UPDATE herd_animals
-                SET name = ?, sex_role = ?, color = ?, birth_year = ?, active = ?, notes = ?
+                SET name = ?, sex_role = ?, color = ?, fiber_grade = ?,
+                    fleece_factors = ?, birth_year = ?, active = ?, notes = ?
                 WHERE id = ? AND herd_id = ? AND user_id = ?
                 """,
                 (
                     clean_name[:80],
                     str(sex_role or "").strip()[:40],
                     str(color or "").strip()[:60],
+                    clean_grade,
+                    clean_factors,
                     yr_val,
                     1 if active else 0,
                     str(notes or "").strip(),
@@ -357,9 +388,10 @@ def save_herd_animal(
         cur = conn.execute(
             """
             INSERT INTO herd_animals (
-                herd_id, user_id, name, sex_role, color, birth_year, active, notes, created_at
+                herd_id, user_id, name, sex_role, color, fiber_grade,
+                fleece_factors, birth_year, active, notes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(herd_id),
@@ -367,6 +399,8 @@ def save_herd_animal(
                 clean_name[:80],
                 str(sex_role or "").strip()[:40],
                 str(color or "").strip()[:60],
+                clean_grade,
+                clean_factors,
                 yr_val,
                 1 if active else 0,
                 str(notes or "").strip(),

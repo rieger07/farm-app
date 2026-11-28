@@ -85,3 +85,36 @@
 .batch-custom-in{width:64px!important;padding:2px 6px!important;font-size:12px!important;height:24px;border-radius:6px;text-align:right}
 .batch-alloc-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:var(--card);border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--muted)}
 .batch-alloc-bar select{min-width:165px;font-size:12px;padding:4px 8px}
+
+/* Alpaca 16-color fleece picker, swatch pills & trait chips */
+.fleece-picker{display:flex;flex-direction:column;gap:6px}
+.fleece-picker-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.fleece-selected{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.fleece-palette{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+@media(max-width:520px){.fleece-palette{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fleece-swatch{display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:500 12px/1.15 inherit;cursor:pointer;text-align:left;transition:border-color .12s,box-shadow .12s,background .12s}
+.fleece-swatch:hover{border-color:var(--green);background:var(--surface-soft)}
+.fleece-swatch.on{border-color:var(--green);background:var(--sage);font-weight:700;box-shadow:0 0 0 1px var(--green)}
+.fleece-chip-dot{width:20px;height:20px;border-radius:999px;border:1px solid rgba(31,58,45,.24);flex-shrink:0;display:inline-block}
+.fleece-dot{width:11px;height:11px;border-radius:999px;border:1px solid rgba(31,58,45,.28);flex-shrink:0;display:inline-block;vertical-align:middle}
+.fleece-dot[data-swatch=""],.fleece-dot:not([data-swatch]){display:none}
+.fleece-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--surface-soft);border:1px solid var(--line);color:var(--ink);white-space:nowrap}
+.fleece-factors-wrap{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.fleece-field-label{font-size:13px;display:block;margin-bottom:4px}
+
+[data-swatch="WH"]{background:#F7F5EE}
+[data-swatch="BG"]{background:#E6D5B8}
+[data-swatch="LF"]{background:#D7B996}
+[data-swatch="MF"]{background:#BC9368}
+[data-swatch="DF"]{background:#9A6E43}
+[data-swatch="LB"]{background:#84573A}
+[data-swatch="MB"]{background:#633D28}
+[data-swatch="DB"]{background:#3F2519}
+[data-swatch="BB"]{background:#2B211E}
+[data-swatch="TB"]{background:#161616}
+[data-swatch="LSG"]{background:#C2C4C4}
+[data-swatch="MSG"]{background:#8F9396}
+[data-swatch="DSG"]{background:#575B60}
+[data-swatch="LRG"]{background:#B5A39B}
+[data-swatch="MRG"]{background:#8A736A}
+[data-swatch="DRG"]{background:#5E4B44}

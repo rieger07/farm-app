@@ -10,6 +10,10 @@ from fastapi.responses import RedirectResponse
 from homestead.db.core import get_bag_weight
 from homestead.db.expenses import get_google_drive_connection
 from homestead.db.fiber import (
+    ALPACA_ANIMAL_FACTORS,
+    ALPACA_FIBER_GRADES,
+    ALPACA_FLEECE_COLORS,
+    ALPACA_SHEARING_FACTORS,
     FIBER_OUTPUT_UNITS,
     FIBER_PRODUCT_TYPES,
     MILL_LOT_STATUSES,
@@ -91,6 +95,7 @@ def herds_page(
             or selected_herd.get("species") in ("alpaca", "sheep")
         )
     )
+    is_alpaca_herd = bool(selected_herd and selected_herd.get("species") == "alpaca")
     clean_tab = tab if (is_fiber_herd and tab in ("overview", "shearing", "mill")) else "overview"
 
     animals = (
@@ -122,6 +127,7 @@ def herds_page(
         herds=herds,
         selected_herd=selected_herd,
         is_fiber_herd=is_fiber_herd,
+        is_alpaca_herd=is_alpaca_herd,
         active_tab=clean_tab,
         animals=animals,
         feed_logs=feed_logs,
@@ -134,6 +140,10 @@ def herds_page(
         product_types=FIBER_PRODUCT_TYPES,
         output_units=FIBER_OUTPUT_UNITS,
         mill_statuses=MILL_LOT_STATUSES,
+        alpaca_colors=ALPACA_FLEECE_COLORS,
+        alpaca_fiber_grades=ALPACA_FIBER_GRADES,
+        alpaca_animal_factors=ALPACA_ANIMAL_FACTORS,
+        alpaca_shearing_factors=ALPACA_SHEARING_FACTORS,
         gdrive_connected=bool(get_google_drive_connection(uid)),
         can_manage=can_manage,
         msg=msg,
@@ -187,6 +197,8 @@ def herd_animal_save_submit(
     name: str = Form(...),
     sex_role: str = Form(""),
     color: str = Form(""),
+    fiber_grade: str = Form(""),
+    fleece_factors: list[str] = Form([]),
     birth_year: str = Form(""),
     notes: str = Form(""),
     user: dict = Depends(current_user),
@@ -203,6 +215,8 @@ def herd_animal_save_submit(
             name=name,
             sex_role=sex_role,
             color=color,
+            fiber_grade=fiber_grade,
+            fleece_factors=fleece_factors,
             birth_year=byr,
             notes=notes,
             animal_id=aid,
@@ -257,6 +271,9 @@ def herd_shearing_add_submit(
     animal_id: str = Form(""),
     shear_date: str = Form(""),
     fleece_color: str = Form(""),
+    fiber_grade: str = Form(""),
+    fleece_factors: list[str] = Form([]),
+    fleece_factors_submitted: str = Form(""),
     prime_lbs: str = Form("0"),
     seconds_lbs: str = Form("0"),
     total_lbs: str = Form("0"),
@@ -275,6 +292,10 @@ def herd_shearing_add_submit(
             animal_id=aid,
             shear_date=shear_date or date.today().isoformat(),
             fleece_color=fleece_color,
+            fiber_grade=fiber_grade,
+            fleece_factors=(
+                fleece_factors if fleece_factors_submitted else (fleece_factors or None)
+            ),
             prime_lbs=_parse_float(prime_lbs),
             seconds_lbs=_parse_float(seconds_lbs),
             total_lbs=_parse_float(total_lbs),

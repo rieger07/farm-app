@@ -255,6 +255,12 @@ class SchemaGuardrailsTest(unittest.TestCase):
                 {"fiber_shearings", "fiber_mill_lots", "fiber_mill_lot_inputs", "fiber_lot_outputs"}.issubset(tables)
             )
 
+            ha_cols = {r["name"] for r in c2.execute("PRAGMA table_info(herd_animals)").fetchall()}
+            self.assertTrue({"fiber_grade", "fleece_factors"}.issubset(ha_cols))
+
+            fs_cols = {r["name"] for r in c2.execute("PRAGMA table_info(fiber_shearings)").fetchall()}
+            self.assertTrue({"fiber_grade", "fleece_factors"}.issubset(fs_cols))
+
             b1 = c2.execute("SELECT picking_slug, starter_weeks, lifecycle_type FROM batches WHERE id = 1").fetchone()
             self.assertEqual(b1["picking_slug"], "live-turkey-2026")
             self.assertIsNotNone(b1["starter_weeks"])

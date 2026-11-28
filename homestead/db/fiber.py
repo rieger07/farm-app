@@ -27,6 +27,124 @@ _PRODUCT_TYPE_MAP = dict(FIBER_PRODUCT_TYPES)
 FIBER_OUTPUT_UNITS = ("skeins", "bumps", "pairs", "items", "oz", "lbs")
 FIBER_SKU_KEYWORDS = ("yarn", "alpaca", "fiber", "roving", "skein", "wool", "fleece", "felt")
 
+# Official 16 AOA alpaca fleece colors (4x4 palette order)
+ALPACA_FLEECE_COLORS: tuple[dict[str, object], ...] = (
+    {"name": "White", "short": "White", "code": "WH", "hex": "#F7F5EE", "is_light": True},
+    {"name": "Beige", "short": "Beige", "code": "BG", "hex": "#E6D5B8", "is_light": True},
+    {"name": "Light Fawn", "short": "Lt Fawn", "code": "LF", "hex": "#D7B996", "is_light": True},
+    {"name": "Medium Fawn", "short": "Med Fawn", "code": "MF", "hex": "#BC9368", "is_light": False},
+    {"name": "Dark Fawn", "short": "Dk Fawn", "code": "DF", "hex": "#9A6E43", "is_light": False},
+    {"name": "Light Brown", "short": "Lt Brown", "code": "LB", "hex": "#84573A", "is_light": False},
+    {"name": "Medium Brown", "short": "Med Brown", "code": "MB", "hex": "#633D28", "is_light": False},
+    {"name": "Dark Brown", "short": "Dk Brown", "code": "DB", "hex": "#3F2519", "is_light": False},
+    {"name": "Bay Black", "short": "Bay Black", "code": "BB", "hex": "#2B211E", "is_light": False},
+    {"name": "True Black", "short": "True Black", "code": "TB", "hex": "#161616", "is_light": False},
+    {"name": "Light Silver Grey", "short": "Lt Silv Grey", "code": "LSG", "hex": "#C2C4C4", "is_light": True},
+    {"name": "Medium Silver Grey", "short": "Med Silv Grey", "code": "MSG", "hex": "#8F9396", "is_light": False},
+    {"name": "Dark Silver Grey", "short": "Dk Silv Grey", "code": "DSG", "hex": "#575B60", "is_light": False},
+    {"name": "Light Rose Grey", "short": "Lt Rose Grey", "code": "LRG", "hex": "#B5A39B", "is_light": True},
+    {"name": "Medium Rose Grey", "short": "Med Rose Grey", "code": "MRG", "hex": "#8A736A", "is_light": False},
+    {"name": "Dark Rose Grey", "short": "Dk Rose Grey", "code": "DRG", "hex": "#5E4B44", "is_light": False},
+)
+_COLOR_BY_NAME = {str(c["name"]).lower(): c for c in ALPACA_FLEECE_COLORS}
+_COLOR_BY_CODE = {str(c["code"]).lower(): c for c in ALPACA_FLEECE_COLORS}
+
+# US / AOA numbered fiber grades based on average fiber diameter (microns)
+ALPACA_FIBER_GRADES: tuple[tuple[str, str, str], ...] = (
+    ("grade_0", "Grade 0 · Ultra Royal", "Grade 0 · Ultra Royal (<17 µm)"),
+    ("grade_1", "Grade 1 · Royal", "Grade 1 · Royal (17–19.9 µm)"),
+    ("grade_2", "Grade 2 · Baby", "Grade 2 · Baby (20–22.9 µm)"),
+    ("grade_3", "Grade 3 · Superfine", "Grade 3 · Superfine (23–25.9 µm)"),
+    ("grade_4", "Grade 4 · Fine", "Grade 4 · Fine / Adult (26–28.9 µm)"),
+    ("grade_5", "Grade 5 · Medium", "Grade 5 · Medium (29–31.9 µm)"),
+    ("grade_6", "Grade 6 · Coarse", "Grade 6 · Coarse / Rug (32+ µm)"),
+)
+_GRADE_SHORT_MAP = {k: short for k, short, _ in ALPACA_FIBER_GRADES}
+_GRADE_FULL_MAP = {k: full for k, _, full in ALPACA_FIBER_GRADES}
+
+ALPACA_ANIMAL_FACTORS: tuple[tuple[str, str, str], ...] = (
+    ("tuxedoed", "Tuxedoed", "Contrasting white chest/belly markings"),
+    ("pinto", "Pinto / Multi", "Distinct multi-color patches"),
+    ("appaloosa", "Appaloosa", "Spotted or speckled coat pattern"),
+    ("roan", "Roan", "White fibers evenly mixed through colored coat"),
+    ("suri", "Suri", "Silky lock fleece — mill separately from Huacaya"),
+    ("high_guard_hair", "High Guard Hair", "Coarse guard hairs (dehairing / rug-grade)"),
+)
+ALPACA_CLIP_EXTRA_FACTORS: tuple[tuple[str, str, str], ...] = (
+    ("heavy_vm", "Heavy VM", "Noticeable hay or vegetable matter in clip"),
+    ("tender_break", "Tender / Break", "Weak staple spot (best for felting / roving)"),
+)
+ALPACA_SHEARING_FACTORS: tuple[tuple[str, str, str], ...] = (
+    ALPACA_ANIMAL_FACTORS + ALPACA_CLIP_EXTRA_FACTORS
+)
+_FACTOR_LABEL_MAP = {k: lbl for k, lbl, _ in ALPACA_SHEARING_FACTORS}
+_FACTOR_ORDER = [k for k, _, _ in ALPACA_SHEARING_FACTORS]
+
+
+def get_alpaca_color_info(color_name: str | None) -> dict[str, object] | None:
+    """Return official AOA color metadata by name or ARI code, case-insensitively."""
+    clean = str(color_name or "").strip().lower()
+    if not clean:
+        return None
+    return _COLOR_BY_NAME.get(clean) or _COLOR_BY_CODE.get(clean)
+
+
+def get_alpaca_color_code(color_name: str | None) -> str:
+    """Return AOA short code (e.g. 'MF') for an official fleece color, or '' if custom/empty."""
+    info = get_alpaca_color_info(color_name)
+    return str(info["code"]) if info else ""
+
+
+def get_alpaca_color_hex(color_name: str | None) -> str:
+    """Return display hex swatch for an official fleece color, or '' if custom/empty."""
+    info = get_alpaca_color_info(color_name)
+    return str(info["hex"]) if info else ""
+
+
+def normalize_fiber_grade(raw: str | None) -> str:
+    """Normalize fiber grade keys/labels while allowing legacy/custom strings."""
+    clean = str(raw or "").strip()
+    if not clean:
+        return ""
+    low = clean.lower()
+    if low in _GRADE_SHORT_MAP:
+        return low
+    for key, short, full in ALPACA_FIBER_GRADES:
+        if low in (short.lower(), full.lower()):
+            return key
+    return clean[:40]
+
+
+def fiber_grade_label(raw: str | None, *, short: bool = True) -> str:
+    """Format a normalized or custom fiber grade for display."""
+    norm = normalize_fiber_grade(raw)
+    if not norm:
+        return ""
+    mapping = _GRADE_SHORT_MAP if short else _GRADE_FULL_MAP
+    return mapping.get(norm, norm)
+
+
+def parse_fleece_factors(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Parse canonical fleece factor keys in stable display order."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        tokens = [t.strip().lower() for t in raw.split(",") if t.strip()]
+    else:
+        tokens = [str(t or "").strip().lower() for t in raw if str(t or "").strip()]
+    present = set(tokens)
+    return [k for k in _FACTOR_ORDER if k in present]
+
+
+def normalize_fleece_factors(raw: str | list[str] | tuple[str, ...] | None) -> str:
+    """Serialize deduplicated canonical fleece factor keys as comma-separated text."""
+    return ",".join(parse_fleece_factors(raw))
+
+
+def fleece_factor_labels(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Return human-readable labels for parsed fleece factor keys."""
+    return [_FACTOR_LABEL_MAP[k] for k in parse_fleece_factors(raw) if k in _FACTOR_LABEL_MAP]
+
 
 def normalize_mill_status(val: str | None) -> str:
     clean = str(val or "").strip().lower()
@@ -58,6 +176,8 @@ def add_fiber_shearing(
     animal_id: int | None = None,
     shear_date: str = "",
     fleece_color: str = "",
+    fiber_grade: str = "",
+    fleece_factors: str | list[str] | tuple[str, ...] | None = None,
     prime_lbs: float = 0.0,
     seconds_lbs: float = 0.0,
     total_lbs: float | None = None,
@@ -77,6 +197,8 @@ def add_fiber_shearing(
         raise ValueError("Enter raw fiber weight greater than 0 lb.")
     fee = round(max(0.0, float(shearing_fee or 0.0)), 2)
     clean_color = str(fleece_color or "").strip()[:60]
+    clean_grade = normalize_fiber_grade(fiber_grade)
+    resolved_factors: str | list[str] | tuple[str, ...] | None = fleece_factors
     aid = int(animal_id) if animal_id else None
     now_iso = _now_utc_iso()
 
@@ -89,20 +211,27 @@ def add_fiber_shearing(
             raise ValueError("Herd not found.")
         if aid is not None:
             anm_row = conn.execute(
-                "SELECT id, color FROM herd_animals WHERE id = ? AND herd_id = ? AND user_id = ?",
+                "SELECT id, color, fiber_grade, fleece_factors FROM herd_animals"
+                " WHERE id = ? AND herd_id = ? AND user_id = ?",
                 (aid, hid, uid),
             ).fetchone()
             if not anm_row:
                 raise ValueError("Animal not found.")
             if not clean_color:
                 clean_color = str(anm_row["color"] or "").strip()[:60]
+            if not clean_grade:
+                clean_grade = normalize_fiber_grade(anm_row["fiber_grade"])
+            if resolved_factors is None:
+                resolved_factors = str(anm_row["fleece_factors"] or "")
 
+        clean_factors = normalize_fleece_factors(resolved_factors)
         cur = conn.execute(
             """
             INSERT INTO fiber_shearings (
                 user_id, herd_id, animal_id, shear_date, fleece_color,
+                fiber_grade, fleece_factors,
                 prime_lbs, seconds_lbs, total_lbs, shearing_fee, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 uid,
@@ -110,6 +239,8 @@ def add_fiber_shearing(
                 aid,
                 clean_date,
                 clean_color,
+                clean_grade,
+                clean_factors,
                 prime,
                 seconds,
                 total,
@@ -161,10 +292,22 @@ def list_fiber_shearings(
         d = dict(r)
         tot = round(float(d.get("total_lbs") or 0.0), 2)
         alloc = round(float(d.get("allocated_lbs") or 0.0), 2)
+        fcolor = str(d.get("fleece_color") or d.get("animal_color") or "").strip()
+        fgrade = normalize_fiber_grade(d.get("fiber_grade"))
+        ffactors = normalize_fleece_factors(d.get("fleece_factors"))
+        factor_list = parse_fleece_factors(ffactors)
         d["total_lbs"] = tot
         d["allocated_lbs"] = alloc
         d["remaining_lbs"] = round(max(0.0, tot - alloc), 2)
-        d["fleece_color"] = str(d.get("fleece_color") or d.get("animal_color") or "").strip()
+        d["fleece_color"] = fcolor
+        d["color_code"] = get_alpaca_color_code(fcolor)
+        d["color_hex"] = get_alpaca_color_hex(fcolor)
+        d["fiber_grade"] = fgrade
+        d["fiber_grade_label"] = fiber_grade_label(fgrade)
+        d["fleece_factors"] = ffactors
+        d["fleece_factor_list"] = factor_list
+        d["fleece_factor_labels"] = fleece_factor_labels(ffactors)
+        d["is_suri"] = "suri" in factor_list
         out.append(d)
     return out
 
@@ -406,6 +549,7 @@ def list_fiber_mill_lots(
         in_rows = conn.execute(
             f"""
             SELECT li.*, fs.animal_id, fs.shear_date, fs.fleece_color,
+                   fs.fiber_grade, fs.fleece_factors,
                    fs.total_lbs AS shearing_total_lbs, fs.shearing_fee,
                    COALESCE(ha.name, '') AS animal_name,
                    COALESCE(ha.color, '') AS animal_color
@@ -433,9 +577,19 @@ def list_fiber_mill_lots(
         sh_tot = float(d.get("shearing_total_lbs") or 0.0)
         used = round(float(d.get("raw_lbs_used") or 0.0), 2)
         fee_share = round(float(d.get("shearing_fee") or 0.0) * (used / sh_tot), 2) if sh_tot > 0 else 0.0
+        fcolor = str(d.get("fleece_color") or d.get("animal_color") or "").strip()
+        fgrade = normalize_fiber_grade(d.get("fiber_grade"))
+        ffactors = normalize_fleece_factors(d.get("fleece_factors"))
+        factor_list = parse_fleece_factors(ffactors)
         d["raw_lbs_used"] = used
         d["shearing_fee_share"] = fee_share
-        d["fleece_color"] = str(d.get("fleece_color") or d.get("animal_color") or "").strip()
+        d["fleece_color"] = fcolor
+        d["color_code"] = get_alpaca_color_code(fcolor)
+        d["fiber_grade"] = fgrade
+        d["fiber_grade_label"] = fiber_grade_label(fgrade)
+        d["fleece_factor_list"] = factor_list
+        d["fleece_factor_labels"] = fleece_factor_labels(ffactors)
+        d["is_suri"] = "suri" in factor_list
         inputs_by_lot.setdefault(int(d["lot_id"]), []).append(d)
 
     need_skus = sku_map is None and any(r["ledger_sku_id"] for r in out_rows)
@@ -515,13 +669,17 @@ def list_fiber_mill_lots(
                 }
             )
 
+        has_suri = any(inp["is_suri"] for inp in lot_inputs)
+        has_non_suri = any(not inp["is_suri"] for inp in lot_inputs)
         d.update(
             {
                 "include_in_tax_books": bool(d.get("include_in_tax_books", 1)),
                 "inputs": lot_inputs,
                 "outputs": enriched_outputs,
                 "distinct_colors": distinct_colors,
+                "color_code": get_alpaca_color_code(d.get("color_group")),
                 "mixed_color_warning": len(distinct_colors) > 1,
+                "mixed_suri_warning": has_suri and has_non_suri,
                 "total_raw_lbs": total_raw_lbs,
                 "total_mill_cost": total_mill_cost,
                 "allocated_shearing_cost": allocated_shearing_cost,
@@ -763,7 +921,14 @@ def compute_fiber_dashboard(
         ckey = c_raw.lower()
         bucket = color_map.setdefault(
             ckey,
-            {"color": c_raw, "total_lbs": 0.0, "remaining_lbs": 0.0, "clip_count": 0},
+            {
+                "color": c_raw,
+                "color_code": get_alpaca_color_code(c_raw),
+                "color_hex": get_alpaca_color_hex(c_raw),
+                "total_lbs": 0.0,
+                "remaining_lbs": 0.0,
+                "clip_count": 0,
+            },
         )
         bucket["total_lbs"] = round(bucket["total_lbs"] + float(s["total_lbs"] or 0.0), 2)
         bucket["remaining_lbs"] = round(bucket["remaining_lbs"] + float(s["remaining_lbs"] or 0.0), 2)
