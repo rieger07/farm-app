@@ -20,9 +20,6 @@ _CATEGORY_META = {
     k: {"key": k, "label": label, "pill": pill} for k, label, pill in NOTE_CATEGORIES
 }
 
-_CHECK_LINE_RE = re.compile(r"^(\s*[-*]\s+\[)([ xX])(\]\s+)(.*)$")
-_HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
-_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 _INLINE_TOKEN_RE = re.compile(
     r"\[(?P<link_label>[^\[\]\n]+)\]\((?P<link_url>[^()\s]+)\)"
     r"|(?P<bare_url>https?://[^\s<>\"'\)\]]+)"
@@ -30,6 +27,51 @@ _INLINE_TOKEN_RE = re.compile(
     r"|\*(?P<italic>[^*\n]+)\*"
     r"|`(?P<code>[^`\n]+)`"
 )
+
+
+def _split_check_line(line: str) -> tuple[str, str, str, str] | None:
+    """Parse `<indent>[-*] [x| ] <text>` into (prefix, mark, sep, rest) without regex."""
+    n = len(line)
+    i = 0
+    while i < n and line[i] in (" ", "\t"):
+        i += 1
+    if i >= n or line[i] not in ("-", "*"):
+        return None
+    i += 1
+    ws_start = i
+    while i < n and line[i] in (" ", "\t"):
+        i += 1
+    if i == ws_start or i + 3 > n or line[i] != "[":
+        return None
+    mark = line[i + 1]
+    if mark not in (" ", "x", "X") or line[i + 2] != "]":
+        return None
+    prefix = line[: i + 1]
+    sep_start = i + 2
+    j = i + 3
+    while j < n and line[j] in (" ", "\t"):
+        j += 1
+    if j == i + 3:
+        return None
+    return prefix, mark, line[sep_start:j], line[j:]
+
+
+def _split_heading_line(line: str) -> tuple[int, str] | None:
+    """Parse `#` / `##` / `###` heading lines without regex."""
+    hashes = 0
+    while hashes < len(line) and hashes < 3 and line[hashes] == "#":
+        hashes += 1
+    if hashes == 0 or hashes >= len(line) or line[hashes] not in (" ", "\t"):
+        return None
+    return hashes, line[hashes:].strip()
+
+
+def _split_bullet_line(line: str) -> str | None:
+    """Parse `<indent>[-*] <text>` bullet lines without regex."""
+    stripped = line.lstrip(" \t")
+    if len(stripped) >= 2 and stripped[0] in ("-", "*") and stripped[1] in (" ", "\t"):
+        return stripped[2:].strip()
+    return None
 
 
 def normalize_note_category(raw: str | None) -> str:
@@ -101,24 +143,26 @@ def parse_note_body(body: str | None) -> tuple[list[dict], int, int]:
                 blocks[-1]["_closed"] = True
             continue
 
-        hm = _HEADING_RE.match(line)
+        hm = _split_heading_line(line)
         if hm:
+            level, htext = hm
             blocks.append(
                 {
                     "type": "heading",
-                    "level": min(3, len(hm.group(1))),
-                    "runs": _parse_inline(hm.group(2).strip()),
+                    "level": level,
+                    "runs": _parse_inline(htext),
                 }
             )
             continue
 
-        cm = _CHECK_LINE_RE.match(line)
+        cm = _split_check_line(line)
         if cm:
-            checked = cm.group(2).lower() == "x"
+            _, mark, _, rest = cm
+            checked = mark.lower() == "x"
             item = {
                 "idx": check_idx,
                 "checked": checked,
-                "runs": _parse_inline(cm.group(4)),
+                "runs": _parse_inline(rest),
             }
             check_idx += 1
             if checked:
@@ -129,9 +173,9 @@ def parse_note_body(body: str | None) -> tuple[list[dict], int, int]:
                 blocks.append({"type": "checklist", "items": [item]})
             continue
 
-        bm = _BULLET_RE.match(line)
-        if bm:
-            item_runs = _parse_inline(bm.group(1).strip())
+        bm = _split_bullet_line(line)
+        if bm is not None:
+            item_runs = _parse_inline(bm)
             if blocks and blocks[-1]["type"] == "ul" and not blocks[-1].get("_closed"):
                 blocks[-1]["items"].append(item_runs)
             else:
@@ -149,6 +193,19 @@ def parse_note_body(body: str | None) -> tuple[list[dict], int, int]:
     return blocks, check_done, check_idx
 
 
+def _strip_markdown_prefix(clean: str) -> str:
+    cm = _split_check_line(clean)
+    if cm:
+        return cm[3]
+    bm = _split_bullet_line(clean)
+    if bm is not None:
+        return bm
+    hm = _split_heading_line(clean)
+    if hm:
+        return hm[1]
+    return clean
+
+
 def plain_note_preview(body: str | None, max_len: int = 140) -> str:
     """Build a compact plain-text snippet for Radar / ntfy previews."""
     parts: list[str] = []
@@ -156,12 +213,7 @@ def plain_note_preview(body: str | None, max_len: int = 140) -> str:
         clean = line.strip()
         if not clean:
             continue
-        if (cm := _CHECK_LINE_RE.match(clean)):
-            clean = cm.group(4)
-        elif (bm := _BULLET_RE.match(clean)):
-            clean = bm.group(1)
-        elif (hm := _HEADING_RE.match(clean)):
-            clean = hm.group(2)
+        clean = _strip_markdown_prefix(clean)
         plain = "".join(run["text"] for run in _parse_inline(clean)).strip()
         if plain:
             parts.append(plain)
@@ -182,14 +234,15 @@ def toggle_checklist_item_in_body(body: str, item_index: int) -> tuple[str, bool
     new_checked = False
 
     for line in lines:
-        m = _CHECK_LINE_RE.match(line)
-        if m:
-            cur_checked = m.group(2).lower() == "x"
+        cm = _split_check_line(line)
+        if cm:
+            prefix, mark, sep, rest = cm
+            cur_checked = mark.lower() == "x"
             if idx == item_index:
                 found = True
                 new_checked = not cur_checked
-                mark = "x" if new_checked else " "
-                out_lines.append(f"{m.group(1)}{mark}{m.group(3)}{m.group(4)}")
+                new_mark = "x" if new_checked else " "
+                out_lines.append(f"{prefix}{new_mark}{sep}{rest}")
                 if new_checked:
                     done += 1
             else:
@@ -213,9 +266,10 @@ def reset_checklist_in_body(body: str) -> tuple[str, int]:
     reset_count = 0
 
     for line in lines:
-        m = _CHECK_LINE_RE.match(line)
-        if m and m.group(2).lower() == "x":
-            out_lines.append(f"{m.group(1)} {m.group(3)}{m.group(4)}")
+        cm = _split_check_line(line)
+        if cm and cm[1].lower() == "x":
+            prefix, _, sep, rest = cm
+            out_lines.append(f"{prefix} {sep}{rest}")
             reset_count += 1
         else:
             out_lines.append(line)
