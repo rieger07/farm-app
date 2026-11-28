@@ -24,7 +24,7 @@ _CHECK_LINE_RE = re.compile(r"^(\s*[-*]\s+\[)([ xX])(\]\s+)(.*)$")
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 _INLINE_TOKEN_RE = re.compile(
-    r"\[(?P<link_label>[^\]\n]+)\]\((?P<link_url>[^)\s]+)\)"
+    r"\[(?P<link_label>[^\[\]\n]+)\]\((?P<link_url>[^()\s]+)\)"
     r"|(?P<bare_url>https?://[^\s<>\"'\)\]]+)"
     r"|\*\*(?P<bold>[^*\n]+)\*\*"
     r"|\*(?P<italic>[^*\n]+)\*"
@@ -156,14 +156,15 @@ def plain_note_preview(body: str | None, max_len: int = 140) -> str:
         clean = line.strip()
         if not clean:
             continue
-        clean = re.sub(r"^#{1,3}\s+", "", clean)
-        clean = re.sub(r"^[-*]\s+\[[ xX]\]\s+", "", clean)
-        clean = re.sub(r"^[-*]\s+", "", clean)
-        clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", clean)
-        clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
-        clean = re.sub(r"`([^`]+)`", r"\1", clean)
-        clean = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", clean)
-        parts.append(clean)
+        if (cm := _CHECK_LINE_RE.match(clean)):
+            clean = cm.group(4)
+        elif (bm := _BULLET_RE.match(clean)):
+            clean = bm.group(1)
+        elif (hm := _HEADING_RE.match(clean)):
+            clean = hm.group(2)
+        plain = "".join(run["text"] for run in _parse_inline(clean)).strip()
+        if plain:
+            parts.append(plain)
     joined = " ".join(parts).strip()
     if len(joined) <= max_len:
         return joined

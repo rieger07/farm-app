@@ -1,7 +1,7 @@
 """Farm -> Team Notes routes (living SOPs, bulletin board, tappable checklists, replies)."""
 
 from datetime import date
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -62,9 +62,12 @@ def _can_delete_comment(user: dict, comment: dict) -> bool:
     return author is not None and int(author) == _actor_id(user)
 
 
-def _notes_redirect(msg: str, anchor: str = "") -> RedirectResponse:
-    frag = f"#{anchor}" if anchor else ""
-    return RedirectResponse(f"/notes?msg={quote_plus(msg)}{frag}", status_code=303)
+def _notes_redirect(msg: str, note_id: int | None = None) -> RedirectResponse:
+    frag = f"#note-{int(note_id)}" if note_id is not None else ""
+    target = f"/notes?msg={quote_plus(msg)}{frag}".replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        return RedirectResponse(target, status_code=303)
+    return RedirectResponse("/notes", status_code=303)
 
 
 @router.get("/notes")
@@ -189,7 +192,7 @@ async def note_save_submit(request: Request, user: dict = Depends(current_user))
     msg = "Updated team note." if nid else f"Posted team note '{title[:60]}'."
     if warn:
         msg += f" (Attachment note: {warn})"
-    return _notes_redirect(msg, anchor=f"note-{saved_id}")
+    return _notes_redirect(msg, note_id=saved_id)
 
 
 @router.post("/notes/{note_id}/pin")
@@ -206,7 +209,7 @@ def note_pin_submit(
         raise HTTPException(status_code=404, detail="Note not found.")
     return _notes_redirect(
         "Pinned note to top & Today Radar." if pin_val else "Unpinned note.",
-        anchor=f"note-{int(note_id)}",
+        note_id=note_id,
     )
 
 
@@ -228,7 +231,7 @@ def note_archive_submit(
     set_farm_note_archived(user["id"], note_id, arch_val)
     return _notes_redirect(
         "Archived team note." if arch_val else "Restored team note.",
-        anchor="" if arch_val else f"note-{int(note_id)}",
+        note_id=None if arch_val else note_id,
     )
 
 
@@ -274,13 +277,13 @@ def note_reset_checklist_submit(note_id: int, user: dict = Depends(current_user)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        return _notes_redirect(f"Error: {exc}", anchor=f"note-{int(note_id)}")
+        return _notes_redirect(f"Error: {exc}", note_id=note_id)
     msg = (
         f"Reset {reset_count} checklist item{'s' if reset_count != 1 else ''}."
         if reset_count
         else "Checklist is already unchecked."
     )
-    return _notes_redirect(msg, anchor=f"note-{int(note_id)}")
+    return _notes_redirect(msg, note_id=note_id)
 
 
 @router.post("/notes/{note_id}/comments/add")
@@ -299,7 +302,7 @@ def note_comment_add_submit(
     try:
         add_farm_note_comment(uid, note_id, body, author_id=_actor_id(user))
     except ValueError as exc:
-        return _notes_redirect(f"Error: {exc}", anchor=f"note-{int(note_id)}")
+        return _notes_redirect(f"Error: {exc}", note_id=note_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -313,7 +316,7 @@ def note_comment_add_submit(
             click_url=f"{base_url}/notes#note-{int(note_id)}",
             tags="speech_balloon",
         )
-    return _notes_redirect("Added reply.", anchor=f"note-{int(note_id)}")
+    return _notes_redirect("Added reply.", note_id=note_id)
 
 
 @router.post("/notes/{note_id}/comments/{comment_id}/delete")
@@ -331,4 +334,4 @@ def note_comment_delete_submit(
             status_code=403, detail="Only managers or the author can remove this reply."
         )
     delete_farm_note_comment(user["id"], note_id, comment_id)
-    return _notes_redirect("Removed reply.", anchor=f"note-{int(note_id)}")
+    return _notes_redirect("Removed reply.", note_id=note_id)
