@@ -63,22 +63,55 @@ _GRADE_SHORT_MAP = {k: short for k, short, _ in ALPACA_FIBER_GRADES}
 _GRADE_FULL_MAP = {k: full for k, _, full in ALPACA_FIBER_GRADES}
 
 ALPACA_ANIMAL_FACTORS: tuple[tuple[str, str, str], ...] = (
-    ("tuxedoed", "Tuxedoed", "Contrasting white chest/belly markings"),
-    ("pinto", "Pinto / Multi", "Distinct multi-color patches"),
-    ("appaloosa", "Appaloosa", "Spotted or speckled coat pattern"),
-    ("roan", "Roan", "White fibers evenly mixed through colored coat"),
-    ("suri", "Suri", "Silky lock fleece — mill separately from Huacaya"),
-    ("high_guard_hair", "High Guard Hair", "Coarse guard hairs (dehairing / rug-grade)"),
+    (
+        "tuxedoed",
+        "Tuxedoed",
+        "Solid or grey blanket with a white face, white legs/socks, and often a dark stripe down the neck/chest (classic grey pattern).",
+    ),
+    (
+        "pinto",
+        "Pinto / Multi",
+        "Large, distinct patches of two or more colors in the blanket—Pinto is white plus one other color in big patches; Multi/Fancy covers 3+ colors.",
+    ),
+    (
+        "appaloosa",
+        "Appaloosa",
+        "Spotted coat—officially 6 or more distinct spots on each side of the blanket, ranging from small speckles to leopard-style spots.",
+    ),
+    (
+        "roan",
+        "Roan",
+        "White fibers evenly interspersed throughout a darker solid color (often called \"modern grey\") without the white tuxedo face/leg markings.",
+    ),
+    (
+        "suri",
+        "Suri",
+        "Breed/fleece type—long, silky, lustrous locks that hang like dreadlocks instead of fluffy, crimped Huacaya fleece. Keep separate from Huacaya at the mill.",
+    ),
+    (
+        "high_guard_hair",
+        "High Guard Hair",
+        "Coarse, straight, prickly primary fibers sticking out above the softer undercoat—useful to flag since those fleeces usually go to rugs/felting rather than next-to-skin yarn.",
+    ),
 )
 ALPACA_CLIP_EXTRA_FACTORS: tuple[tuple[str, str, str], ...] = (
-    ("heavy_vm", "Heavy VM", "Noticeable hay or vegetable matter in clip"),
-    ("tender_break", "Tender / Break", "Weak staple spot (best for felting / roving)"),
+    (
+        "heavy_vm",
+        "Heavy VM",
+        "Noticeable hay, chaff, or burrs (vegetable matter) trapped in the fleece—needs extra skirting before milling or may incur extra mill cleaning fees.",
+    ),
+    (
+        "tender_break",
+        "Tender / Break",
+        "Weak spot along the staple (often from stress, illness, or pregnancy) that snaps when spun—better routed to roving or felted goods than worsted yarn.",
+    ),
 )
 ALPACA_SHEARING_FACTORS: tuple[tuple[str, str, str], ...] = (
     ALPACA_ANIMAL_FACTORS + ALPACA_CLIP_EXTRA_FACTORS
 )
 _FACTOR_LABEL_MAP = {k: lbl for k, lbl, _ in ALPACA_SHEARING_FACTORS}
 _FACTOR_ORDER = [k for k, _, _ in ALPACA_SHEARING_FACTORS]
+ALPACA_FACTOR_HINTS: dict[str, str] = {lbl: hint for _, lbl, hint in ALPACA_SHEARING_FACTORS}
 
 
 def get_alpaca_color_info(color_name: str | None) -> dict[str, object] | None:
