@@ -7,7 +7,7 @@
     <label>Species
       <select name="species" id="bm-species" onchange="fillSpeciesDefaults()">
         {% for sp, cfg in species_catalog.items() %}
-        <option value="{{ sp }}">{{ sp|title }}</option>
+        <option value="{{ sp }}">{{ sp|species_preset }}</option>
         {% endfor %}
       </select>
     </label>
@@ -19,14 +19,14 @@
     <label>Processing ($/head)<input type="number" name="processing_cost" id="bm-pcost" step="0.01" min="0"></label>
     <label>Lifecycle
       <select name="lifecycle_type" id="bm-life">
-        <option value="direct_arrival">Live arrival (chicks / poults)</option>
+        <option value="direct_arrival">Live arrival (chicks / poults / weaned livestock)</option>
         <option value="poultry_incubation">Incubation (eggs)</option>
         <option value="mammal_breeding">Mammal breeding</option>
       </select>
     </label>
     <label>Sale mode
       <select name="sale_unit" id="bm-sale-unit" onchange="syncBatchShareFields()">
-        <option value="whole">Whole animals (birds)</option>
+        <option value="whole">Whole animals (individually weighed)</option>
         <option value="shares">Shares — ½ &amp; Whole (pigs, beef · hanging wt)</option>
       </select>
     </label>

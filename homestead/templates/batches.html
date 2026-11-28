@@ -20,7 +20,7 @@
       {% set b = s.batch %}
       <tr>
         <td><a href="/batches/{{ b.id }}"><b>{{ b.name }}</b></a></td>
-        <td>{{ b.species|title }}</td>
+        <td>{{ b.species|species_name }}</td>
         <td>{{ b.start_date }}</td>
         <td>{{ s.proc_date }}</td>
         <td class="num">{{ s.initial_quantity if s.is_planned else (s.on_farm_head ~ ' / ' ~ s.initial_quantity) }}</td>

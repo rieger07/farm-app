@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Pre-Orders · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
+{% set u = species_terms(b.species, b.lifecycle_type) %}
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
     <h1>{{ b.name }} · Pre-Orders</h1>
-    <p class="sub">{{ b.species|title }} · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb{{ ' hanging wt' if is_share_mode else '' }} · Target process {{ s.proc_date }}</p>
+    <p class="sub">{{ b.species|species_name }} · ${{ '%.2f'|format(b.sale_price_per_lb or 0) }}/lb{{ ' hanging wt' if is_share_mode else '' }} · Target process {{ s.proc_date }}</p>
   </div>
 </div>
 {% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
@@ -31,7 +32,7 @@
   <div class="card">
     <small>Deposits Collected</small>
     <div class="big">${{ '%.2f'|format(dep_collected) }}</div>
-    <small>${{ '%.2f'|format(b.deposit_per_bird or 0) }} / {{ 'whole' if is_share_mode else 'bird' }}{% if is_share_mode %} · ${{ '%.2f'|format((b.deposit_per_bird or 0) * 0.5) }} / half{% endif %}</small>
+    <small>${{ '%.2f'|format(b.deposit_per_bird or 0) }} / {{ 'whole' if is_share_mode else u.singular }}{% if is_share_mode %} · ${{ '%.2f'|format((b.deposit_per_bird or 0) * 0.5) }} / half{% endif %}</small>
   </div>
   <div class="card">
     <small>Deposits Pending</small>
@@ -64,7 +65,7 @@
       </label>
       <label class="full">Sale Mode
         <select name="sale_unit" id="po-sale-unit" onchange="togglePoShareSettings()">
-          <option value="whole" {{ 'selected' if not is_share_mode }}>Whole animals (birds)</option>
+          <option value="whole" {{ 'selected' if not is_share_mode }}>Whole animals (individually weighed)</option>
           <option value="shares" {{ 'selected' if is_share_mode }}>Shares — ½ &amp; Whole (pigs, beef · hanging wt)</option>
         </select>
       </label>
@@ -83,10 +84,10 @@
           <input name="butcher_email" type="email" value="{{ b.butcher_email or '' }}" placeholder="butcher@example.com">
         </label>
       </div>
-      <label>Reservation Cap ({{ 'animals' if is_share_mode else 'birds' }})
+      <label>Reservation Cap ({{ u.plural }})
         <input type="number" name="preorder_cap" min="1" value="{{ b.preorder_cap or '' }}" placeholder="Default: {{ s.surviving_quantity }}">
       </label>
-      <label>Deposit per Whole {{ 'Animal' if is_share_mode else 'Bird' }} ($)
+      <label>Deposit per Whole {{ u.singular_title }} ($)
         <input type="number" name="deposit_per_bird" step="0.01" min="0" value="{{ '%.2f'|format(b.deposit_per_bird or 0) }}">
       </label>
       <label>Pickup Date
@@ -99,7 +100,7 @@
         <input name="pickup_location" value="{{ b.pickup_location or '' }}" placeholder="{{ pickup_cfg.pickup_address or 'Uses default farm address from Settings' }}">
       </label>
       <label class="full">Public Pre-Order / Deposit Notes
-        <textarea name="preorder_notes" rows="2" placeholder="e.g. Fresh pasture-raised turkeys ~16–20 lb. $25/bird deposit holds your spot.">{{ b.preorder_notes or '' }}</textarea>
+        <textarea name="preorder_notes" rows="2" placeholder="{{ u.preorder_placeholder }}">{{ b.preorder_notes or '' }}</textarea>
       </label>
       <div class="full row" style="justify-content:space-between;align-items:center">
         <small class="muted">
@@ -163,8 +164,8 @@
 <div class="card table-card" style="margin-bottom:18px">
   <div style="padding:14px 16px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
-      <h2 style="margin:0">Confirmed Reservations ({{ reserved_qty }} birds · {{ reserved|length }} orders)</h2>
-      <small class="muted">Deposits marked Paid automatically credit onto each bird when claimed on /pick/{{ b.picking_slug }} or assigned in Harvest Tally.</small>
+      <h2 style="margin:0">Confirmed Reservations ({{ reserved_qty }} {{ ('share' if reserved_qty == 1 else 'shares') if is_share_mode else (u.singular if reserved_qty == 1 else u.plural) }} · {{ reserved|length }} order{{ '' if reserved|length == 1 else 's' }})</h2>
+      <small class="muted">Deposits marked Paid automatically credit onto each {{ 'share' if is_share_mode else u.singular }} when claimed on /pick/{{ b.picking_slug }} or assigned in Harvest Tally.</small>
     </div>
     <div class="row">
       {% if reserved_phones %}
@@ -207,10 +208,13 @@
         <td><small>{{ p.notes or '—' }}</small></td>
         <td>
           <div class="row" style="gap:6px;flex-wrap:wrap">
+            {% set pick_noun_sg = 'Share' if is_share_mode else u.singular_title %}
+            {% set pick_noun_pl = 'shares' if is_share_mode else u.plural %}
+            {% set order_phrase = (b.name ~ ' ' ~ pick_noun_pl) if (is_share_mode or (u.singular not in (b.name|lower))) else b.name %}
             {% if pick_url and p.customer_phone %}
-            <a class="btn sm" href="sms:{{ p.customer_phone }}?&body={{ ('Hi ' ~ p.customer_name ~ '! Your ' ~ b.name ~ ' birds are weighed and ready to pick! Choose yours here: ' ~ pick_url)|urlencode }}">Text Pick Link</a>
+            <a class="btn sm" href="sms:{{ p.customer_phone }}?&body={{ ('Hi ' ~ p.customer_name ~ '! Your ' ~ order_phrase ~ ' are weighed and ready to pick! Choose yours here: ' ~ pick_url)|urlencode }}">Text Pick Link</a>
             {% elif pick_url and p.customer_email %}
-            <a class="btn sm" href="mailto:{{ p.customer_email }}?subject={{ (b.name ~ ' — Pick Your Bird!')|urlencode }}&body={{ ('Hi ' ~ p.customer_name ~ ',\n\nYour ' ~ b.name ~ ' birds are weighed and ready! Pick yours here: ' ~ pick_url)|urlencode }}">Email Pick Link</a>
+            <a class="btn sm" href="mailto:{{ p.customer_email }}?subject={{ (b.name ~ ' — Pick Your ' ~ pick_noun_sg ~ '!')|urlencode }}&body={{ ('Hi ' ~ p.customer_name ~ ',\n\nYour ' ~ order_phrase ~ ' are weighed and ready! Pick yours here: ' ~ pick_url)|urlencode }}">Email Pick Link</a>
             {% endif %}
             <form method="post" action="/batches/{{ b.id }}/preorders/{{ p.id }}/cancel" style="display:inline">
               <button class="link" style="color:var(--muted)">Cancel</button>
@@ -230,7 +234,7 @@
 
 <div class="card table-card" style="margin-bottom:18px">
   <div style="padding:14px 16px 8px">
-    <h2 style="margin:0">Waitlist ({{ waitlist_qty }} birds · {{ waitlist|length }} waiting)</h2>
+    <h2 style="margin:0">Waitlist ({{ waitlist_qty }} {{ ('share' if waitlist_qty == 1 else 'shares') if is_share_mode else (u.singular if waitlist_qty == 1 else u.plural) }} · {{ waitlist|length }} waiting)</h2>
     <small class="muted">When spots open up, click Promote to move a customer into Confirmed Reservations.</small>
   </div>
   <table>

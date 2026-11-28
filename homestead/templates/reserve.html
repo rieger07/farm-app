@@ -1,17 +1,18 @@
 {% extends "base.html" %}
+{% set u = species_terms %}
 {% block title %}Reserve · {{ batch_name }}{% endblock %}
 {% block body %}
 <div style="max-width:680px;margin:0 auto;padding:24px 16px 48px">
   <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--line)">
     <div class="brand" style="display:flex;align-items:center;gap:10px">
       <img src="/static/logo.png" alt="{{ farm_name }}" style="width:32px;height:32px;border-radius:8px">
-      <div>{{ batch_name }}<small>{{ farm_name }} · {{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
+      <div>{{ batch_name }}<small>{{ farm_name }} · {{ species|species_name }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
     </div>
     {% if preorder_enabled %}
       {% if is_waitlist_mode %}
         <span class="pill amber">Waitlist Open</span>
       {% elif is_share_mode %}
-        <span class="pill green">{{ '%g'|format(spots_left_equiv) }} animal{{ '' if spots_left_equiv == 1 else 's' }} ({{ '%g'|format(spots_left_equiv * 2) }} halves) left</span>
+        <span class="pill green">{{ '%g'|format(spots_left_equiv) }} {{ u.singular if spots_left_equiv == 1 else u.plural }} ({{ '%g'|format(spots_left_equiv * 2) }} halves) left</span>
       {% else %}
         <span class="pill green">{{ spots_left }} spot{{ '' if spots_left == 1 else 's' }} left</span>
       {% endif %}
@@ -40,7 +41,7 @@
         <div style="font:700 17px Georgia,serif">${{ '%.2f'|format(deposit_per_bird * 0.5) }}/half · ${{ '%.2f'|format(deposit_per_bird) }}/whole</div>
         <small class="muted">Credited toward final balance</small>
         {% else %}
-        <div style="font:700 18px Georgia,serif">{% if deposit_per_bird > 0 %}${{ '%.2f'|format(deposit_per_bird) }}/bird{% else %}None{% endif %}</div>
+        <div style="font:700 18px Georgia,serif">{% if deposit_per_bird > 0 %}${{ '%.2f'|format(deposit_per_bird) }}/{{ u.singular }}{% else %}None{% endif %}</div>
         <small class="muted">{% if deposit_per_bird > 0 %}Credited at pickup{% else %}Pay at pickup{% endif %}</small>
         {% endif %}
       </div>
@@ -68,9 +69,9 @@
   <div class="card" id="reserve-form-card">
     {% if is_waitlist_mode %}
       <h2 style="margin-bottom:4px">All spots are currently spoken for — Join the Waitlist</h2>
-      <p class="sub" style="margin-bottom:12px">Enter your details below and we'll notify you right away if a spot opens up or we have extra birds at harvest.</p>
+      <p class="sub" style="margin-bottom:12px">Enter your details below and we'll notify you right away if a spot opens up or we have extra {{ 'shares' if is_share_mode else u.plural }} at harvest.</p>
     {% else %}
-      <h2 style="margin-bottom:4px">Reserve your {{ species|title }}</h2>
+      <h2 style="margin-bottom:4px">Reserve your {{ species|species_name }}</h2>
       <p class="sub" style="margin-bottom:12px">Enter your name, phone or email, and how many you'd like to hold.</p>
     {% endif %}
     <form class="fgrid" onsubmit="submitReserve(event)">
@@ -82,8 +83,8 @@
       {% if is_share_mode %}
       <label>Share Size
         <select id="r-share-size" onchange="updateDepPreview()">
-          <option value="half">Half Share (½ animal)</option>
-          <option value="whole">Whole Share (1 animal)</option>
+          <option value="half">Half Share (½ {{ u.singular }})</option>
+          <option value="whole">Whole Share (1 {{ u.singular }})</option>
         </select>
       </label>
       {% endif %}
@@ -183,7 +184,7 @@
         document.getElementById('rc-title').textContent = '✓ Spot Reserved!';
         document.getElementById('rc-sub').textContent = IS_SHARE_MODE
           ? `Thanks, ${data.customer_name}! You reserved ${qtyLabel}. We'll reach out after drop-off with final hanging weights and pickup release info.`
-          : `Thanks, ${data.customer_name}! You reserved ${qtyLabel}. We'll send you the live bird-picking link once harvest weighing is complete.`;
+          : `Thanks, ${data.customer_name}! You reserved ${qtyLabel}. We'll send you the live picking link once harvest weighing is complete.`;
 
         if (data.deposit_total > 0) {
           const box = document.getElementById('rc-deposit-box');

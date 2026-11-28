@@ -1,16 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Harvest Tally · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
+{% set u = tally.species_terms %}
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
     <h1>{{ b.name }} · {{ 'Carcasses & Shares' if tally.is_share_mode else 'Harvest Tally' }}</h1>
     <p class="sub">
-      {{ b.species|title }} ·
+      {{ b.species|species_name }} ·
       {% if tally.is_share_mode %}
         Tap any share (Half A / Half B / Whole) to assign a buyer, enter butcher hanging weights, or release for pickup
       {% else %}
-        Tap any weighed bird to assign a customer or update pickup
+        Tap any weighed {{ u.singular }} to assign a customer or update pickup
       {% endif %}
     </p>
   </div>
@@ -26,7 +27,7 @@
   {% set sp_low = (b.species or '')|lower %}
   {% if 'pig' in sp_low or 'hog' in sp_low or 'beef' in sp_low or 'cattle' in sp_low or 'cow' in sp_low or 'sheep' in sp_low or 'lamb' in sp_low or 'goat' in sp_low %}
   <div class="notice mb-md flex-between" style="flex-wrap:wrap;gap:8px">
-    <span>Raising <b>{{ b.species|title }}</b> in halves &amp; wholes priced by butcher hanging weight?</span>
+    <span>Raising <b>{{ u.display_plural }}</b> in halves &amp; wholes priced by butcher hanging weight?</span>
     <button type="button" class="btn sm primary" onclick="switchShareMode('shares', true)">Switch to ½ &amp; Whole Share Mode →</button>
   </div>
   {% endif %}
@@ -79,7 +80,7 @@
   </div>
   <form id="carcass-form" class="fgrid" onsubmit="submitCarcass(event)">
     <label>Carcass / Animal Label
-      <input id="c-label" placeholder="e.g. Pig #{{ tally.harvested_head + 1 }} (Spot)">
+      <input id="c-label" placeholder="e.g. {{ u.singular_title }} #{{ tally.harvested_head + 1 }} (Spot)">
     </label>
     <label>Hanging weight (lb, 0 if pending)
       <input id="c-hanging" type="number" step="0.1" min="0" inputmode="decimal" placeholder="0 (pending butcher scale)">
@@ -96,7 +97,7 @@
     <label>Farm processing fee ($)
       <input id="c-proc" type="number" step="0.01" min="0" value="0">
       {% if tally.customer_pays_butcher %}
-      <small class="muted">Customer pays butcher directly — leave $0 unless farm paid (e.g. freezer hog)</small>
+      <small class="muted">Customer pays butcher directly — leave $0 unless farm paid (e.g. freezer {{ u.singular }})</small>
       {% endif %}
     </label>
     <label>Drop-off / harvest date
@@ -119,7 +120,7 @@
 <!-- Fast bird-by-bird scale entry -->
 <div class="card">
   <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
-    <h2 style="margin:0">Log next bird</h2>
+    <h2 style="margin:0">Log next {{ u.singular }}</h2>
     <div class="row" style="gap:6px">
       <button type="button" class="btn sm primary" id="mode-dec" onclick="setWeightMode('dec')">Decimal lb</button>
       <button type="button" class="btn sm" id="mode-lboz" onclick="setWeightMode('lboz')">lb + oz</button>
@@ -137,14 +138,14 @@
     <label id="oz-wrap" hidden>Ounces (oz)
       <input id="w-oz" type="number" step="0.1" min="0" max="15.9" inputmode="decimal" placeholder="0–15" style="font:600 22px/1.2 Georgia,serif;padding:12px">
     </label>
-    <label>Notes (optional)<input id="w-notes" placeholder="Tom, hen, freezer..."></label>
+    <label>Notes (optional)<input id="w-notes" placeholder="{{ u.notes_placeholder }}"></label>
     <label>Date<input id="w-date" type="date" value="{{ today_iso }}" required></label>
     <label class="full" style="flex-direction:row;align-items:center;gap:8px;font-size:13px">
       <input type="checkbox" id="w-nfs"> Not for sale (automatically added to Home Freezer meat; excluded from Est. value &amp; public picking)
     </label>
     <div class="full row" style="justify-content:space-between;align-items:center;margin-top:4px">
-      <button type="button" class="btn sm" id="undo-btn" onclick="undoLast()" {{ 'disabled' if not tally.entries }} style="color:var(--redink)">↩ Undo last bird</button>
-      <button type="submit" class="btn primary" id="add-bird-btn" style="padding:11px 22px;font-size:15px">+ Add bird</button>
+      <button type="button" class="btn sm" id="undo-btn" onclick="undoLast()" {{ 'disabled' if not tally.entries }} style="color:var(--redink)">↩ Undo last {{ u.singular }}</button>
+      <button type="submit" class="btn primary" id="add-bird-btn" style="padding:11px 22px;font-size:15px">+ Add {{ u.singular }}</button>
     </div>
   </form>
   <small id="t-err" style="color:var(--redink);margin-top:8px" hidden></small>
@@ -156,7 +157,7 @@
   <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="margin:0">Public Customer Picking</h2>
-      <small>Share a live link so customers can claim available {{ 'shares' if tally.is_share_mode else 'for-sale birds' }} in real time (no login required, buyer names stay private).</small>
+      <small>Share a live link so customers can claim available {{ 'shares' if tally.is_share_mode else ('for-sale ' ~ u.plural) }} in real time (no login required, buyer names stay private).</small>
     </div>
     <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
       <input type="checkbox" id="pk-enabled" {{ 'checked' if tally.picking_enabled }} onchange="savePickingSettings()"> Enable public link
@@ -170,7 +171,7 @@
     </div>
     <div class="row" style="gap:16px;flex-wrap:wrap">
       <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-        <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 {{ 'whole-animal eq.' if tally.is_share_mode else 'bird' }} per customer
+        <input type="checkbox" id="pk-limit1" {{ 'checked' if tally.max_birds_per_customer == 1 }} onchange="savePickingSettings()"> Limit to 1 {{ 'whole-animal eq.' if tally.is_share_mode else u.singular }} per customer
       </label>
       <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
         <input type="checkbox" id="pk-po-only" {{ 'checked' if tally.picking_preorder_only }} onchange="savePickingSettings()"> Pre-order customers only (early access &amp; reserved qty limit)
@@ -201,7 +202,7 @@
 <!-- Live bird list with filter pills -->
 <div class="card table-card">
   <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-    <b>Weighed birds</b>
+    <b>Weighed {{ u.plural }}</b>
     <div class="row" style="gap:6px;flex-wrap:wrap" id="filter-pills">
       <button type="button" class="btn sm primary" data-flt="all" onclick="setFilter('all')">All</button>
       <button type="button" class="btn sm" data-flt="available" onclick="setFilter('available')">Available</button>
@@ -219,7 +220,7 @@
 
 <!-- Tap-to-assign bird drawer/modal -->
 <dialog id="assignm">
-  <h2 id="am-title" style="margin-bottom:4px">Assign bird</h2>
+  <h2 id="am-title" style="margin-bottom:4px">Assign {{ u.singular }}</h2>
   <small id="am-sub" style="margin-bottom:12px"></small>
   <form id="assign-form" class="fgrid" onsubmit="saveAssignment(event)">
     <input type="hidden" id="am-id">
@@ -285,7 +286,7 @@
     </div>
     <label class="full">Notes<input id="am-notes" placeholder="Optional notes..."></label>
     <div class="row full" style="justify-content:space-between;margin-top:6px">
-      <button type="button" class="btn danger sm" onclick="deleteFromModal()">Delete bird</button>
+      <button type="button" class="btn danger sm" onclick="deleteFromModal()">Delete {{ u.singular }}</button>
       <div class="row">
         <button type="button" class="btn" onclick="document.getElementById('assignm').close()">Cancel</button>
         <button type="submit" class="btn primary">Save</button>
@@ -403,6 +404,7 @@
 <script>
 let TALLY = JSON.parse(document.getElementById('tally-init').textContent);
 let CUSTOMERS = JSON.parse(document.getElementById('custs-init').textContent);
+const UNIT = TALLY.species_terms || { singular: 'animal', plural: 'animals', singular_title: 'Animal', plural_title: 'Animals' };
 let MODE = 'dec';
 let FILTER = 'all';
 let ACTIVE_BIRD = null;
@@ -475,7 +477,7 @@ function renderTally(t) {
   tb.innerHTML = '';
   const visible = t.entries.filter(matchesFilter);
   if (!visible.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="empty">No birds match this filter.</td></tr>';
+    tb.innerHTML = `<tr><td colspan="5" class="empty">No ${UNIT.plural} match this filter.</td></tr>`;
     return;
   }
   visible.forEach(e => {
@@ -618,7 +620,7 @@ function populateCustSelectEl(sel, selectedId) {
 function buildPickupText(bird, cust, bal) {
   const name = cust ? cust.name : 'there';
   const total = Number(bird.dressed_lbs * TALLY.sale_price_per_lb).toFixed(2);
-  let msg = `Hi ${name}! Your ${TALLY.batch_name} bird (#${bird.num}) weighed ${Number(bird.dressed_lbs).toFixed(2)} lb (${bird.lb_oz}) — total $${total}.`;
+  let msg = `Hi ${name}! Your ${TALLY.batch_name} (${UNIT.singular_title} #${bird.num}) weighed ${Number(bird.dressed_lbs).toFixed(2)} lb (${bird.lb_oz}) — total $${total}.`;
   if (bal > 0 && bal < parseFloat(total)) msg += ` Balance due after deposit: $${bal.toFixed(2)}.`;
   msg += ' Let us know when you would like to pick up!';
   return msg;
@@ -664,7 +666,7 @@ function syncAssignUI() {
 function openAssignModal(bird) {
   ACTIVE_BIRD = bird;
   document.getElementById('am-id').value = bird.id;
-  document.getElementById('am-title').textContent = `Bird #${bird.num} · ${Number(bird.dressed_lbs).toFixed(2)} lb`;
+  document.getElementById('am-title').textContent = `${UNIT.singular_title} #${bird.num} · ${Number(bird.dressed_lbs).toFixed(2)} lb`;
   const calc = (bird.dressed_lbs * TALLY.sale_price_per_lb).toFixed(2);
   document.getElementById('am-sub').textContent = `${bird.lb_oz} · Calculated $${calc} @ $${Number(TALLY.sale_price_per_lb).toFixed(2)}/lb`;
   document.getElementById('am-nfs').checked = !bird.for_sale;
@@ -911,7 +913,7 @@ async function saveShareAssignment(ev) {
 }
 
 async function deleteFromModal() {
-  if (!ACTIVE_BIRD || !confirm('Delete this bird?')) return;
+  if (!ACTIVE_BIRD || !confirm(`Delete this ${UNIT.singular}?`)) return;
   await removeBird(ACTIVE_BIRD.id);
   document.getElementById('assignm').close();
 }
@@ -1057,7 +1059,7 @@ async function submitBird(ev) {
     document.getElementById('w-nfs').checked = false;
     (MODE === 'dec' ? document.getElementById('w-dec') : document.getElementById('w-lb')).focus();
   } catch (e) {
-    errEl.textContent = e.message || 'Error saving bird.';
+    errEl.textContent = e.message || `Error saving ${UNIT.singular}.`;
     errEl.hidden = false;
   } finally {
     btn.disabled = false;

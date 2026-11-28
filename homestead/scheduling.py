@@ -7,6 +7,8 @@ from homestead.calendar_export import create_gcal_link
 from homestead.config import (
     DEFAULT_BAG_WEIGHT,
     DEFAULT_BARREL_CAPACITY,
+    format_species_display,
+    format_species_preset_label,
     get_lifecycle_labels,
 )
 from homestead.database import (
@@ -1031,7 +1033,8 @@ def compute_upcoming_milestones(
         b = s["batch"]
         bid = int(b["id"])
         b_name = b["name"]
-        sp_title = b["species"].title()
+        sp_title = format_species_display(b["species"])
+        sp_acq = format_species_preset_label(b["species"])
 
         # 1. Arrival / Breeding Window
         init_badge, init_days = _format_relative_days_badge(
@@ -1054,12 +1057,12 @@ def compute_upcoming_milestones(
                 "date_display": init_date_str,
                 "badge": init_badge,
                 "days_away": init_days,
-                "details": f"{s['initial_quantity']} × {sp_title} (${s['acquisition_cost']:,.2f})",
+                "details": f"{s['initial_quantity']} × {sp_acq} (${s['acquisition_cost']:,.2f})",
                 "gcal_url": create_gcal_link(
                     f"{b_name} - {s['initial_label']} Window",
                     s["start_date"],
                     s["end_date"],
-                    f"{s['initial_label']} window for {b_name} ({s['initial_quantity']}x {sp_title}).",
+                    f"{s['initial_label']} window for {b_name} ({s['initial_quantity']}x {sp_acq}).",
                 ),
             }
         )

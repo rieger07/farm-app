@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from homestead import ntfy
+from homestead.config import get_species_terminology
 from homestead.db.batches import (
     add_batch_harvest,
     delete_batch_harvest,
@@ -451,6 +452,7 @@ def public_picking_page(request: Request, slug: str):
             "request": request,
             "batch_name": batch["name"],
             "species": batch["species"],
+            "species_terms": get_species_terminology(batch.get("species", ""), batch.get("lifecycle_type")),
             "sale_unit": sale_unit,
             "is_share_mode": is_share_mode,
             "customer_pays_butcher": bool(batch.get("customer_pays_butcher")),
@@ -486,7 +488,7 @@ async def api_public_pick_identify(slug: str, request: Request):
     if po_only and not po_summary["has_reservation"]:
         raise HTTPException(
             status_code=403,
-            detail="Early bird picking is currently open to pre-order customers only. Please use the phone number or email from your reservation.",
+            detail="Early picking is currently open to pre-order customers only. Please use the phone number or email from your reservation.",
         )
 
     is_share_mode = normalize_sale_unit(batch.get("sale_unit")) == "shares"
@@ -554,7 +556,7 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
     if po_only and not po_summary["has_reservation"]:
         raise HTTPException(
             status_code=403,
-            detail="Early bird picking is currently open to pre-order customers only.",
+            detail="Early picking is currently open to pre-order customers only.",
         )
 
     is_share_mode = normalize_sale_unit(batch.get("sale_unit")) == "shares"
@@ -576,8 +578,9 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
             max_birds_per_customer=int(effective_max) if effective_max else None,
             apply_preorder_deposit=True,
         )
+    terms = get_species_terminology(batch.get("species", ""), batch.get("lifecycle_type"))
     if not ok:
-        unit_word = "share" if is_share_mode else "bird"
+        unit_word = "share" if is_share_mode else str(terms["singular"])
         if reason == "limit_reached":
             raise HTTPException(
                 status_code=409,
@@ -647,8 +650,8 @@ async def api_public_pick_claim(slug: str, bird_id: int, request: Request):
         else:
             ntfy.send_ntfy_async(
                 int(batch["user_id"]),
-                f"Bird claimed - {batch['name']}",
-                f"{buyer_name} claimed Bird #{claimed_info['num']} "
+                f"{terms['singular_title']} claimed - {batch['name']}",
+                f"{buyer_name} claimed {terms['singular_title']} #{claimed_info['num']} "
                 f"({claimed_info['dressed_lbs']:.2f} lb / {claimed_info['lb_oz']} - "
                 f"${claimed_info['est_price']:.2f}){dep_note}",
                 click_url=click_url,

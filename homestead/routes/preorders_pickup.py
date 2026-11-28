@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from homestead import ntfy
+from homestead.config import format_species_display, get_species_terminology
 from homestead.db.batches import list_batch_harvests
 from homestead.db.core import get_bag_weight
 from homestead.db.customers import (
@@ -317,6 +318,7 @@ def public_reserve_page(request: Request, slug: str):
             "slug": slug,
             "batch_name": batch["name"],
             "species": batch["species"],
+            "species_terms": get_species_terminology(batch.get("species", ""), batch.get("lifecycle_type")),
             "sale_unit": sale_unit,
             "is_share_mode": is_share_mode,
             "customer_pays_butcher": bool(batch.get("customer_pays_butcher")),
@@ -376,7 +378,11 @@ async def api_public_reserve(slug: str, request: Request):
     )
     deposit_total = round(dpb * int(po["quantity"]) * frac, 2)
     is_waitlist = po["status"] == "waitlist"
-    item_desc = f"{po['quantity']}x {s_label} {batch['species']}" if s_label else f"{po['quantity']}x {batch['species']}"
+    terms = get_species_terminology(batch.get("species", ""), batch.get("lifecycle_type"))
+    sp_disp = format_species_display(
+        batch["species"], plural=(int(po["quantity"]) != 1 and not s_label)
+    )
+    item_desc = f"{po['quantity']}x {s_label} {sp_disp}" if s_label else f"{po['quantity']}x {sp_disp}"
     click_url = f"{str(request.base_url).rstrip('/')}/batches/{batch['id']}/preorders"
     if is_waitlist:
         ntfy.send_ntfy_async(
@@ -393,7 +399,7 @@ async def api_public_reserve(slug: str, request: Request):
             f"New pre-order - {batch['name']}",
             f"{cust['name']} reserved {item_desc}{dep_txt}",
             click_url=click_url,
-            tags="tada,turkey",
+            tags=f"tada,{terms['ntfy_tag']}",
         )
     pickup_cfg = get_farm_pickup_settings(int(batch["user_id"]))
     return {
@@ -790,7 +796,8 @@ def batch_pickup_settle_submit(
     bird_ids: list[str] = Form(default=[]),
     user: dict = Depends(current_user),
 ):
-    _get_owned_batch(batch_id, user)
+    b = _get_owned_batch(batch_id, user)
+    terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
     collected_val: float | None = None
     if collected_today.strip() != "":
         try:
@@ -811,8 +818,9 @@ def batch_pickup_settle_submit(
         )
     cust = get_customer(user["id"], customer_id)
     cname = cust["name"] if cust else "Customer"
+    unit_word = terms["singular"] if cnt == 1 else terms["plural"]
     return RedirectResponse(
-        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} bird{'s' if cnt != 1 else ''}) paid & picked up ({payment_method})!"),
+        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} {unit_word}) paid & picked up ({payment_method})!"),
         status_code=303,
     )
 
@@ -828,12 +836,13 @@ def batch_pickup_payment_method_submit(
     try:
         if normalize_sale_unit(b.get("sale_unit")) == "shares":
             cnt = update_customer_share_payment_method(user["id"], batch_id, customer_id, payment_method)
-            unit_lbl = "share"
+            unit_lbl = "share" if cnt == 1 else "shares"
         else:
             cnt = update_customer_batch_payment_method(user["id"], batch_id, customer_id, payment_method)
-            unit_lbl = "bird"
+            terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
+            unit_lbl = terms["singular"] if cnt == 1 else terms["plural"]
         lbl = payment_method.strip().capitalize() if payment_method.strip() else "Untagged"
-        msg = f"Updated payment method to {lbl} ({cnt} {unit_lbl}{'s' if cnt != 1 else ''})."
+        msg = f"Updated payment method to {lbl} ({cnt} {unit_lbl})."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(

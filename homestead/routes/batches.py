@@ -9,6 +9,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import RedirectResponse, Response
 
 from homestead.calendar_export import create_gcal_link
+from homestead.config import (
+    format_species_display,
+    format_species_preset_label,
+    get_species_terminology,
+)
 from homestead.db.batches import (
     add_batch_feed_log,
     add_batch_harvest,
@@ -101,13 +106,13 @@ def batch_detail_page(request: Request, batch_id: int, msg: str = "", user: dict
         f"{b['name']} - {s['initial_label']}",
         s["start_date"],
         s["end_date"],
-        f"{s['initial_quantity']} {b['species']}",
+        f"{s['initial_quantity']} {format_species_preset_label(b['species'])}",
     )
     gcal_url = create_gcal_link(
         f"Process {b['name']}",
         s["proc_date"],
         s["proc_date"],
-        f"{s['surviving_quantity']} {b['species']}",
+        f"{s['surviving_quantity']} {format_species_display(b['species'], plural=s['surviving_quantity'] != 1)}",
     )
     tally = _harvest_tally_payload(b, user["id"])
     tally_by_id = {int(e["id"]): e for e in tally["entries"]}
@@ -235,10 +240,11 @@ def batch_harvest_csv(batch_id: int, user: dict = Depends(current_user)):
                 e["num"], e["harvest_date"], e["head_count"],
                 f"{e['dressed_lbs']:.2f}", e["lb_oz"], _safe(e["notes"]),
             ])
+        terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
         writer.writerow([
             "TOTAL", "", tally["harvested_head"],
             f"{tally['total_lbs']:.2f}", _fmt_lb_oz(tally["total_lbs"]),
-            f"Avg {tally['avg_lbs']:.2f} lb/bird",
+            f"Avg {tally['avg_lbs']:.2f} lb/{terms['singular']}",
         ])
     slug = "".join(ch if ch.isalnum() else "-" for ch in b["name"].lower()).strip("-") or f"batch-{batch_id}"
     return Response(

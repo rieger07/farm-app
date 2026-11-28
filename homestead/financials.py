@@ -1,6 +1,10 @@
 """Financials, shopping schedule, ROI summary, and harvest/freezer reconciliation tables."""
 
-from homestead.config import DEFAULT_BAG_WEIGHT
+from homestead.config import (
+    DEFAULT_BAG_WEIGHT,
+    format_species_display,
+    format_species_preset_label,
+)
 
 
 def compute_purchasing_schedule(
@@ -25,7 +29,7 @@ def compute_purchasing_schedule(
                     "Month": s["start_date"].isoformat()[:7],
                     "Batch": b_label,
                     "Category": "🐣 Animal / Egg Acquisition",
-                    "Details": f"{s['initial_quantity']} × {b['species'].title()} @ ${s['unit_cost']:,.2f}",
+                    "Details": f"{s['initial_quantity']} × {format_species_preset_label(b['species'])} @ ${s['unit_cost']:,.2f}",
                     "Feed Bags": 0,
                     "Feed (lbs)": 0.0,
                     "Cost ($)": round(s["acquisition_cost"], 2),
@@ -122,7 +126,7 @@ def compute_roi_summary_table(schedules: list[dict]) -> list[dict]:
         rows.append(
             {
                 "Batch": f"{b['name']} (#{b['id']})",
-                "Species": b["species"].title(),
+                "Species": format_species_display(b["species"]),
                 "Head (Surviving / Initial)": f"{s['surviving_quantity']} / {s['initial_quantity']}",
                 "Starter Feed": f"{s['starter_feed']:,.1f} lbs ({s['starter_bags']} bags)",
                 "Grower Feed": f"{s['grower_feed']:,.1f} lbs ({s['grower_bags']} bags)",
