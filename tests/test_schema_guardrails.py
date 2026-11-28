@@ -254,6 +254,7 @@ class SchemaGuardrailsTest(unittest.TestCase):
             self.assertTrue(
                 {"fiber_shearings", "fiber_mill_lots", "fiber_mill_lot_inputs", "fiber_lot_outputs"}.issubset(tables)
             )
+            self.assertTrue({"farm_notes", "farm_note_comments"}.issubset(tables))
 
             ha_cols = {r["name"] for r in c2.execute("PRAGMA table_info(herd_animals)").fetchall()}
             self.assertTrue({"fiber_grade", "fleece_factors"}.issubset(ha_cols))

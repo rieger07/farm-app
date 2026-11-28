@@ -93,6 +93,34 @@ function selectRadarEggSpecies(btn) {
 </script>
 {% endif %}
 
+{% if pinned_notes %}
+<div class="card">
+  <div class="flex-between mb-sm">
+    <h2 class="mb-0">Pinned Team Notes</h2>
+    <a href="/notes" class="link" style="padding:0;font-weight:600">Team Notes →</a>
+  </div>
+  <div class="ms-list">
+    {% for pn in pinned_notes %}
+    <div class="ms-row">
+      <div style="min-width:0">
+        <div class="row" style="gap:6px">
+          <span class="pill {{ pn.category_pill }}">{{ pn.category_label }}</span>
+          <a href="/notes#note-{{ pn.id }}" style="font-weight:600;text-decoration:none">{{ pn.title }}</a>
+          {% if pn.check_total > 0 %}
+          <span class="pill {{ 'green' if pn.check_done == pn.check_total else 'gray' }}">{{ pn.check_done }}/{{ pn.check_total }} done</span>
+          {% endif %}
+          {% if pn.batch_name %}<span class="pill gray">{{ pn.batch_name }}</span>{% endif %}
+          {% if pn.herd_name %}<span class="pill gray">{{ pn.herd_name }}</span>{% endif %}
+        </div>
+        {% if pn.preview %}<small class="muted">{{ pn.preview }}</small>{% endif %}
+      </div>
+      <small class="muted" style="white-space:nowrap">{{ pn.updated_by_name }}</small>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {% if timeline %}
 <div class="card">
   <div class="row" style="justify-content:space-between;margin-bottom:6px">

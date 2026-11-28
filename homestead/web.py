@@ -124,17 +124,21 @@ def _render(request: Request, tpl: str, user: dict, active: str, **kw) -> HTMLRe
     if not can_access_homestead_page(role, active):
         raise HTTPException(status_code=403, detail="Your role does not have access to this page.")
     can_flocks = any(can_access_homestead_page(role, p) for p in ("eggs", "herds"))
-    can_farm = any(can_access_homestead_page(role, p) for p in ("feed", "financials", "settings"))
-    visible_nav = [
-        item for item in NAV
-        if (
-            can_flocks if item[0] == "flocks"
-            else (can_farm if item[0] == "farm" else can_access_homestead_page(role, item[0]))
-        )
-    ]
+    can_farm = any(can_access_homestead_page(role, p) for p in ("notes", "feed", "financials", "settings"))
+    farm_path = "/financials" if can_access_homestead_page(role, "financials") else "/notes"
+    visible_nav = []
+    for key, label, path in NAV:
+        if key == "flocks":
+            if can_flocks:
+                visible_nav.append((key, label, path))
+        elif key == "farm":
+            if can_farm:
+                visible_nav.append((key, label, farm_path))
+        elif can_access_homestead_page(role, key):
+            visible_nav.append((key, label, path))
     if active in ("eggs", "herds"):
         nav_active = "flocks"
-    elif active in ("feed", "financials", "settings"):
+    elif active in ("notes", "feed", "financials", "settings"):
         nav_active = "farm"
     else:
         nav_active = active

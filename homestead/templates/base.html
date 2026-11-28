@@ -53,10 +53,13 @@
         <a href="/herds" class="subnav-pill {{ 'on' if sub_active == 'herds' }}">Perennial Herds</a>
       </div>
       {% endif %}
-      {% if sub_active in ('feed', 'financials', 'settings') %}
+      {% if sub_active in ('notes', 'feed', 'financials', 'settings') %}
       <div class="subnav-bar" role="navigation" aria-label="Farm management sections">
+        {% if (user.role or 'owner') in ('owner', 'manager') %}
         <a href="/feed" class="subnav-pill {{ 'on' if sub_active == 'feed' }}">Feed Schedule</a>
         <a href="/financials" class="subnav-pill {{ 'on' if sub_active == 'financials' }}">Financials &amp; Taxes</a>
+        {% endif %}
+        <a href="/notes" class="subnav-pill {{ 'on' if sub_active == 'notes' }}">Team Notes</a>
         {% if (user.role or 'owner') == 'owner' %}
         <a href="/settings" class="subnav-pill {{ 'on' if sub_active == 'settings' }}">Settings &amp; Team</a>
         {% endif %}

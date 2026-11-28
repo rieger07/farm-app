@@ -14,6 +14,7 @@ from homestead.routes import (
     farm_ops,
     harvest_picking,
     herds,
+    notes,
     preorders_pickup,
     radar,
     settings,
@@ -47,6 +48,7 @@ for _router in (
     preorders_pickup.router,
     eggs.router,
     herds.router,
+    notes.router,
     farm_ops.router,
     settings.router,
 ):
