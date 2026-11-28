@@ -3,6 +3,11 @@
 from datetime import datetime
 import secrets
 
+from homestead.config import (
+    format_quantity_fraction,
+    format_species_display,
+    get_species_terminology,
+)
 from homestead.db.core import (
     get_db_connection,
     get_text_setting,
@@ -598,10 +603,13 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
     total_calc = 0.0
     total_actual = 0.0
     repeat_customers = 0
+    assigned_plurals: set[str] = set()
+    all_poultry = True
+    weight_bases: set[str] = set()
 
     for c in customers:
         birds = by_cust.get(int(c["id"]), [])
-        species_counts: dict[str, int] = {}
+        species_counts: dict[str, int | float] = {}
         batch_ids: set[int] = set()
         c_lbs = 0.0
         c_head = 0
@@ -611,8 +619,18 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
         for b in birds:
             hc = max(1, int(b.get("head_count") or 1))
             dl = float(b.get("dressed_lbs") or 0.0)
-            sp = str(b.get("species") or "Livestock").title()
-            species_counts[sp] = species_counts.get(sp, 0) + hc
+            raw_sp = str(b.get("species") or "Livestock")
+            sp_base = format_species_display(raw_sp)
+            qty_val: int | float = (
+                round(float(b.get("share_fraction") or 1.0), 2)
+                if b.get("is_share")
+                else hc
+            )
+            species_counts[sp_base] = round(species_counts.get(sp_base, 0) + qty_val, 2)
+            terms = get_species_terminology(raw_sp)
+            assigned_plurals.add(str(terms["plural_title"]))
+            all_poultry = all_poultry and bool(terms["is_poultry"])
+            weight_bases.add(str(b.get("weight_basis") or "dressed"))
             batch_ids.add(int(b["batch_id"]))
             c_head += hc
             c_lbs += dl
@@ -628,11 +646,22 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
                 dep = float(b.get("deposit_paid") or 0.0)
                 c_bal += max(0.0, act_p - dep)
 
+        clean_counts: dict[str, int | float] = {}
+        species_pills: list[str] = []
+        for sp_base, cnt in species_counts.items():
+            clean_cnt: int | float = int(round(cnt)) if abs(cnt - round(cnt)) < 1e-6 else cnt
+            clean_counts[sp_base] = clean_cnt
+            qty_str = format_quantity_fraction(clean_cnt)
+            use_plural = float(clean_cnt) > 1.0 + 1e-6
+            lbl = format_species_display(sp_base, plural=use_plural)
+            species_pills.append(f"{qty_str} × {lbl}")
+
         c["bird_count"] = c_head
         c["total_lbs"] = round(c_lbs, 2)
         c["avg_lbs"] = round(c_lbs / c_head, 2) if c_head else 0.0
         c["batch_count"] = len(batch_ids)
-        c["species_counts"] = species_counts
+        c["species_counts"] = clean_counts
+        c["species_pills"] = species_pills
         c["calculated_total"] = round(c_calc, 2)
         c["actual_total"] = round(c_actual, 2)
         c["tip_diff"] = round(c_actual - c_calc, 2)
@@ -645,10 +674,28 @@ def customer_insights_summary(user_id: int, search: str = "") -> dict:
         if len(batch_ids) >= 2:
             repeat_customers += 1
 
+    if not assigned_plurals:
+        assigned_label = "Livestock assigned"
+    elif len(assigned_plurals) == 1:
+        assigned_label = f"{next(iter(assigned_plurals))} assigned"
+    elif all_poultry:
+        assigned_label = "Birds assigned"
+    else:
+        assigned_label = "Livestock assigned"
+
+    if weight_bases == {"hanging"}:
+        weight_basis_label = "lb hanging"
+    elif len(weight_bases) > 1:
+        weight_basis_label = "lb total"
+    else:
+        weight_basis_label = "lb dressed"
+
     return {
         "customers": customers,
         "total_customers": len(customers),
         "total_birds": total_birds,
+        "assigned_label": assigned_label,
+        "weight_basis_label": weight_basis_label,
         "total_lbs": round(total_lbs, 2),
         "total_calculated": round(total_calc, 2),
         "total_actual": round(total_actual, 2),

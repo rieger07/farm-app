@@ -293,7 +293,8 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Thanksgiving Turkeys", c_detail)
         self.assertIn("20.00 lb", c_detail)
         self.assertIn("+$15.00", c_detail)
-        self.assertIn("1 × Turkey Chicks", c_detail)
+        self.assertIn("1 × Turkey", c_detail)
+        self.assertNotIn("Turkey Chicks", c_detail)
 
         # Configure ntfy push notifications in Settings
         r_ntfy = self.c.post("/settings/ntfy", data={
@@ -334,7 +335,7 @@ class FarmWebTest(unittest.TestCase):
         ident_other = anon.post(f"/api/pick/{slug}/identify", json={"name": "Late Buyer", "contact": "late@example.com"}).json()
         r_dup = anon.post(f"/api/pick/{slug}/claim/{bird2_id}", json={"customer_id": ident_other["customer_id"]})
         self.assertEqual(r_dup.status_code, 409)
-        self.assertIn("Someone just grabbed that bird", r_dup.json()["detail"])
+        self.assertIn("Someone just grabbed that turkey", r_dup.json()["detail"])
 
         # Limit check: Sarah trying to claim a 2nd bird (even if another available bird is added) gets 409
         b4 = self.c.post(f"/api/batches/{bid}/harvest", json={"dressed_lbs": 17.5, "for_sale": True}).json()
@@ -419,7 +420,7 @@ class FarmWebTest(unittest.TestCase):
         anon = TestClient(app)
         res_html = anon.get(f"/reserve/{slug}").text
         self.assertIn("2 spots left", res_html)
-        self.assertIn("$25.00/bird", res_html)
+        self.assertIn("$25.00/turkey", res_html)
 
         # Customer A reserves 2 birds -> reserved, $50 deposit, fires ntfy
         with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
@@ -525,7 +526,7 @@ class FarmWebTest(unittest.TestCase):
         )
         self.assertEqual(r_part1.status_code, 303)
         pu_mid = self.c.get(f"/batches/{bid}/pickup").text
-        self.assertIn("Already picked up: Bird #1", pu_mid)
+        self.assertIn("Already picked up: Turkey #1", pu_mid)
         self.assertIn("$110.00", pu_mid)  # Bird #2 ($135 - $25 dep = $110) still waiting!
         sched_mid = compute_batch_schedule(list_batches()[0])
         self.assertEqual(sched_mid["harvest_picked_up_head"], 1)
@@ -2681,7 +2682,7 @@ class FarmWebTest(unittest.TestCase):
         res_html = self.c.get(f"/reserve/{slug}")
         self.assertEqual(res_html.status_code, 200)
         self.assertIn("hanging weight", res_html.text)
-        self.assertIn("3 animals (6 halves) left", res_html.text)
+        self.assertIn("3 pigs (6 halves) left", res_html.text)
 
         # 3. Public reservations fill 3.0 cap (Half + Half + Whole + Whole) and overflow to waitlist
         c_pub = TestClient(app)
@@ -3297,6 +3298,271 @@ class FarmWebTest(unittest.TestCase):
             ).status_code,
             404,
         )
+
+    def test_species_aware_terminology_and_clean_species_display(self):
+        from unittest.mock import patch
+        from homestead.config import (
+            format_quantity_fraction,
+            format_species_display,
+            format_species_preset_label,
+            get_species_terminology,
+        )
+        from homestead.database import list_batches
+
+        # 1. Pure species display, preset label, quantity fraction & terminology helpers
+        self.assertEqual(format_quantity_fraction(4), "4")
+        self.assertEqual(format_quantity_fraction(0.5), "½")
+        self.assertEqual(format_quantity_fraction(1.5), "1½")
+        self.assertEqual(format_quantity_fraction(0.25), "¼")
+        self.assertEqual(format_quantity_fraction(0.75), "¾")
+
+        self.assertEqual(format_species_display("chicken eggs"), "Chicken")
+        self.assertEqual(format_species_display("chicken eggs", plural=True), "Chickens")
+        self.assertEqual(format_species_display("chicken chicks"), "Chicken")
+        self.assertEqual(format_species_display("turkey chicks"), "Turkey")
+        self.assertEqual(format_species_display("turkey chicks", plural=True), "Turkeys")
+        self.assertEqual(format_species_display("kunekune pigs"), "Kunekune Pig")
+        self.assertEqual(format_species_display("kunekune pigs", plural=True), "Kunekune Pigs")
+        self.assertEqual(format_species_display("cornish cross eggs"), "Cornish Cross")
+        self.assertEqual(format_species_display("cornish cross eggs", plural=True), "Cornish Cross")
+        self.assertEqual(format_species_display("pekin ducklings"), "Pekin Duck")
+        self.assertEqual(format_species_display("pekin ducklings", plural=True), "Pekin Ducks")
+        self.assertEqual(format_species_display("toulouse goslings"), "Toulouse Goose")
+        self.assertEqual(format_species_display("toulouse goslings", plural=True), "Toulouse Geese")
+        self.assertEqual(format_species_display("berkshire piglets"), "Berkshire Pig")
+        self.assertEqual(format_species_display("katahdin lambs"), "Katahdin Lamb")
+        self.assertEqual(format_species_display("boer goats"), "Boer Goat")
+        self.assertEqual(format_species_display("quail chicks"), "Quail")
+        self.assertEqual(format_species_display("angus beef"), "Angus Beef")
+        self.assertEqual(format_species_display("nz rabbits"), "Nz Rabbit")
+
+        self.assertEqual(format_species_preset_label("chicken eggs"), "Chicken (Hatching Eggs)")
+        self.assertEqual(format_species_preset_label("chicken chicks"), "Chicken (Day-Old Chicks)")
+        self.assertEqual(format_species_preset_label("turkey chicks"), "Turkey (Poults / Chicks)")
+        self.assertEqual(format_species_preset_label("cornish cross eggs"), "Cornish Cross (Hatching Eggs)")
+
+        self.assertEqual(get_species_terminology("kunekune pigs")["singular"], "pig")
+        self.assertEqual(get_species_terminology("kunekune pigs")["plural"], "pigs")
+        self.assertFalse(get_species_terminology("kunekune pigs")["is_poultry"])
+        self.assertEqual(get_species_terminology("turkey chicks")["singular"], "turkey")
+        self.assertEqual(get_species_terminology("pekin ducklings")["singular"], "duck")
+        self.assertEqual(get_species_terminology("toulouse goslings")["plural"], "geese")
+        self.assertEqual(get_species_terminology("cornish cross eggs")["singular"], "chicken")
+        self.assertEqual(get_species_terminology("quail chicks")["plural"], "quail")
+        self.assertEqual(get_species_terminology("angus beef")["singular"], "animal")
+        self.assertEqual(get_species_terminology("katahdin lambs")["singular"], "lamb")
+        self.assertEqual(get_species_terminology("boer goats")["singular"], "goat")
+        self.assertEqual(get_species_terminology("nz rabbits")["singular"], "rabbit")
+        # Word-boundary check: "pigeon" must NOT match "pig"
+        self.assertEqual(get_species_terminology("pigeon")["singular"], "animal")
+
+        # 2. Create whole-animal Kunekune Pigs batch + Share-mode Pigs batch + Chicken Eggs + Chicken Chicks + Turkey Chicks
+        self.c.post("/register", data={"display_name": "Steve", "username": "steve", "password": "secret"})
+        batches_cfg = [
+            ("Kune Breeders Litter", "kunekune pigs", 5, "whole", "0"),
+            ("Pork Shares Fall", "kunekune pigs", 2, "shares", "1"),
+            ("Cornish Run #1", "chicken eggs", 10, "whole", "0"),
+            ("Cornish Run #2", "chicken chicks", 10, "whole", "0"),
+            ("Fall Turkeys", "turkey chicks", 6, "whole", "0"),
+        ]
+        for bname, sp, qty, su, cpb in batches_cfg:
+            self.assertEqual(
+                self.c.post(
+                    "/batches/save",
+                    data={
+                        "name": bname,
+                        "species": sp,
+                        "start_date": "2026-06-01",
+                        "initial_quantity": str(qty),
+                        "sale_price_per_lb": "8.00",
+                        "sale_unit": su,
+                        "customer_pays_butcher": cpb,
+                        "next_url": "/batches",
+                    },
+                    follow_redirects=False,
+                ).status_code,
+                303,
+            )
+
+        by_name = {b["name"]: b for b in list_batches()}
+        pig_bid = int(by_name["Kune Breeders Litter"]["id"])
+        share_bid = int(by_name["Pork Shares Fall"]["id"])
+        egg_bid = int(by_name["Cornish Run #1"]["id"])
+        chk_bid = int(by_name["Cornish Run #2"]["id"])
+        trk_bid = int(by_name["Fall Turkeys"]["id"])
+
+        # Enable pre-orders & public picking on the whole-animal pig batch
+        self.c.post(
+            f"/batches/{pig_bid}/preorders/settings",
+            data={
+                "preorder_enabled": "1",
+                "sale_unit": "whole",
+                "preorder_cap": "4",
+                "deposit_per_bird": "50.00",
+            },
+            follow_redirects=False,
+        )
+        self.c.post(
+            f"/api/batches/{pig_bid}/picking",
+            json={"picking_enabled": True, "max_birds_per_customer": 2},
+        )
+        # Re-fetch updated pig batch for slug
+        pig_batch = next(b for b in list_batches() if int(b["id"]) == pig_bid)
+        pig_slug = pig_batch["picking_slug"]
+
+        # Harvest Tally on whole-animal pig batch must say pig/pigs, never bird/birds
+        tally_html = self.c.get(f"/batches/{pig_bid}/harvest").text
+        self.assertIn("Kunekune Pig", tally_html)
+        self.assertIn("Tap any weighed pig", tally_html)
+        self.assertIn("Log next pig", tally_html)
+        self.assertIn("+ Add pig", tally_html)
+        self.assertIn("Undo last pig", tally_html)
+        self.assertIn("Weighed pigs", tally_html)
+        self.assertIn("Assign pig", tally_html)
+        self.assertIn("Delete pig", tally_html)
+        self.assertIn("Barrow, gilt, freezer...", tally_html)
+        self.assertNotIn("Weighed birds", tally_html)
+        self.assertNotIn("+ Add bird", tally_html)
+        self.assertNotIn("Undo last bird", tally_html)
+        self.assertNotIn("Tom, hen", tally_html)
+
+        # Log 2 whole pigs
+        p1_res = self.c.post(
+            f"/api/batches/{pig_bid}/harvest",
+            json={"harvest_date": "2026-10-01", "head_count": 1, "dressed_lbs": 110.0, "for_sale": True},
+        ).json()
+        p2_res = self.c.post(
+            f"/api/batches/{pig_bid}/harvest",
+            json={"harvest_date": "2026-10-01", "head_count": 1, "dressed_lbs": 120.0, "for_sale": True},
+        ).json()
+        p1_id = min(e["id"] for e in p2_res["entries"])
+        p2_id = max(e["id"] for e in p2_res["entries"])
+
+        csv_txt = self.c.get(f"/batches/{pig_bid}/harvest.csv").text
+        self.assertIn("lb/pig", csv_txt)
+        self.assertNotIn("lb/bird", csv_txt)
+
+        # Pre-Orders & public /reserve page for whole pig batch
+        po_html = self.c.get(f"/batches/{pig_bid}/preorders").text
+        self.assertIn("Reservation Cap (pigs)", po_html)
+        self.assertIn("Deposit per Whole Pig ($)", po_html)
+        self.assertIn("0 pigs ·", po_html)
+        self.assertNotIn("birds ·", po_html)
+
+        anon = TestClient(app)
+        res_html = anon.get(f"/reserve/{pig_slug}").text
+        self.assertIn("Reserve your Kunekune Pig", res_html)
+        self.assertIn("$50.00/pig", res_html)
+        self.assertNotIn("/bird", res_html)
+
+        # Public /pick/<slug> for whole pigs says Pig / pigs and ntfy uses Pig #1
+        pick_html = anon.get(f"/pick/{pig_slug}").text
+        self.assertIn("Pick Your Pig", pick_html)
+        self.assertIn("Available pigs", pick_html)
+        self.assertIn("Continue to pick a pig", pick_html)
+        self.assertNotIn("Available birds", pick_html)
+
+        amber = self.c.post("/api/customers", json={"name": "Amber Colon", "phone": "555-200-0001"}).json()
+        amber_ident = anon.post(
+            f"/api/pick/{pig_slug}/identify",
+            json={"name": "Amber Colon", "contact": "555-200-0001"},
+        ).json()
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
+            claim_r = anon.post(
+                f"/api/pick/{pig_slug}/claim/{p1_id}",
+                json={"customer_id": amber_ident["customer_id"]},
+            )
+            self.assertEqual(claim_r.status_code, 200)
+            mock_ntfy.assert_called_once()
+            ntfy_args = mock_ntfy.call_args[0]
+            self.assertIn("Pig claimed", ntfy_args[1])
+            self.assertIn("Pig #1", ntfy_args[2])
+
+        # Also assign Pig #2 to amber (settled as picked_up) or settle Pig #1 on Pickup Day
+        pu_html = self.c.get(f"/batches/{pig_bid}/pickup").text
+        self.assertIn("1 pigs waiting", pu_html)
+        self.assertIn("Pig #1", pu_html)
+        self.assertNotIn("Bird #1", pu_html)
+        settle_resp = self.c.post(
+            f"/batches/{pig_bid}/pickup/{amber['id']}/settle",
+            data={"collected_today": "880.00", "payment_method": "cash", "bird_ids": [str(p1_id)]},
+            follow_redirects=True,
+        )
+        self.assertEqual(settle_resp.status_code, 200)
+        self.assertIn("1 pig) paid &amp; picked up", settle_resp.text)
+        self.assertIn("<th>Pigs</th>", settle_resp.text)
+        self.assertIn("Pig #1", settle_resp.text)
+
+        # 3. Assign Alex to 2 chickens from "chicken eggs" + 2 chickens from "chicken chicks",
+        #    Amanda to 1 turkey ("turkey chicks"), and Cara to ½ share of Kunekune Pig ("shares")
+        alex = self.c.post("/api/customers", json={"name": "Alex Buyer", "phone": "555-200-0002"}).json()
+        amanda = self.c.post("/api/customers", json={"name": "Amanda Buyer", "phone": "555-200-0003"}).json()
+        cara = self.c.post("/api/customers", json={"name": "Cara Buyer", "phone": "555-200-0004"}).json()
+
+        for _ in range(2):
+            h = self.c.post(
+                f"/api/batches/{egg_bid}/harvest",
+                json={"harvest_date": "2026-09-15", "head_count": 1, "dressed_lbs": 5.0, "for_sale": True},
+            ).json()
+            hid = h["entries"][0]["id"]
+            self.c.post(f"/api/batches/{egg_bid}/harvest/{hid}/assign", json={"for_sale": True, "customer_id": alex["id"]})
+
+        for _ in range(2):
+            h = self.c.post(
+                f"/api/batches/{chk_bid}/harvest",
+                json={"harvest_date": "2026-09-20", "head_count": 1, "dressed_lbs": 5.0, "for_sale": True},
+            ).json()
+            hid = h["entries"][0]["id"]
+            self.c.post(f"/api/batches/{chk_bid}/harvest/{hid}/assign", json={"for_sale": True, "customer_id": alex["id"]})
+
+        th = self.c.post(
+            f"/api/batches/{trk_bid}/harvest",
+            json={"harvest_date": "2026-11-15", "head_count": 1, "dressed_lbs": 16.0, "for_sale": True},
+        ).json()
+        self.c.post(
+            f"/api/batches/{trk_bid}/harvest/{th['entries'][0]['id']}/assign",
+            json={"for_sale": True, "customer_id": amanda["id"]},
+        )
+
+        sh_add = self.c.post(
+            f"/api/batches/{share_bid}/harvest",
+            json={"harvest_date": "2026-10-15", "dressed_lbs": 120.0, "split_mode": "halves", "for_sale": True},
+        ).json()
+        half_a_id = sh_add["entries"][0]["shares"][0]["id"]
+        self.c.post(
+            f"/api/batches/{share_bid}/shares/{half_a_id}/assign",
+            json={"for_sale": True, "customer_id": cara["id"]},
+        )
+
+        # Verify /batches, /customers, /settings, and /financials?tab=economics
+        batches_page = self.c.get("/batches").text
+        self.assertIn(">Chicken<", batches_page)
+        self.assertIn(">Turkey<", batches_page)
+        self.assertIn(">Kunekune Pig<", batches_page)
+        self.assertNotIn(">Chicken Eggs<", batches_page)
+        self.assertNotIn(">Turkey Chicks<", batches_page)
+        self.assertIn("Chicken (Hatching Eggs)", batches_page)
+        self.assertIn("Turkey (Poults / Chicks)", batches_page)
+
+        custs_page = self.c.get("/customers").text
+        self.assertIn("Livestock assigned", custs_page)
+        self.assertNotIn("Birds assigned", custs_page)
+        self.assertIn("4 × Chickens", custs_page)
+        self.assertIn("1 × Turkey", custs_page)
+        self.assertIn("1 × Kunekune Pig", custs_page)
+        self.assertIn("½ × Kunekune Pig", custs_page)
+        self.assertNotIn("Chicken Eggs", custs_page)
+        self.assertNotIn("Chicken Chicks", custs_page)
+        self.assertNotIn("Turkey Chicks", custs_page)
+
+        settings_page = self.c.get("/settings").text
+        self.assertIn("Chicken (Hatching Eggs)", settings_page)
+        self.assertIn("Chicken (Day-Old Chicks)", settings_page)
+        self.assertIn("Turkey (Poults / Chicks)", settings_page)
+
+        econ_page = self.c.get("/financials?tab=economics").text
+        self.assertIn("Livestock, feed &amp; processing", econ_page)
+        self.assertNotIn("Chicks, feed &amp; processing", econ_page)
 
 
 if __name__ == "__main__":

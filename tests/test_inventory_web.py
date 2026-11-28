@@ -1631,7 +1631,9 @@ class WebTest(unittest.TestCase):
 
     def test_homestead_sales_appear_in_iron_ledger_with_payment_crud_and_zero_double_booking(self):
         import csv
+        from datetime import datetime, timedelta
         import io
+        from inventory.web import local_tz
         from homestead.db.batches import (
             add_batch_harvest,
             add_batch_sale,
@@ -1673,10 +1675,14 @@ class WebTest(unittest.TestCase):
             },
             user_id=zach_id,
         )
+        d_today = datetime.now(local_tz()).date()
+        d_sale = d_today.isoformat()
+        d_venmo = (d_today - timedelta(days=1)).isoformat()
+        d_untagged = (d_today - timedelta(days=2)).isoformat()
         c1 = save_customer(zach_id, "Sarah Venmo")
         c2 = save_customer(zach_id, "Tom Untagged")
-        h_venmo = add_batch_harvest(bid, "2026-11-20", 1, 15.0, 0.0, for_sale=True)
-        h_untagged = add_batch_harvest(bid, "2026-11-18", 1, 12.0, 0.0, for_sale=True)
+        h_venmo = add_batch_harvest(bid, d_venmo, 1, 15.0, 0.0, for_sale=True)
+        h_untagged = add_batch_harvest(bid, d_untagged, 1, 12.0, 0.0, for_sale=True)
         update_harvest_assignment(bid, h_venmo, customer_id=c1, for_sale=True, actual_sale_price=68.50)
         settle_customer_batch_pickup(
             zach_id, bid, c1, collected_today=68.50, mark_paid=True, mark_picked_up=True,
@@ -1686,8 +1692,8 @@ class WebTest(unittest.TestCase):
             bid, h_untagged, customer_id=c2, for_sale=True, actual_sale_price=55.00,
             payment_status="paid", pickup_status="picked_up", payment_method="",
         )
-        add_batch_sale(bid, "2026-11-21", "Customer Sale", 10.0, 42.00, notes="Halves", payment_method="check")
-        add_batch_sale(bid, "2026-11-21", "Home Freezer", 14.0, 0.0, notes="Family freezer")
+        add_batch_sale(bid, d_sale, "Customer Sale", 10.0, 42.00, notes="Halves", payment_method="check")
+        add_batch_sale(bid, d_sale, "Home Freezer", 14.0, 0.0, notes="Family freezer")
 
         # Also add one Iron Ledger Quick sale (POS)
         sku = next(s for s in list_stock(1) if s["sell_mode"] == "unit" and s["item_type"] == "product")
@@ -1726,7 +1732,7 @@ class WebTest(unittest.TestCase):
         self.assertNotIn("Sarah Venmo", chk_list)
 
         mp_id = save_marketplace(1, name="Saturday Market")
-        save_market_day(1, "2026-11-21", mp_id)
+        save_market_day(1, d_sale, mp_id)
         mp_list = owner.get(f"/sales?period=all&marketplace={mp_id}").text.split('id="sales-list"', 1)[1]
         self.assertNotIn("Sarah Venmo", mp_list)
         self.assertNotIn("Halves", mp_list)

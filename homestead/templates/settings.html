@@ -107,7 +107,7 @@
     <tbody>
     {% for sp, cfg in species_catalog.items() %}
       <tr>
-        <td><b>{{ sp|title }}</b></td>
+        <td><b>{{ sp|species_preset }}</b></td>
         <td>{{ 'Incubation' if cfg.lifecycle_type == 'poultry_incubation' else ('Breeding' if cfg.lifecycle_type == 'mammal_breeding' else 'Live arrival') }}</td>
         <td class="num">{{ cfg.weeks_to_proc }}w</td>
         <td class="num">${{ '%.2f'|format(cfg.unit_cost) }}</td>
@@ -154,7 +154,7 @@
     <h2 style="margin:0">Push Notifications (ntfy)</h2>
     {% if ntfy_cfg.configured %}<span class="pill green">Configured · {{ ntfy_cfg.topic }}</span>{% else %}<span class="pill gray">Not set</span>{% endif %}
   </div>
-  <p class="sub" style="margin-bottom:12px">Get an instant phone alert via <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> whenever a customer claims a bird on a public picking link.</p>
+  <p class="sub" style="margin-bottom:12px">Get an instant phone alert via <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> whenever a customer claims an item or share on a public picking link.</p>
   <form method="post" action="/settings/ntfy" class="fgrid" style="margin-bottom:10px">
     <label>ntfy Server URL<input name="ntfy_url" value="{{ ntfy_cfg.url }}" placeholder="https://ntfy.sh" required></label>
     <label>Topic<input name="ntfy_topic" value="{{ ntfy_cfg.topic }}" placeholder="e.g. my-farm-turkeys"></label>

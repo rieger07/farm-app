@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Pickup Day · {{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
+{% set u = species_terms(b.species, b.lifecycle_type) %}
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
     <h1>{{ b.name }} · {{ 'Pickup Day & Butcher Release' if is_share_mode else 'Pickup Day' }}</h1>
     <p class="sub">
-      {{ b.species|title }}
+      {{ b.species|species_name }}
       {% if b.pickup_date %} · Pickup {{ b.pickup_date }}{% endif %}
       {% if b.pickup_window %} ({{ b.pickup_window }}){% endif %}
       {% if pickup_location %} · {{ pickup_location }}{% endif %}
@@ -68,12 +69,12 @@
   <div class="card">
     <small>Pending Pickups</small>
     <div class="big">{{ pending_groups|length }}</div>
-    <small>{{ pending_groups|sum(attribute='birds', start=[])|length }} birds waiting</small>
+    <small>{{ pending_groups|sum(attribute='birds', start=[])|length }} {{ u.plural }} waiting</small>
   </div>
   <div class="card">
     <small>Completed</small>
     <div class="big">{{ completed_groups|length }}</div>
-    <small>{{ completed_groups|sum(attribute='birds', start=[])|length }} birds picked up</small>
+    <small>{{ completed_groups|sum(attribute='birds', start=[])|length }} {{ u.plural }} picked up</small>
   </div>
   <div class="card">
     <small>Balance Due</small>
@@ -96,7 +97,7 @@
 
 <div class="row" style="justify-content:space-between;align-items:center;margin:14px 0 10px;gap:10px;flex-wrap:wrap">
   <h2 style="margin:0">{{ 'Active Customers' if is_share_mode else 'Waiting for Pickup' }} ({{ pending_groups|length }})</h2>
-  <input id="pu-search" type="search" placeholder="Search customer or {{ 'carcass' if is_share_mode else 'bird #' }}..." oninput="filterPickupCards()" style="max-width:280px;margin:0">
+  <input id="pu-search" type="search" placeholder="Search customer or {{ 'carcass' if is_share_mode else (u.singular ~ ' #') }}..." oninput="filterPickupCards()" style="max-width:280px;margin:0">
 </div>
 
 <div id="pu-pending-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:22px">
@@ -259,11 +260,11 @@
           <input type="checkbox" name="bird_ids" value="{{ bird.id }}" form="pu-form-{{ g.customer_id }}" checked
                  class="pu-bird-cb-{{ g.customer_id }}" data-num="{{ bird.num }}" data-due="{{ '%.2f'|format(bird.due_amt) }}"
                  onchange="recalcPickupCard({{ g.customer_id }})">
-          <span><b>Bird #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
+          <span><b>{{ u.singular_title }} #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
         </label>
         {% else %}
         <input type="hidden" name="bird_ids" value="{{ bird.id }}" form="pu-form-{{ g.customer_id }}">
-        <span><b>Bird #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
+        <span><b>{{ u.singular_title }} #{{ bird.num }}</b> · {{ '%.2f'|format(bird.dressed_lbs) }} lb <small class="inline muted">({{ bird.lb_oz }})</small></span>
         {% endif %}
         <b>${{ '%.2f'|format(bird.effective_price) }}</b>
       </div>
@@ -276,7 +277,7 @@
       {% endif %}
       {% if g.completed_birds %}
       <div style="padding-top:5px;margin-top:4px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)">
-        ✓ Already picked up: Bird {{ g.completed_nums_label }}
+        ✓ Already picked up: {{ u.singular_title }} {{ g.completed_nums_label }}
       </div>
       {% endif %}
     </div>
@@ -294,7 +295,7 @@
         PayPal QR
       </button>
       {% endif %}
-      {% set rem_msg = 'Hi ' ~ g.name ~ '! Reminder for your ' ~ b.name ~ ' pickup' ~ ((' on ' ~ b.pickup_date) if b.pickup_date else '') ~ ((' (' ~ b.pickup_window ~ ')') if b.pickup_window else '') ~ ((' at ' ~ pickup_location) if pickup_location else '') ~ '. Your order: Bird ' ~ g.pending_nums_label ~ ' (' ~ ('%.2f'|format(g.pending_lbs)) ~ ' lb total). Balance due: $' ~ ('%.2f'|format(g.balance_due)) ~ '.' ~ ((' ' ~ pickup_instructions) if pickup_instructions else '') %}
+      {% set rem_msg = 'Hi ' ~ g.name ~ '! Reminder for your ' ~ b.name ~ ' pickup' ~ ((' on ' ~ b.pickup_date) if b.pickup_date else '') ~ ((' (' ~ b.pickup_window ~ ')') if b.pickup_window else '') ~ ((' at ' ~ pickup_location) if pickup_location else '') ~ '. Your order: ' ~ u.singular_title ~ ' ' ~ g.pending_nums_label ~ ' (' ~ ('%.2f'|format(g.pending_lbs)) ~ ' lb total). Balance due: $' ~ ('%.2f'|format(g.balance_due)) ~ '.' ~ ((' ' ~ pickup_instructions) if pickup_instructions else '') %}
       {% if g.phone %}
       <a class="btn sm" href="sms:{{ g.phone }}?&body={{ rem_msg|urlencode }}">Text reminder</a>
       {% endif %}
@@ -328,7 +329,7 @@
     {% if completed_groups %}
       All pickups for this batch are complete!
     {% else %}
-      No customers have assigned birds in this batch yet. Assign birds in <a href="/batches/{{ b.id }}/harvest">Harvest Tally</a> or open <a href="/batches/{{ b.id }}/harvest">Public Picking</a>.
+      No customers have assigned {{ u.plural }} in this batch yet. Assign {{ u.plural }} in <a href="/batches/{{ b.id }}/harvest">Harvest Tally</a> or open <a href="/batches/{{ b.id }}/harvest">Public Picking</a>.
     {% endif %}
   </div>
 {% endfor %}
@@ -339,12 +340,12 @@
 <details class="card table-card">
   <summary style="padding:14px 16px;cursor:pointer;font-weight:600">Completed Pickups ({{ completed_groups|length }})</summary>
   <table>
-    <thead><tr><th>Customer</th><th>{{ 'Shares' if is_share_mode else 'Birds' }}</th><th class="num">Weight</th><th class="num">Total Paid</th><th>Payment</th><th></th></tr></thead>
+    <thead><tr><th>Customer</th><th>{{ 'Shares' if is_share_mode else u.plural_title }}</th><th class="num">Weight</th><th class="num">Total Paid</th><th>Payment</th><th></th></tr></thead>
     <tbody>
     {% for g in completed_groups %}
       <tr>
         <td><b>{{ g.name }}</b><small class="muted" style="display:block">{{ g.phone or g.email or '' }}</small></td>
-        <td>{{ g.share_labels if is_share_mode else ('Bird ' ~ g.bird_nums_label) }}</td>
+        <td>{{ g.share_labels if is_share_mode else (u.singular_title ~ ' ' ~ g.bird_nums_label) }}</td>
         <td class="num">{{ '%.2f'|format(g.total_lbs) }} lb</td>
         <td class="num"><b>${{ '%.2f'|format(g.effective_total) }}</b></td>
         <td>
@@ -397,6 +398,7 @@
 <script>
 const BATCH_NAME = {{ b.name|tojson }};
 const IS_SHARE_MODE = {{ is_share_mode|tojson }};
+const UNIT_SINGULAR_TITLE = {{ u.singular_title|tojson }};
 const VENMO_HANDLE = {{ (pickup_cfg.venmo_handle or '')|tojson }};
 const PAYPAL_HANDLE = {{ (pickup_cfg.paypal_handle or '')|tojson }};
 let activeQrCid = null;
@@ -457,7 +459,7 @@ function openPickupQr(provider, cid, custName, defaultItemNums) {
   const amtVal = Math.max(0, parseFloat((amtIn && amtIn.value) || '0') || 0);
   const note = IS_SHARE_MODE
     ? `Share balance: ${BATCH_NAME} (${itemLabels}) - ${custName}`
-    : `Pickup: ${BATCH_NAME} (Bird ${itemLabels}) - ${custName}`;
+    : `Pickup: ${BATCH_NAME} (${UNIT_SINGULAR_TITLE} ${itemLabels}) - ${custName}`;
   const handle = provider === 'venmo' ? VENMO_HANDLE : PAYPAL_HANDLE;
   const info = window.PayQR.buildPaymentInfo(provider, handle, amtVal, note);
   if (!info || !info.payUrl) return;

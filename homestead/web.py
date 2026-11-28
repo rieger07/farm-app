@@ -11,6 +11,11 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from homestead import gdrive
+from homestead.config import (
+    format_species_display,
+    format_species_preset_label,
+    get_species_terminology,
+)
 from homestead.db.batches import list_batch_harvests, list_batches
 from homestead.db.core import (
     create_user_session,
@@ -61,8 +66,12 @@ def _fmt_money0(v) -> str:
 
 
 templates.env.globals["asset"] = _asset
+templates.env.globals["species_terms"] = get_species_terminology
 templates.env.filters["money"] = _fmt_money
 templates.env.filters["money0"] = _fmt_money0
+templates.env.filters["species_name"] = format_species_display
+templates.env.filters["species_plural"] = lambda sp: format_species_display(sp, plural=True)
+templates.env.filters["species_preset"] = format_species_preset_label
 
 
 class _LoginRedirect(Exception):
@@ -405,9 +414,12 @@ def _harvest_tally_payload(batch: dict, user_id: int) -> dict:
         })
 
     est_value = round(for_sale_value, 2)
+    terms = get_species_terminology(batch.get("species", ""), batch.get("lifecycle_type"))
     return {
         "batch_id": int(batch["id"]),
         "batch_name": batch["name"],
+        "species_display": terms["display_singular"],
+        "species_terms": terms,
         "sale_unit": sale_unit,
         "is_share_mode": is_share_mode,
         "customer_pays_butcher": bool(batch.get("customer_pays_butcher")),

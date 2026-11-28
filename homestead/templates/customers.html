@@ -10,7 +10,7 @@
 
 <div class="cards four">
   <div class="card"><small>Customers</small><div class="big">{{ insights.total_customers }}</div><small>{{ insights.repeat_customers }} repeat buyer{{ '' if insights.repeat_customers == 1 else 's' }}</small></div>
-  <div class="card"><small>Birds assigned</small><div class="big">{{ insights.total_birds }}</div><small>{{ '%.1f'|format(insights.total_lbs) }} lb dressed</small></div>
+  <div class="card"><small>{{ insights.assigned_label }}</small><div class="big">{{ insights.total_birds }}</div><small>{{ '%.1f'|format(insights.total_lbs) }} {{ insights.weight_basis_label }}</small></div>
   <div class="card"><small>Actual vs. calc</small><div class="big">${{ '{:,.2f}'.format(insights.total_actual) }}</div><small>Calc ${{ '{:,.2f}'.format(insights.total_calculated) }}</small></div>
   <div class="card"><small>Tips / overpay</small><div class="big" style="color:{{ 'var(--green)' if insights.total_tips >= 0 else 'var(--redink)' }}">{{ '+' if insights.total_tips > 0 else '' }}${{ '{:,.2f}'.format(insights.total_tips) }}</div><small>Actual minus calculated</small></div>
 </div>
@@ -39,9 +39,9 @@
             <small>{{ c.phone or c.email or c.preferred_contact|upper }}</small>
           </td>
           <td>
-            {% if c.species_counts %}
-              {% for sp, cnt in c.species_counts.items() %}
-                <span class="pill" style="background:#f3f1e7;margin:1px 2px">{{ cnt }} × {{ sp }}</span>
+            {% if c.species_pills %}
+              {% for pill in c.species_pills %}
+                <span class="pill" style="background:#f3f1e7;margin:1px 2px">{{ pill }}</span>
               {% endfor %}
             {% else %}
               <small class="muted">—</small>
@@ -77,7 +77,7 @@
         </div>
         <div class="row">
           <button type="button" class="btn sm" onclick='openCustomerModal({{ sel_customer|tojson }})'>Edit</button>
-          <form method="post" action="/customers/{{ sel_customer.id }}/delete" onsubmit="return confirm('Delete this customer and unassign their birds?')">
+          <form method="post" action="/customers/{{ sel_customer.id }}/delete" onsubmit="return confirm('Delete this customer and unassign their livestock?')">
             <button class="btn sm danger">Delete</button>
           </form>
         </div>
@@ -110,11 +110,11 @@
         <div><small>Tips / balance</small><b>{{ '+' if (sel_customer.tip_diff or 0) > 0 else '' }}${{ '%.2f'|format(sel_customer.tip_diff or 0) }}</b><small>Due ${{ '%.2f'|format(sel_customer.balance_due or 0) }}</small></div>
       </div>
 
-      {% if sel_customer.species_counts %}
+      {% if sel_customer.species_pills %}
       <div style="margin-bottom:12px">
         <small style="margin-bottom:4px">Livestock breakdown</small>
-        {% for sp, cnt in sel_customer.species_counts.items() %}
-          <span class="pill green" style="margin-right:4px">{{ cnt }} × {{ sp }}</span>
+        {% for pill in sel_customer.species_pills %}
+          <span class="pill green" style="margin-right:4px">{{ pill }}</span>
         {% endfor %}
       </div>
       {% endif %}
@@ -133,7 +133,7 @@
             <td>
               <a href="/batches/{{ b.batch_id }}/harvest"><b>{{ b.batch_name }}</b></a>
               {% if b.share_label %}<span class="pill blue" style="margin-left:4px">{{ b.share_label }}</span>{% endif %}
-              <small>{{ b.species|title }}</small>
+              <small>{{ b.species|species_name }}</small>
             </td>
             <td class="num">
               {% if b.is_share and b.dressed_lbs <= 0 %}
@@ -153,7 +153,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="empty">No birds assigned to this customer yet.</td></tr>
+          <tr><td colspan="5" class="empty">No livestock assigned to this customer yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -178,7 +178,7 @@
         <option value="call">Phone call</option>
       </select>
     </label>
-    <label class="full">Notes<textarea name="notes" id="cm-notes" rows="2" placeholder="Prefers smaller hen, Saturday pickup..."></textarea></label>
+    <label class="full">Notes<textarea name="notes" id="cm-notes" rows="2" placeholder="Delivery notes, weight preferences, Saturday pickup..."></textarea></label>
     <div class="row full" style="justify-content:flex-end;margin-top:6px">
       <button type="button" class="btn" onclick="document.getElementById('custm').close()">Cancel</button>
       <button type="submit" class="btn primary">Save customer</button>

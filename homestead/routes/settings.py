@@ -270,7 +270,7 @@ def settings_ntfy_test(request: Request, user: dict = Depends(current_user)):
     ok, detail = send_ntfy_notification(
         user["id"],
         "Homestead Planner - Test Notification",
-        "ntfy push notifications are connected! You'll get alerts when customers claim birds.",
+        "ntfy push notifications are connected! You'll get alerts when customers reserve or claim livestock.",
         click_url=f"{str(request.base_url).rstrip('/')}/batches",
         tags="white_check_mark,turkey",
     )

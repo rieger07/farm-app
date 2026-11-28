@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ b.name }} · Homestead Planner{% endblock %}
 {% block content %}
+{% set u = species_terms(b.species, b.lifecycle_type) %}
 <div class="eyebrow"><a href="/batches" style="text-decoration:none">← ALL BATCHES</a></div>
 <div class="pagehead">
   <div>
     <h1>{{ b.name }}{% if s.is_planned %} <span class="pill amber" style="font-size:13px;vertical-align:middle">{{ s.status_badge }}</span>{% endif %}</h1>
-    <p class="sub">{{ b.species|title }} · {{ 'Starts' if s.is_planned else 'Started' }} {{ b.start_date }}{% if s.is_planned %} (in {{ s.days_until_start }}d){% endif %} · Process {{ s.proc_date }}</p>
+    <p class="sub">{{ b.species|species_name }} · {{ 'Starts' if s.is_planned else 'Started' }} {{ b.start_date }}{% if s.is_planned %} (in {{ s.days_until_start }}d){% endif %} · Process {{ s.proc_date }}</p>
   </div>
   <div class="row">
     {% if s.is_planned %}
@@ -18,7 +19,7 @@
     {% if gcal_url %}<a href="{{ gcal_url }}" target="_blank" rel="noopener" class="btn">GCal: Process</a>{% endif %}
     {% set b_sp_low = (b.species or '')|lower %}
     {% if ('chicken' in b_sp_low or 'duck' in b_sp_low or 'goose' in b_sp_low or 'geese' in b_sp_low) and not is_graduated and not s.is_planned and s.on_farm_head > 0 %}
-    <form method="post" action="/batches/{{ b.id }}/graduate-layers" style="display:inline" onsubmit="return confirm('Graduate {{ s.on_farm_head }} surviving birds from {{ b.name }} into your active Laying Flock and archive this batch?')">
+    <form method="post" action="/batches/{{ b.id }}/graduate-layers" style="display:inline" onsubmit="return confirm('Graduate {{ s.on_farm_head }} surviving {{ u.plural }} from {{ b.name }} into your active Laying Flock and archive this batch?')">
       <input type="hidden" name="head_count" value="{{ s.on_farm_head }}">
       <button class="btn">Graduate to Laying Flock (+{{ s.on_farm_head }})</button>
     </form>
@@ -41,7 +42,7 @@
 
 <div class="cards four">
   <div class="card"><small>Surviving / Initial</small><div class="big">{{ s.surviving_quantity }} / {{ s.initial_quantity }}</div><small>{{ s.initial_quantity - s.surviving_quantity }} losses</small></div>
-  <div class="card"><small>Harvested</small><div class="big">{{ s.harvested_head }}</div><small>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb dressed</small></div>
+  <div class="card"><small>Harvested</small><div class="big">{{ s.harvested_head }}</div><small>{{ '%.1f'|format(s.actual_dressed_lbs) }} lb {{ 'hanging' if (b.sale_unit == 'shares') else 'dressed' }}</small></div>
   <div class="card"><small>Sold / Freezer</small><div class="big">{{ '%.1f'|format(s.sold_lbs) }} / {{ '%.1f'|format(s.freezer_lbs) }} lb</div><small>${{ '%.2f'|format(s.actual_sales_revenue) }} sales{% if s.effective_freezer_cost_per_lb is not none %} · {% if s.effective_freezer_cost_per_lb == 0 %}<span style="color:var(--green,#15803d);font-weight:600">$0.00/lb freezer (free!)</span>{% else %}${{ '%.2f'|format(s.effective_freezer_cost_per_lb) }}/lb freezer{% endif %}{% endif %}</small></div>
   <div class="card"><small>Reconciled Cost</small><div class="big">${{ '%.2f'|format(s.reconciled_total_cost) }}</div><small>${{ '%.2f'|format(s.reconciled_cost_per_lb_meat) }}/lb meat</small></div>
 </div>
@@ -109,7 +110,7 @@
 <details class="card" style="margin-top:4px">
   <summary style="cursor:pointer;font-weight:600;font-size:14px">
     Manual Bulk / Cut-Meat Sales &amp; Butcher Processing Invoices
-    <small class="inline muted" style="font-weight:400;margin-left:6px">(optional — for whole birds, use Stage 3 Harvest &amp; Pick and Stage 4 Pickup Day)</small>
+    <small class="inline muted" style="font-weight:400;margin-left:6px">(optional — for whole {{ u.plural }}, use Stage 3 Harvest &amp; Pick and Stage 4 Pickup Day)</small>
   </summary>
   <div class="cards two" style="margin-top:14px">
     <div>

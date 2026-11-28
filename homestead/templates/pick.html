@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Pick Your Bird · {{ batch_name }}{% endblock %}
+{% set u = species_terms %}
+{% block title %}Pick Your {{ 'Share' if is_share_mode else u.singular_title }} · {{ batch_name }}{% endblock %}
 {% block body %}
 <div style="max-width:720px;margin:0 auto;padding:24px 16px 48px">
   <header class="row" style="justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--line)">
     <div class="brand" style="display:flex;align-items:center;gap:10px">
       <img src="/static/logo.png" alt="Homestead Planner" style="width:32px;height:32px;border-radius:8px">
-      <div>{{ batch_name }}<small>{{ species|title }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
+      <div>{{ batch_name }}<small>{{ species|species_name }} · ${{ '%.2f'|format(sale_price_per_lb) }}/lb{{ ' hanging wt' if is_share_mode else '' }}</small></div>
     </div>
     {% if picking_enabled %}
     <span class="pill green" id="live-pill">● Live</span>
@@ -17,7 +18,7 @@
   {% if not picking_enabled %}
   <div class="card empty">
     <h2>Picking is currently closed</h2>
-    <p class="sub">Please check back with the farm when {{ 'share' if is_share_mode else 'bird' }} picking opens.</p>
+    <p class="sub">Please check back with the farm when {{ 'share' if is_share_mode else u.singular }} picking opens.</p>
   </div>
   {% else %}
 
@@ -26,15 +27,15 @@
     <h2 style="margin-bottom:4px">Step 1: Enter your details</h2>
     <p class="sub" style="margin-bottom:12px">
       {% if picking_preorder_only %}
-        <b>Early access for pre-order customers:</b> enter the name and phone or email from your reservation to pick your reserved {{ 'share(s)' if is_share_mode else 'bird(s)' }}.
+        <b>Early access for pre-order customers:</b> enter the name and phone or email from your reservation to pick your reserved {{ 'share(s)' if is_share_mode else (u.singular ~ '(s)') }}.
       {% else %}
-        Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} {{ 'whole-animal eq.' if is_share_mode else 'bird' }} per customer.{% endif %}
+        Enter your name and phone or email to unlock 1-tap claiming.{% if max_birds_per_customer %} Limit {{ max_birds_per_customer }} {{ 'whole-animal eq.' if is_share_mode else u.singular }} per customer.{% endif %}
       {% endif %}
     </p>
     <form class="fgrid" onsubmit="identifyCustomer(event)">
       <label>Your name<input id="p-name" required placeholder="e.g. Sarah Miller"></label>
       <label>Phone or email<input id="p-contact" required placeholder="(555) 123-4567 or email"></label>
-      <div class="full"><button type="submit" class="btn primary wide" id="ident-btn">Continue to pick a {{ 'share' if is_share_mode else 'bird' }} →</button></div>
+      <div class="full"><button type="submit" class="btn primary wide" id="ident-btn">Continue to pick a {{ 'share' if is_share_mode else u.singular }} →</button></div>
     </form>
   </div>
 
@@ -49,7 +50,7 @@
 
   <!-- Available & claimed birds/shares grid -->
   <div class="row" style="justify-content:space-between;align-items:baseline;margin:16px 0 10px">
-    <h2 style="margin:0">Available {{ 'shares' if is_share_mode else 'birds' }}</h2>
+    <h2 style="margin:0">Available {{ 'shares' if is_share_mode else u.plural }}</h2>
     <small id="avail-summary" class="muted"></small>
   </div>
   <div id="bird-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px"></div>
@@ -58,6 +59,9 @@
   <script>
   const SLUG = {{ slug|tojson }};
   const IS_SHARE_MODE = {{ is_share_mode|tojson }};
+  const UNIT_SG = {{ ('share' if is_share_mode else u.singular)|tojson }};
+  const UNIT_PL = {{ ('shares' if is_share_mode else u.plural)|tojson }};
+  const UNIT_SG_TITLE = {{ ('Share' if is_share_mode else u.singular_title)|tojson }};
   const PRICE = {{ sale_price_per_lb }};
   const MAX_BIRDS = {{ max_birds_per_customer|tojson }};
   let BIRDS = JSON.parse(document.getElementById('pick-birds-init').textContent);
@@ -88,11 +92,11 @@
     document.getElementById('confirm-who').textContent = `Picking as ${CUSTOMER.name}`;
     const box = document.getElementById('my-claims');
     if (!CUSTOMER.my_birds.length) {
-      box.innerHTML = `<small class="muted">Tap any available ${IS_SHARE_MODE ? 'share' : 'bird'} below to claim it.</small>`;
+      box.innerHTML = `<small class="muted">Tap any available ${UNIT_SG} below to claim it.</small>`;
       return;
     }
     box.innerHTML = CUSTOMER.my_birds.map(b => {
-      const label = escapeHtml(b.label || ('Bird #' + b.num));
+      const label = escapeHtml(b.label || (UNIT_SG_TITLE + ' #' + b.num));
       const wtPart = b.weight_pending
         ? '<small class="inline muted">Pending hanging wt</small>'
         : `${Number(b.dressed_lbs).toFixed(2)} lb <small class="inline">(${IS_SHARE_MODE ? 'hanging' : escapeHtml(b.lb_oz)})</small>`;
@@ -115,7 +119,7 @@
     const avail = sorted.filter(b => b.status === 'available').length;
     document.getElementById('avail-summary').textContent = `${avail} of ${sorted.length} available`;
     if (!sorted.length) {
-      grid.innerHTML = `<div class="card empty" style="grid-column:1/-1">No ${IS_SHARE_MODE ? 'shares' : 'birds'} listed yet.</div>`;
+      grid.innerHTML = `<div class="card empty" style="grid-column:1/-1">No ${UNIT_PL} listed yet.</div>`;
       return;
     }
     const effMax = (CUSTOMER && CUSTOMER.effective_max_birds !== undefined) ? CUSTOMER.effective_max_birds : MAX_BIRDS;
@@ -135,11 +139,11 @@
       }
       const shareTooBig = CUSTOMER && effMax && IS_SHARE_MODE && (claimedEquiv + Number(b.share_fraction || 1) > effMax + 1e-6);
       const disabled = !CUSTOMER || atLimit || shareTooBig;
-      const btnText = !CUSTOMER ? 'Enter info above' : ((atLimit || shareTooBig) ? 'Limit reached' : (IS_SHARE_MODE ? 'Claim share' : 'Claim bird'));
+      const btnText = !CUSTOMER ? 'Enter info above' : ((atLimit || shareTooBig) ? 'Limit reached' : ('Claim ' + UNIT_SG));
       const btnHtml = claimed
         ? '<span class="pill" style="background:#e5e2d5;color:var(--muted)">Claimed</span>'
         : `<button type="button" class="btn sm primary wide" ${disabled ? 'disabled' : ''} onclick="claimBird(${b.id})">${btnText}</button>`;
-      const titleLbl = escapeHtml(b.label || ('Bird #' + b.num));
+      const titleLbl = escapeHtml(b.label || (UNIT_SG_TITLE + ' #' + b.num));
       const wtHtml = b.weight_pending
         ? `<div style="font:600 18px Georgia,serif;margin:4px 0">Pending wt</div><small style="margin-bottom:8px">$${Number(PRICE).toFixed(2)}/lb hanging</small>`
         : `<div style="font:600 22px Georgia,serif;margin:4px 0">${Number(b.dressed_lbs).toFixed(2)} lb</div><small style="margin-bottom:8px">${IS_SHARE_MODE ? 'hanging' : escapeHtml(b.lb_oz)} · <b>$${Number(b.est_price).toFixed(2)}</b></small>`;
@@ -194,14 +198,14 @@
     });
     const data = await resp.json();
     if (resp.status === 409) {
-      showToast(data.detail || 'Someone just grabbed that bird—please pick another!', true);
+      showToast(data.detail || `Someone just grabbed that ${UNIT_SG}—please pick another!`, true);
       const b = BIRDS.find(x => x.id === birdId);
       if (b && data.detail && data.detail.toLowerCase().includes('grabbed')) b.status = 'claimed';
       renderBirds();
       return;
     }
     if (!resp.ok) {
-      showToast(data.detail || 'Unable to claim bird.', true);
+      showToast(data.detail || `Unable to claim ${UNIT_SG}.`, true);
       return;
     }
     const b = BIRDS.find(x => x.id === birdId);
@@ -209,7 +213,7 @@
     if (data.bird && !CUSTOMER.my_birds.some(x => x.id === data.bird.id)) {
       CUSTOMER.my_birds.push(data.bird);
     }
-    const claimedLbl = data.bird.label || ('Bird #' + data.bird.num);
+    const claimedLbl = data.bird.label || (UNIT_SG_TITLE + ' #' + data.bird.num);
     const claimedWt = data.bird.weight_pending ? 'Pending hanging wt' : `${Number(data.bird.dressed_lbs).toFixed(2)} lb`;
     showToast(`Confirmed! You claimed ${claimedLbl} (${claimedWt}).`, false);
     renderMyClaims();

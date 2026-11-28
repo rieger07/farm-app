@@ -155,7 +155,7 @@ function selectRadarEggSpecies(btn) {
     <div class="batch-head">
       <div>
         <a href="/batches/{{ b.id }}" class="batch-title">{{ b.name }}</a>
-        <small>{{ b.species|title }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</small>
+        <small>{{ b.species|species_name }} · Started {{ b.start_date }} · Process {{ s.proc_date }}</small>
       </div>
       <span class="pill {{ 'amber' if s.is_fully_harvested else 'green' }}">{{ s.status_badge }}</span>
     </div>
@@ -175,7 +175,7 @@ function selectRadarEggSpecies(btn) {
 </div>
 {% elif not planned_schedules %}
 <div class="card empty">
-  <p>No active batches yet. Tap <b>+ New batch</b> to start planning your first flock.</p>
+  <p>No active batches yet. Tap <b>+ New batch</b> to start planning your first batch.</p>
 </div>
 {% endif %}
 
@@ -188,7 +188,7 @@ function selectRadarEggSpecies(btn) {
     <div class="batch-head">
       <div>
         <a href="/batches/{{ b.id }}" class="batch-title">{{ b.name }}</a>
-        <small>{{ b.species|title }} · Starts {{ b.start_date }} (in {{ s.days_until_start }}d) · Process {{ s.proc_date }}</small>
+        <small>{{ b.species|species_name }} · Starts {{ b.start_date }} (in {{ s.days_until_start }}d) · Process {{ s.proc_date }}</small>
       </div>
       <span class="pill amber">{{ s.status_badge }}</span>
     </div>
