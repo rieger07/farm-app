@@ -9,7 +9,11 @@ from homestead.db.core import (
     get_db_connection,
     get_species_defaults,
 )
-from homestead.db.shares import backfill_batch_harvest_shares, normalize_sale_unit
+from homestead.db.shares import (
+    backfill_batch_harvest_shares,
+    normalize_paid_date,
+    normalize_sale_unit,
+)
 from shared.bridge import normalize_homestead_payment_method
 
 
@@ -188,32 +192,53 @@ def add_batch_sale(
     batch_id: int,
     entry_date: str,
     allocation_type: str,
-    weight_lbs: float,
-    revenue: float,
+    weight_lbs: float = 0.0,
+    revenue: float = 0.0,
     notes: str = "",
     payment_method: str = "",
+    head_count: int = 0,
+    customer_id: int | None = None,
 ) -> int:
-    resolved_type = (
-        "Home Freezer"
-        if "freezer" in str(allocation_type).lower()
-        else "Customer Sale"
-    )
-    pm = "" if resolved_type == "Home Freezer" else normalize_homestead_payment_method(payment_method)
+    raw_alloc = str(allocation_type or "").lower()
+    if "live" in raw_alloc:
+        resolved_type = "Live Sale"
+        wt = round(max(0.0, float(weight_lbs or 0.0)), 2)
+        hc = max(1, int(head_count or 1))
+        cid = int(customer_id) if customer_id else None
+        rev = max(0.0, float(revenue or 0.0))
+        pm = normalize_homestead_payment_method(payment_method)
+    elif "freezer" in raw_alloc:
+        resolved_type = "Home Freezer"
+        wt = max(0.01, float(weight_lbs))
+        hc = 0
+        cid = None
+        rev = 0.0
+        pm = ""
+    else:
+        resolved_type = "Customer Sale"
+        wt = max(0.01, float(weight_lbs))
+        hc = 0
+        cid = int(customer_id) if customer_id else None
+        rev = max(0.0, float(revenue or 0.0))
+        pm = normalize_homestead_payment_method(payment_method)
     with get_db_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO batch_sales (
-                batch_id, entry_date, allocation_type, weight_lbs, revenue, payment_method, notes, created_at
+                batch_id, entry_date, allocation_type, weight_lbs, revenue,
+                payment_method, head_count, customer_id, notes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(batch_id),
                 str(entry_date),
                 resolved_type,
-                max(0.01, float(weight_lbs)),
-                0.0 if resolved_type == "Home Freezer" else max(0.0, float(revenue)),
+                wt,
+                rev,
                 pm,
+                hc,
+                cid,
                 str(notes).strip(),
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
@@ -222,18 +247,39 @@ def add_batch_sale(
         return int(cursor.lastrowid)
 
 
+def update_batch_sale_details(
+    batch_id: int,
+    sale_id: int,
+    payment_method: str,
+    entry_date: str | None = None,
+) -> bool:
+    """Update payment_method and optional entry_date on a Customer Sale or Live Sale row."""
+    pm = normalize_homestead_payment_method(payment_method)
+    clean_date = normalize_paid_date(entry_date)
+    set_sql = "payment_method = ?"
+    params: list[object] = [pm]
+    if clean_date:
+        set_sql += ", entry_date = ?"
+        params.append(clean_date)
+    params.extend([int(sale_id), int(batch_id)])
+    with get_db_connection() as conn:
+        cur = conn.execute(
+            f"""
+            UPDATE batch_sales
+            SET {set_sql}
+            WHERE id = ? AND batch_id = ? AND allocation_type IN ('Customer Sale', 'Live Sale')
+            """,
+            params,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def update_batch_sale_payment_method(
     batch_id: int, sale_id: int, payment_method: str
 ) -> bool:
     """Update payment_method on a batch Customer Sale row."""
-    pm = normalize_homestead_payment_method(payment_method)
-    with get_db_connection() as conn:
-        cur = conn.execute(
-            "UPDATE batch_sales SET payment_method = ? WHERE id = ? AND batch_id = ? AND allocation_type = 'Customer Sale'",
-            (pm, int(sale_id), int(batch_id)),
-        )
-        conn.commit()
-        return cur.rowcount > 0
+    return update_batch_sale_details(batch_id, sale_id, payment_method)
 
 
 def delete_batch_sale(sale_id: int) -> None:
@@ -533,7 +579,9 @@ def _normalize_batch_payload(
         )
         if "customer_pays_butcher" in batch_data
         else None,
-        "active": 1 if batch_data.get("active", True) else 0,
+        "active": (1 if batch_data.get("active", True) else 0)
+        if "active" in batch_data
+        else None,
         "notes": str(batch_data.get("notes", "")),
     }
 
@@ -567,7 +615,6 @@ def save_batch(
                 "processing_cost = ?",
                 "expected_yield_lbs = ?",
                 "sale_price_per_lb = ?",
-                "active = ?",
                 "notes = ?",
             ]
             params: list[object] = [
@@ -590,9 +637,11 @@ def save_batch(
                 norm["processing_cost"],
                 norm["expected_yield_lbs"],
                 norm["sale_price_per_lb"],
-                norm["active"],
                 norm["notes"],
             ]
+            if norm["active"] is not None:
+                set_clauses.append("active = ?")
+                params.append(norm["active"])
             if norm["sale_unit"] is not None:
                 set_clauses.append("sale_unit = ?")
                 params.append(norm["sale_unit"])
@@ -611,6 +660,7 @@ def save_batch(
         else:
             s_unit = norm["sale_unit"] or "whole"
             cust_butcher = int(norm["customer_pays_butcher"] or 0)
+            active_val = 1 if norm["active"] is None else norm["active"]
             cursor = conn.execute(
                 """
                 INSERT INTO batches (
@@ -647,7 +697,7 @@ def save_batch(
                     norm["sale_price_per_lb"],
                     s_unit,
                     cust_butcher,
-                    norm["active"],
+                    active_val,
                     norm["notes"],
                     secrets.token_urlsafe(10),
                     datetime.utcnow().isoformat(timespec="seconds"),

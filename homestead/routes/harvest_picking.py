@@ -228,6 +228,7 @@ async def api_batch_share_assign(
             pickup_status=pickup_status,
             butcher_notified=butcher_notified,
             cut_sheet_notes=str(cut_sheet_notes) if cut_sheet_notes is not None else None,
+            paid_date=payload.get("paid_date"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -316,6 +317,7 @@ async def api_batch_harvest_assign(
             pickup_status=pickup_status,
             notes=str(notes) if notes is not None else None,
             payment_method=payment_method,
+            paid_date=payload.get("paid_date"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -11,7 +11,7 @@
         {% endfor %}
       </select>
     </label>
-    <label>Start date<input type="date" name="start_date" id="bm-start" value="{{ today_iso }}" required></label>
+    <label>Start date<input type="date" name="start_date" id="bm-start" value="{{ today_iso }}" required onchange="syncBatchDateHint()"><small id="bm-past-hint" class="muted" hidden>Past start date — check Historical / completed below if already done.</small></label>
     <label>Initial quantity<input type="number" name="initial_quantity" id="bm-qty" min="1" value="25" required></label>
     <label>Cost / head ($)<input type="number" name="unit_cost" id="bm-ucost" step="0.01" min="0"></label>
     <label>Est. dressed wt (lb)<input type="number" name="avg_dressed_weight" id="bm-wt" step="0.1" min="0"></label>
@@ -36,6 +36,10 @@
         <span><b>Customer pays butcher directly</b> (exclude customer butcher fee from Schedule F &amp; enable Butcher Release workflow)</span>
       </label>
     </div>
+    <label class="full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+      <input type="checkbox" name="is_archived" id="bm-archived" value="1" style="width:auto">
+      <span><b>Historical / completed batch</b> (save as Archived — keeps out of active Today radar)</span>
+    </label>
     <label class="full">Notes<input name="notes" id="bm-notes" placeholder="Hatchery, breed, pasture notes..."></label>
     <details class="full" style="border-top:1px solid var(--line);padding-top:10px">
       <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--green)">Customize feed &amp; timeline</summary>
@@ -86,15 +90,26 @@ function fillSpeciesDefaults() {
   if (cpb) cpb.checked = isPig;
   syncBatchShareFields();
 }
+function syncBatchDateHint() {
+  const sEl = document.getElementById('bm-start');
+  const hEl = document.getElementById('bm-past-hint');
+  if (!sEl || !hEl || !sEl.value) return;
+  const startDt = new Date(sEl.value + 'T00:00:00');
+  const nowDt = new Date('{{ today_iso }}T00:00:00');
+  const ageDays = (nowDt - startDt) / 86400000;
+  hEl.hidden = !(ageDays > 120);
+}
 function openNewBatchModal() {
   document.getElementById('bm-title').textContent = 'New batch';
   document.getElementById('bm-id').value = '';
   document.getElementById('bm-name').value = '';
   document.getElementById('bm-start').value = '{{ today_iso }}';
   document.getElementById('bm-qty').value = '25';
+  document.getElementById('bm-archived').checked = false;
   document.getElementById('bm-notes').value = '';
   fillSpeciesDefaults();
   syncBatchShareFields();
+  syncBatchDateHint();
   document.getElementById('batchm').showModal();
 }
 function openEditBatchModal(b) {
@@ -119,7 +134,9 @@ function openEditBatchModal(b) {
   document.getElementById('bm-gf').value = b.grower_feed_lbs ?? 12.0;
   document.getElementById('bm-sbp').value = b.starter_bag_price ?? 24.0;
   document.getElementById('bm-gbp').value = b.grower_bag_price ?? 22.0;
+  document.getElementById('bm-archived').checked = !(b.active === undefined || b.active === null ? true : Boolean(Number(b.active)));
   document.getElementById('bm-notes').value = b.notes || '';
+  syncBatchDateHint();
   document.getElementById('batchm').showModal();
 }
 function openDuplicateBatchModal(b) {
@@ -128,5 +145,7 @@ function openDuplicateBatchModal(b) {
   document.getElementById('bm-id').value = '';
   document.getElementById('bm-name').value = (b.name || 'Batch') + ' (Copy)';
   document.getElementById('bm-start').value = '{{ today_iso }}';
+  document.getElementById('bm-archived').checked = false;
+  syncBatchDateHint();
 }
 </script>

@@ -105,6 +105,88 @@ def _require_financials(user: dict) -> None:
         )
 
 
+def persist_new_receipt_lines(
+    user_id: int,
+    *,
+    receipt_date: str,
+    vendor: str,
+    receipt_url: str,
+    drive_file_id: str,
+    expanded_lines: list[dict],
+) -> tuple[int, float]:
+    """Persist one or more expanded receipt lines sharing an optional receipt attachment."""
+    uid = int(user_id)
+    rdate = str(receipt_date or "").strip()[:10]
+    clean_vendor = str(vendor or "").strip()
+    r_url = str(receipt_url or "").strip()
+    drive_id = str(drive_file_id or "").strip()
+    group_id = secrets.token_hex(6) if len(expanded_lines) > 1 else ""
+    for line in expanded_lines:
+        kind = line["kind"]
+        notes = str(line.get("notes") or "").strip()
+        if kind == "batch_feed":
+            add_batch_feed_log(
+                line["batch_id"],
+                rdate,
+                str(line.get("feed_type") or "grower"),
+                line["bags"],
+                line["feed_lbs"],
+                line["amount"],
+                notes=notes,
+                receipt_url=r_url,
+                drive_file_id=drive_id,
+                vendor=clean_vendor,
+                receipt_group_id=group_id,
+            )
+        elif kind == "layer_feed":
+            add_layer_feed_log(
+                uid,
+                feed_date=rdate,
+                bags=line["bags"],
+                feed_lbs=line["feed_lbs"],
+                cost_total=line["amount"],
+                notes=notes,
+                receipt_url=r_url,
+                drive_file_id=drive_id,
+                feed_type=str(line.get("feed_type") or "layer"),
+                species_tags=line.get("species_tags") or "all",
+                vendor=clean_vendor,
+                receipt_group_id=group_id,
+            )
+        elif kind == "herd_feed":
+            add_herd_feed_log(
+                uid,
+                herd_id=line["herd_id"],
+                feed_date=rdate,
+                feed_category=line["feed_category"],
+                quantity=line["quantity"],
+                unit=line["unit"],
+                weight_lbs=line["weight_lbs"],
+                cost_total=line["amount"],
+                vendor=clean_vendor,
+                notes=notes,
+                receipt_url=r_url,
+                drive_file_id=drive_id,
+                receipt_group_id=group_id,
+            )
+        else:
+            add_farm_expense(
+                uid,
+                rdate,
+                clean_vendor,
+                str(line.get("category") or "Other"),
+                line["amount"],
+                batch_id=line["batch_id"],
+                notes=notes,
+                receipt_url=r_url,
+                drive_file_id=drive_id,
+                receipt_group_id=group_id,
+            )
+    saved_count = len(expanded_lines)
+    total_amt = round(sum(float(item["amount"]) for item in expanded_lines), 2)
+    return saved_count, total_amt
+
+
 @router.get("/feed")
 def feed_page(request: Request, msg: str = "", user: dict = Depends(current_user)):
     barrel_cap = get_barrel_capacity(user_id=user["id"])
@@ -457,70 +539,14 @@ async def expense_receipt_submit(
             return _tax_redirect(yr, f"Error: {exc}")
         action_verb = "Updated"
     else:
-        group_id = secrets.token_hex(6) if len(expanded_lines) > 1 else ""
-        for line in expanded_lines:
-            kind = line["kind"]
-            notes = str(line.get("notes") or "").strip()
-            if kind == "batch_feed":
-                add_batch_feed_log(
-                    line["batch_id"],
-                    rdate,
-                    str(line.get("feed_type") or "grower"),
-                    line["bags"],
-                    line["feed_lbs"],
-                    line["amount"],
-                    notes=notes,
-                    receipt_url=r_url,
-                    drive_file_id=drive_id,
-                    vendor=clean_vendor,
-                    receipt_group_id=group_id,
-                )
-            elif kind == "layer_feed":
-                add_layer_feed_log(
-                    user["id"],
-                    feed_date=rdate,
-                    bags=line["bags"],
-                    feed_lbs=line["feed_lbs"],
-                    cost_total=line["amount"],
-                    notes=notes,
-                    receipt_url=r_url,
-                    drive_file_id=drive_id,
-                    feed_type=str(line.get("feed_type") or "layer"),
-                    species_tags=line.get("species_tags") or "all",
-                    vendor=clean_vendor,
-                    receipt_group_id=group_id,
-                )
-            elif kind == "herd_feed":
-                add_herd_feed_log(
-                    user["id"],
-                    herd_id=line["herd_id"],
-                    feed_date=rdate,
-                    feed_category=line["feed_category"],
-                    quantity=line["quantity"],
-                    unit=line["unit"],
-                    weight_lbs=line["weight_lbs"],
-                    cost_total=line["amount"],
-                    vendor=clean_vendor,
-                    notes=notes,
-                    receipt_url=r_url,
-                    drive_file_id=drive_id,
-                    receipt_group_id=group_id,
-                )
-            else:
-                add_farm_expense(
-                    user["id"],
-                    rdate,
-                    clean_vendor,
-                    str(line.get("category") or "Other"),
-                    line["amount"],
-                    batch_id=line["batch_id"],
-                    notes=notes,
-                    receipt_url=r_url,
-                    drive_file_id=drive_id,
-                    receipt_group_id=group_id,
-                )
-        saved_count = len(expanded_lines)
-        total_amt = round(sum(item["amount"] for item in expanded_lines), 2)
+        saved_count, total_amt = persist_new_receipt_lines(
+            user["id"],
+            receipt_date=rdate,
+            vendor=clean_vendor,
+            receipt_url=r_url,
+            drive_file_id=drive_id,
+            expanded_lines=expanded_lines,
+        )
         action_verb = "Saved"
 
     total_lbl = f"-${abs(total_amt):,.2f}" if total_amt < 0 else f"${total_amt:,.2f}"

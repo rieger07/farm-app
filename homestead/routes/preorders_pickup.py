@@ -23,16 +23,17 @@ from homestead.db.customers import (
     settle_customer_batch_pickup,
     update_batch_preorder,
     update_batch_preorder_settings,
-    update_customer_batch_payment_method,
+    update_customer_batch_payment_details,
     update_harvest_assignment,
 )
 from homestead.db.shares import (
     mark_shares_butcher_notified,
+    normalize_paid_date,
     normalize_sale_unit,
     normalize_share_size,
     reopen_customer_shares,
     settle_customer_shares,
-    update_customer_share_payment_method,
+    update_customer_share_payment_details,
 )
 from shared.bridge import HOMESTEAD_PAYMENT_METHODS
 from homestead.scheduling import compute_batch_schedule
@@ -503,6 +504,18 @@ def _build_share_pickup_groups(b: dict, tally: dict) -> dict:
             if len(paid_pms) == 1
             else ("mixed" if len(paid_pms) > 1 else "")
         )
+        paid_dates = sorted(
+            str(x.get("paid_at") or "").strip()[:10]
+            for x in g["shares"]
+            if (x.get("payment_status") == "paid" or x.get("pickup_status") == "picked_up")
+            and len(str(x.get("paid_at") or "").strip()) >= 10
+        )
+        harv_dates = sorted(
+            str(x.get("harvest_date") or "").strip()[:10]
+            for x in g["shares"]
+            if len(str(x.get("harvest_date") or "").strip()) >= 10
+        )
+        g["paid_date"] = paid_dates[-1] if paid_dates else (harv_dates[-1] if harv_dates else "")
         if g["all_paid"] and g["all_picked_up"]:
             completed_groups.append(g)
         else:
@@ -644,6 +657,18 @@ def batch_pickup_page(
                 g["payment_method"] = "mixed"
             else:
                 g["payment_method"] = ""
+            paid_dates = sorted(
+                str(x.get("paid_at") or "").strip()[:10]
+                for x in g["birds"]
+                if (x.get("payment_status") == "paid" or x.get("pickup_status") == "picked_up")
+                and len(str(x.get("paid_at") or "").strip()) >= 10
+            )
+            harv_dates = sorted(
+                str(x.get("harvest_date") or "").strip()[:10]
+                for x in g["birds"]
+                if len(str(x.get("harvest_date") or "").strip()) >= 10
+            )
+            g["paid_date"] = paid_dates[-1] if paid_dates else (harv_dates[-1] if harv_dates else "")
             if g["all_paid"] and g["all_picked_up"]:
                 completed_groups.append(g)
             else:
@@ -663,6 +688,11 @@ def batch_pickup_page(
 
     pickup_location = (b.get("pickup_location") or "").strip() or pickup_cfg.get("pickup_address") or ""
     pickup_instructions = pickup_cfg.get("pickup_instructions") or ""
+    default_paid_date = (
+        str(b.get("pickup_date") or "").strip()[:10]
+        if not bool(b.get("active", 1))
+        else ""
+    )
     bag_weight = get_bag_weight(user_id=user["id"])
     s = compute_batch_schedule(b, bag_weight=bag_weight)
     stage_info = _batch_stage_info(b, s, user["id"], tally=tally)
@@ -686,6 +716,7 @@ def batch_pickup_page(
         pickup_cfg=pickup_cfg,
         pickup_location=pickup_location,
         pickup_instructions=pickup_instructions,
+        default_paid_date=default_paid_date,
         payment_methods=HOMESTEAD_PAYMENT_METHODS,
         msg=msg,
     )
@@ -697,6 +728,7 @@ def batch_pickup_settle_shares_submit(
     customer_id: int,
     collected_today: str = Form(""),
     payment_method: str = Form("cash"),
+    paid_date: str = Form(""),
     action: str = Form("pay_and_release"),
     share_ids: list[str] = Form(default=[]),
     user: dict = Depends(current_user),
@@ -723,6 +755,7 @@ def batch_pickup_settle_shares_submit(
             mark_picked_up=mark_picked,
             share_ids=sel_ids or None,
             payment_method=None if mark_picked and collected_val is None else payment_method,
+            paid_date=paid_date or None,
         )
     except ValueError as exc:
         return RedirectResponse(
@@ -794,6 +827,7 @@ def batch_pickup_settle_submit(
     customer_id: int,
     collected_today: str = Form(""),
     payment_method: str = Form("cash"),
+    paid_date: str = Form(""),
     bird_ids: list[str] = Form(default=[]),
     user: dict = Depends(current_user),
 ):
@@ -812,6 +846,7 @@ def batch_pickup_settle_submit(
             user["id"], owned_bid, customer_id,
             collected_today=collected_val, mark_paid=True, mark_picked_up=True,
             bird_ids=sel_ids or None, payment_method=payment_method,
+            paid_date=paid_date or None,
         )
     except ValueError as exc:
         return RedirectResponse(
@@ -833,21 +868,28 @@ def batch_pickup_payment_method_submit(
     batch_id: int,
     customer_id: int,
     payment_method: str = Form(""),
+    paid_date: str = Form(""),
     user: dict = Depends(current_user),
 ):
     b = _get_owned_batch(batch_id, user)
     owned_bid = int(b["id"])
+    clean_pd = normalize_paid_date(paid_date)
     try:
         if normalize_sale_unit(b.get("sale_unit")) == "shares":
-            cnt = update_customer_share_payment_method(user["id"], owned_bid, customer_id, payment_method)
+            cnt = update_customer_share_payment_details(
+                user["id"], owned_bid, customer_id, payment_method, paid_date=clean_pd
+            )
             unit_lbl = "share" if cnt == 1 else "shares"
         else:
-            cnt = update_customer_batch_payment_method(user["id"], owned_bid, customer_id, payment_method)
+            cnt = update_customer_batch_payment_details(
+                user["id"], owned_bid, customer_id, payment_method, paid_date=clean_pd
+            )
             terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
             unit_lbl = terms["singular"] if cnt == 1 else terms["plural"]
         safe_pm = _SAFE_PAYMENT_METHODS.get(payment_method.strip().lower(), "")
         lbl = safe_pm.capitalize() if safe_pm else "Untagged"
-        msg = f"Updated payment method to {lbl} ({cnt} {unit_lbl})."
+        date_bit = f" ({clean_pd})" if clean_pd else ""
+        msg = f"Updated payment to {lbl}{date_bit} ({cnt} {unit_lbl})."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(

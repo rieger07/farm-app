@@ -317,21 +317,27 @@ def import_backup_json(
                     ),
                 )
             for sale_item in item.get("sales", []):
+                alloc_t = str(sale_item.get("allocation_type", "Customer Sale"))
+                min_wt = 0.0 if alloc_t == "Live Sale" else 0.01
+                cid_raw = sale_item.get("customer_id")
+                cid_val = int(cid_raw) if cid_raw not in (None, "", 0, "0") else None
                 conn.execute(
                     """
                     INSERT INTO batch_sales (
                         batch_id, entry_date, allocation_type, weight_lbs, revenue,
-                        payment_method, notes, created_at
+                        payment_method, head_count, customer_id, notes, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_batch_id,
                         str(sale_item.get("entry_date", norm["end_date"])),
-                        str(sale_item.get("allocation_type", "Customer Sale")),
-                        max(0.01, float(sale_item.get("weight_lbs", 1.0))),
+                        alloc_t,
+                        max(min_wt, float(sale_item.get("weight_lbs", min_wt))),
                         max(0.0, float(sale_item.get("revenue", 0.0))),
                         str(sale_item.get("payment_method", "") or ""),
+                        max(0, int(sale_item.get("head_count", 0) or 0)),
+                        cid_val,
                         str(sale_item.get("notes", "")),
                         str(sale_item.get("created_at") or now_iso),
                     ),

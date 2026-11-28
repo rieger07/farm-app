@@ -307,6 +307,9 @@ def build_unified_tax_books(
         yr = _year_of(hv.get("harvest_date"))
         if yr is not None:
             years.add(yr)
+        p_yr = _year_of(hv.get("paid_at"))
+        if p_yr is not None:
+            years.add(p_yr)
     for sh in all_shares:
         yr = _year_of(sh.get("paid_at"))
         if yr is not None:
@@ -351,7 +354,7 @@ def build_unified_tax_books(
     # Cash-basis gross farm income (Homestead + Iron Ledger)
     homestead_income = 0.0
     for sa in all_sales:
-        if sa.get("allocation_type") != "Customer Sale":
+        if sa.get("allocation_type") not in ("Customer Sale", "Live Sale"):
             continue
         if tax_year is not None and _year_of(sa.get("entry_date")) != tax_year:
             continue
@@ -379,14 +382,15 @@ def build_unified_tax_books(
                 else:
                     homestead_income += round(effective_share_weight(sh, carcass_lbs) * sp, 2)
             continue
-        if tax_year is not None and _year_of(hv.get("harvest_date")) != tax_year:
-            continue
         if not bool(hv.get("for_sale", 1)):
             continue
         pay_stat = str(hv.get("payment_status") or "").lower()
         pick_stat = str(hv.get("pickup_status") or "").lower()
         actual_p = hv.get("actual_sale_price")
         if not (pay_stat == "paid" or pick_stat == "picked_up" or actual_p is not None):
+            continue
+        cash_yr = _year_of(hv.get("paid_at")) or _year_of(hv.get("harvest_date"))
+        if tax_year is not None and cash_yr != tax_year:
             continue
         if actual_p is not None:
             homestead_income += float(actual_p)
