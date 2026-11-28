@@ -46,6 +46,7 @@ from homestead.web import (
 )
 
 router = APIRouter()
+_SAFE_PAYMENT_METHODS = {pm: pm for pm in HOMESTEAD_PAYMENT_METHODS}
 
 
 def _effective_preorder_cap(batch: dict, schedule: dict | None = None) -> int:
@@ -797,6 +798,7 @@ def batch_pickup_settle_submit(
     user: dict = Depends(current_user),
 ):
     b = _get_owned_batch(batch_id, user)
+    owned_bid = int(b["id"])
     terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
     collected_val: float | None = None
     if collected_today.strip() != "":
@@ -807,20 +809,21 @@ def batch_pickup_settle_submit(
     sel_ids = [int(x) for x in bird_ids if str(x).strip().isdigit()]
     try:
         cnt = settle_customer_batch_pickup(
-            user["id"], batch_id, customer_id,
+            user["id"], owned_bid, customer_id,
             collected_today=collected_val, mark_paid=True, mark_picked_up=True,
             bird_ids=sel_ids or None, payment_method=payment_method,
         )
     except ValueError as exc:
         return RedirectResponse(
-            f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Error: {exc}"),
+            f"/batches/{owned_bid}/pickup?msg=" + quote_plus(f"Error: {exc}"),
             status_code=303,
         )
     cust = get_customer(user["id"], customer_id)
     cname = cust["name"] if cust else "Customer"
     unit_word = terms["singular"] if cnt == 1 else terms["plural"]
+    safe_pm = _SAFE_PAYMENT_METHODS.get(payment_method.strip().lower(), "cash")
     return RedirectResponse(
-        f"/batches/{batch_id}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} {unit_word}) paid & picked up ({payment_method})!"),
+        f"/batches/{owned_bid}/pickup?msg=" + quote_plus(f"Marked {cname} ({cnt} {unit_word}) paid & picked up ({safe_pm})!"),
         status_code=303,
     )
 
@@ -833,20 +836,22 @@ def batch_pickup_payment_method_submit(
     user: dict = Depends(current_user),
 ):
     b = _get_owned_batch(batch_id, user)
+    owned_bid = int(b["id"])
     try:
         if normalize_sale_unit(b.get("sale_unit")) == "shares":
-            cnt = update_customer_share_payment_method(user["id"], batch_id, customer_id, payment_method)
+            cnt = update_customer_share_payment_method(user["id"], owned_bid, customer_id, payment_method)
             unit_lbl = "share" if cnt == 1 else "shares"
         else:
-            cnt = update_customer_batch_payment_method(user["id"], batch_id, customer_id, payment_method)
+            cnt = update_customer_batch_payment_method(user["id"], owned_bid, customer_id, payment_method)
             terms = get_species_terminology(b.get("species", ""), b.get("lifecycle_type"))
             unit_lbl = terms["singular"] if cnt == 1 else terms["plural"]
-        lbl = payment_method.strip().capitalize() if payment_method.strip() else "Untagged"
+        safe_pm = _SAFE_PAYMENT_METHODS.get(payment_method.strip().lower(), "")
+        lbl = safe_pm.capitalize() if safe_pm else "Untagged"
         msg = f"Updated payment method to {lbl} ({cnt} {unit_lbl})."
     except ValueError as exc:
         msg = f"Error: {exc}"
     return RedirectResponse(
-        f"/batches/{batch_id}/pickup?msg=" + quote_plus(msg),
+        f"/batches/{owned_bid}/pickup?msg=" + quote_plus(msg),
         status_code=303,
     )
 

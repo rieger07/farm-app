@@ -477,7 +477,13 @@ function renderTally(t) {
   tb.innerHTML = '';
   const visible = t.entries.filter(matchesFilter);
   if (!visible.length) {
-    tb.innerHTML = `<tr><td colspan="5" class="empty">No ${UNIT.plural} match this filter.</td></tr>`;
+    const emptyTr = document.createElement('tr');
+    const emptyTd = document.createElement('td');
+    emptyTd.colSpan = 5;
+    emptyTd.className = 'empty';
+    emptyTd.textContent = `No ${UNIT.plural} match this filter.`;
+    emptyTr.appendChild(emptyTd);
+    tb.appendChild(emptyTr);
     return;
   }
   visible.forEach(e => {
