@@ -3835,6 +3835,272 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("trait-pill-trigger", mill_html)
         self.assertIn('role="tooltip"', mill_html)
 
+    def test_farm_team_notes_markdown_checklists_comments_roles_radar_and_ntfy(self):
+        from unittest.mock import patch
+
+        from homestead.db.batches import list_batches
+        from homestead.db.herds import list_herds
+        from homestead.db.notes import (
+            get_farm_note,
+            list_farm_notes,
+            parse_note_body,
+            reset_checklist_in_body,
+            sanitize_note_url,
+            toggle_checklist_item_in_body,
+        )
+        from homestead.ntfy import save_ntfy_config
+
+        # 1. Unit checks on Markdown parser, URL sanitizer, and checklist helpers
+        self.assertEqual(sanitize_note_url("javascript:alert(1)"), "")
+        self.assertEqual(sanitize_note_url("data:text/html,<script>"), "")
+        self.assertEqual(sanitize_note_url("https://example.com/guide"), "https://example.com/guide")
+
+        sample_md = (
+            "# Morning SOP\n"
+            "Check **water** and *feed* `barrel-1`.\n"
+            "Bad <script>alert(1)</script> [click](javascript:alert(2)) [vet](https://vet.example/doc)\n"
+            "- [ ] Refill waterers\n"
+            "- [x] Check heat lamp\n"
+            "- Sweep aisle\n"
+        )
+        blocks, done, total = parse_note_body(sample_md)
+        self.assertEqual((done, total), (1, 2))
+        self.assertEqual([b["type"] for b in blocks], ["heading", "p", "checklist", "ul"])
+
+        toggled, is_chk, d2, t2 = toggle_checklist_item_in_body(sample_md, 0)
+        self.assertTrue(is_chk)
+        self.assertEqual((d2, t2), (2, 2))
+        reset_txt, rst_cnt = reset_checklist_in_body(toggled)
+        self.assertEqual(rst_cnt, 2)
+        self.assertEqual(parse_note_body(reset_txt)[1:], (0, 2))
+
+        # 2. Seed owner, manager, staff, active batch, active herd & ntfy config
+        self.c.post(
+            "/register",
+            data={"display_name": "Steve", "username": "steve", "password": "secret"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/settings/members",
+            data={"username": "sarah", "display_name": "Sarah", "password": "secret", "role": "manager"},
+            follow_redirects=False,
+        )
+        self.c.post(
+            "/settings/members",
+            data={"username": "mom", "display_name": "Mom", "password": "secret", "role": "staff"},
+            follow_redirects=False,
+        )
+        save_ntfy_config(1, "https://ntfy.sh", "ironclad-farm-test")
+
+        self.c.post(
+            "/batches/save",
+            data={
+                "name": "Fall Broilers",
+                "species": "chicken chicks",
+                "start_date": "2026-11-01",
+                "initial_quantity": "20",
+            },
+            follow_redirects=False,
+        )
+        batch_id = int(list_batches(user_id=1)[0]["id"])
+        self.c.post(
+            "/herds/save",
+            data={"name": "Alpaca Herd", "species": "alpaca", "herd_type": "fiber", "head_count": "2"},
+            follow_redirects=False,
+        )
+        herd_id = int(list_herds(1)[0]["id"])
+
+        # 3. Post pinned SOP note with checklist, batch+herd links, XSS payload, and notify_team=1
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
+            r_post = self.c.post(
+                "/notes/save",
+                data={
+                    "title": "Morning Coop & Brooder SOP",
+                    "category": "sop",
+                    "batch_id": str(batch_id),
+                    "herd_id": str(herd_id),
+                    "pinned": "1",
+                    "notify_team": "1",
+                    "body": (
+                        "## Steps\n"
+                        "- [ ] Refresh brooder water\n"
+                        "- [ ] Check **brooder** lamp\n\n"
+                        "See <script>alert(1)</script> [bad](javascript:alert(1)) https://example.com/sop"
+                    ),
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(r_post.status_code, 303)
+            mock_ntfy.assert_called_once()
+            self.assertIn("Morning Coop & Brooder SOP", mock_ntfy.call_args[0][1])
+
+        notes = list_farm_notes(1)
+        self.assertEqual(len(notes), 1)
+        sop_id = notes[0]["id"]
+
+        # Unchecked notify_team does NOT call ntfy; invalid attachment URL rejected cleanly
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
+            self.c.post(
+                "/notes/save",
+                data={"title": "Fence check needed", "category": "maintenance", "body": "- Fix gate latch"},
+                follow_redirects=False,
+            )
+            mock_ntfy.assert_not_called()
+
+        r_bad_url = self.c.post(
+            "/notes/save",
+            data={"title": "Bad attachment", "category": "general", "attachment_url": "javascript:alert(1)"},
+            follow_redirects=False,
+        )
+        self.assertIn("Error", r_bad_url.headers["location"])
+
+        # Verify Markdown & XSS neutralization + Radar Pinned Team Notes card
+        notes_html = self.c.get("/notes").text
+        self.assertIn("Morning Coop &amp; Brooder SOP", notes_html)
+        self.assertIn("0/2 done", notes_html)
+        self.assertIn("Batch: Fall Broilers", notes_html)
+        self.assertIn("Herd: Alpaca Herd", notes_html)
+        self.assertNotIn("<script>alert(1)</script>", notes_html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", notes_html)
+        self.assertNotIn('href="javascript:', notes_html)
+        self.assertIn('href="https://example.com/sop"', notes_html)
+
+        radar_html = self.c.get("/").text
+        self.assertIn("Pinned Team Notes", radar_html)
+        self.assertIn("Morning Coop &amp; Brooder SOP", radar_html)
+        self.assertIn("0/2 done", radar_html)
+
+        # 4. Staff access & permissions: Farm links to /notes, Feed/Financials/Settings stay 403
+        c_staff = TestClient(app)
+        c_staff.post("/login", data={"username": "mom", "password": "secret"}, follow_redirects=False)
+        staff_radar = c_staff.get("/").text
+        self.assertIn('href="/notes"', staff_radar)
+        self.assertNotIn('href="/financials"', staff_radar)
+
+        staff_notes_resp = c_staff.get("/notes")
+        self.assertEqual(staff_notes_resp.status_code, 200)
+        self.assertIn("Team Notes", staff_notes_resp.text)
+        self.assertNotIn("Feed Schedule", staff_notes_resp.text)
+        self.assertNotIn("Financials &amp; Taxes", staff_notes_resp.text)
+        self.assertNotIn("Settings &amp; Team", staff_notes_resp.text)
+        self.assertEqual(c_staff.get("/feed").status_code, 403)
+        self.assertEqual(c_staff.get("/financials").status_code, 403)
+        self.assertEqual(c_staff.get("/settings").status_code, 403)
+
+        # Staff can toggle checklist items on owner's SOP and reset checklist
+        tog1 = c_staff.post(f"/api/notes/{sop_id}/checklist/0/toggle")
+        self.assertEqual(tog1.status_code, 200)
+        d_tog = tog1.json()
+        self.assertTrue(d_tog["checked"])
+        self.assertEqual((d_tog["done"], d_tog["total"]), (1, 2))
+        self.assertEqual(d_tog["updated_by_name"], "Mom")
+
+        r_rst = c_staff.post(f"/notes/{sop_id}/reset-checklist", follow_redirects=False)
+        self.assertEqual(r_rst.status_code, 303)
+        self.assertEqual(get_farm_note(1, sop_id)["check_done"], 0)
+
+        # Staff cannot edit, pin, archive, or delete owner's note -> 403
+        self.assertEqual(
+            c_staff.post(f"/notes/save", data={"note_id": str(sop_id), "title": "Hijacked"}, follow_redirects=False).status_code,
+            403,
+        )
+        self.assertEqual(c_staff.post(f"/notes/{sop_id}/pin", data={"pinned": "0"}, follow_redirects=False).status_code, 403)
+        self.assertEqual(c_staff.post(f"/notes/{sop_id}/archive", data={"archived": "1"}, follow_redirects=False).status_code, 403)
+        self.assertEqual(c_staff.post(f"/notes/{sop_id}/delete", follow_redirects=False).status_code, 403)
+
+        # Staff CAN create, edit, and reply with their own note (pin flag ignored for staff)
+        c_staff.post(
+            "/notes/save",
+            data={"title": "Mom afternoon check", "category": "chores", "pinned": "1", "body": "All hens fed"},
+            follow_redirects=False,
+        )
+        mom_note = next(n for n in list_farm_notes(1) if n["title"] == "Mom afternoon check")
+        self.assertFalse(mom_note["pinned"])
+        self.assertEqual(
+            c_staff.post(
+                "/notes/save",
+                data={"note_id": str(mom_note["id"]), "title": "Mom afternoon check updated", "body": "All fed & watered"},
+                follow_redirects=False,
+            ).status_code,
+            303,
+        )
+
+        # 5. Comments + optional ntfy reply + role delete rules + search + archive
+        with patch("homestead.ntfy.send_ntfy_async") as mock_ntfy:
+            c_staff.post(
+                f"/notes/{sop_id}/comments/add",
+                data={"body": "Finished Tuesday morning check!", "notify_team": "1"},
+                follow_redirects=False,
+            )
+            mock_ntfy.assert_called_once()
+            self.assertIn("Reply on: Morning Coop & Brooder SOP", mock_ntfy.call_args[0][1])
+
+        self.c.post(
+            f"/notes/{sop_id}/comments/add",
+            data={"body": "Thanks Mom, refill barrel tomorrow."},
+            follow_redirects=False,
+        )
+        sop_full = get_farm_note(1, sop_id)
+        self.assertEqual(len(sop_full["comments"]), 2)
+        mom_comment_id = sop_full["comments"][0]["id"]
+        steve_comment_id = sop_full["comments"][1]["id"]
+
+        # Staff cannot delete owner's reply (403), CAN delete own reply (303)
+        self.assertEqual(
+            c_staff.post(f"/notes/{sop_id}/comments/{steve_comment_id}/delete", follow_redirects=False).status_code,
+            403,
+        )
+        self.assertEqual(
+            c_staff.post(f"/notes/{sop_id}/comments/{mom_comment_id}/delete", follow_redirects=False).status_code,
+            303,
+        )
+
+        # Manager CAN edit/pin/archive staff note and view Farm subnav
+        c_mgr = TestClient(app)
+        c_mgr.post("/login", data={"username": "sarah", "password": "secret"}, follow_redirects=False)
+        mgr_notes = c_mgr.get("/notes")
+        self.assertEqual(mgr_notes.status_code, 200)
+        self.assertIn("Feed Schedule", mgr_notes.text)
+        self.assertIn("Team Notes", mgr_notes.text)
+        self.assertNotIn("Settings &amp; Team", mgr_notes.text)
+        self.assertEqual(
+            c_mgr.post(f"/notes/{mom_note['id']}/pin", data={"pinned": "1"}, follow_redirects=False).status_code,
+            303,
+        )
+        self.assertTrue(get_farm_note(1, mom_note["id"])["pinned"])
+        self.assertEqual(
+            c_mgr.post(f"/notes/{mom_note['id']}/archive", data={"archived": "1"}, follow_redirects=False).status_code,
+            303,
+        )
+        self.assertFalse(get_farm_note(1, mom_note["id"])["pinned"])
+        self.assertTrue(get_farm_note(1, mom_note["id"])["archived"])
+
+        # Category filter, search (matching comment body), and archived toggle
+        search_html = self.c.get("/notes?category=sop&q=refill").text
+        self.assertIn("Morning Coop &amp; Brooder SOP", search_html)
+        self.assertNotIn("Fence check needed", search_html)
+        arch_html = self.c.get("/notes?archived=1").text
+        self.assertIn("Mom afternoon check updated", arch_html)
+
+        # 6. Cross-workspace isolation -> 404
+        self.c.post(
+            "/settings/admin/users",
+            data={"username": "other", "display_name": "Other Farm", "password": "secret"},
+            follow_redirects=False,
+        )
+        c_other = TestClient(app)
+        c_other.post("/login", data={"username": "other", "password": "secret"}, follow_redirects=False)
+        self.assertEqual(c_other.post(f"/api/notes/{sop_id}/checklist/0/toggle").status_code, 404)
+        self.assertEqual(
+            c_other.post("/notes/save", data={"note_id": str(sop_id), "title": "Nope"}, follow_redirects=False).status_code,
+            404,
+        )
+        self.assertEqual(
+            c_other.post(f"/notes/{sop_id}/comments/add", data={"body": "Nope"}, follow_redirects=False).status_code,
+            404,
+        )
+        self.assertEqual(c_other.post(f"/notes/{sop_id}/delete", follow_redirects=False).status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

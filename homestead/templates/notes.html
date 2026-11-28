@@ -1,0 +1,365 @@
+{% extends "base.html" %}
+{% block title %}Team Notes · Homestead Planner{% endblock %}
+{% block content %}
+{% macro render_runs(runs) -%}
+{%- for r in runs -%}
+{%- if r.type == 'link' -%}<a href="{{ r.href }}" target="_blank" rel="noopener">{{ r.text }}</a>
+{%- elif r.type == 'bold' -%}<b>{{ r.text }}</b>
+{%- elif r.type == 'italic' -%}<em>{{ r.text }}</em>
+{%- elif r.type == 'code' -%}<code>{{ r.text }}</code>
+{%- else -%}{{ r.text }}{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro render_blocks(note_id, blocks, archived) %}
+{% for blk in blocks %}
+  {% if blk.type == 'heading' %}
+    {% if blk.level == 1 %}<h3>{{ render_runs(blk.runs) }}</h3>
+    {% elif blk.level == 2 %}<h4>{{ render_runs(blk.runs) }}</h4>
+    {% else %}<h5>{{ render_runs(blk.runs) }}</h5>{% endif %}
+  {% elif blk.type == 'checklist' %}
+    <div class="note-checklist">
+      {% for item in blk['items'] %}
+      <label class="note-check-item{{ ' done' if item.checked }}">
+        <input type="checkbox"
+               data-note-id="{{ note_id }}"
+               data-item-idx="{{ item.idx }}"
+               {{ 'checked' if item.checked }}
+               {{ 'disabled' if archived }}
+               onchange="toggleNoteCheck(this)">
+        <span>{{ render_runs(item.runs) }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  {% elif blk.type == 'ul' %}
+    <ul>
+      {% for li in blk['items'] %}<li>{{ render_runs(li) }}</li>{% endfor %}
+    </ul>
+  {% elif blk.type == 'p' %}
+    <p>{% for line_runs in blk.lines %}{% if not loop.first %}<br>{% endif %}{{ render_runs(line_runs) }}{% endfor %}</p>
+  {% endif %}
+{% endfor %}
+{% endmacro %}
+
+<div class="eyebrow">FARM TEAM HANDBOOK &amp; SHIFT HANDOFF</div>
+<div class="pagehead">
+  <div>
+    <h1>Team Notes</h1>
+    <p class="sub">Living SOPs, reusable chore checklists, vet notes, and team replies across everyone on the farm.</p>
+  </div>
+  <div class="row">
+    <button type="button" class="btn primary" onclick="openNewNoteModal()">+ New Note / SOP</button>
+  </div>
+</div>
+
+{% if msg %}<div class="notice{{ ' err' if msg.startswith('Error:') else '' }}">{{ msg }}</div>{% endif %}
+
+<div class="card mb-md">
+  <div class="flex-between mb-sm" style="gap:10px;flex-wrap:wrap">
+    <div class="seg-group" role="tablist" aria-label="Note categories">
+      <a href="/notes?q={{ filter_query|urlencode }}{% if show_archived %}&amp;archived=1{% endif %}"
+         class="seg-btn{{ ' on' if not filter_category }}">
+        <span>All</span>
+        <span class="seg-badge">{{ category_counts.all }}</span>
+      </a>
+      {% for ckey, clbl, _ in note_categories %}
+      <a href="/notes?category={{ ckey }}{% if filter_query %}&amp;q={{ filter_query|urlencode }}{% endif %}{% if show_archived %}&amp;archived=1{% endif %}"
+         class="seg-btn{{ ' on' if filter_category == ckey }}">
+        <span>{{ clbl }}</span>
+        <span class="seg-badge">{{ category_counts[ckey] }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  <form method="get" action="/notes" class="row" style="gap:8px;flex-wrap:wrap">
+    {% if filter_category %}<input type="hidden" name="category" value="{{ filter_category }}">{% endif %}
+    <input type="search" name="q" value="{{ filter_query }}" class="search-input"
+           placeholder="Search titles, SOP steps, or replies…">
+    <label class="check-row" style="font-size:13px">
+      <input type="checkbox" name="archived" value="1" {{ 'checked' if show_archived }} onchange="this.form.submit()">
+      <span>Show archived</span>
+    </label>
+    <button type="submit" class="btn sm">Filter</button>
+    {% if filter_category or filter_query or show_archived %}
+    <a href="/notes" class="btn sm">Reset</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if notes %}
+<div class="stack">
+  {% for n in notes %}
+  <article class="card note-card{{ ' is-pinned' if n.pinned }}{{ ' is-archived' if n.archived }}" id="note-{{ n.id }}">
+    <div class="note-head">
+      <div class="note-tags">
+        <span class="pill {{ n.category_pill }}">{{ n.category_label }}</span>
+        {% if n.pinned %}<span class="pill green">Pinned</span>{% endif %}
+        {% if n.archived %}<span class="pill gray">Archived</span>{% endif %}
+        {% if n.check_total > 0 %}
+        <span class="pill {{ 'green' if n.check_done == n.check_total else 'gray' }}" id="note-prog-{{ n.id }}">{{ n.check_done }}/{{ n.check_total }} done</span>
+        {% endif %}
+        {% if n.batch_id and n.batch_name %}
+        <a href="/batches/{{ n.batch_id }}" class="pill gray" style="text-decoration:none">Batch: {{ n.batch_name }}</a>
+        {% endif %}
+        {% if n.herd_id and n.herd_name %}
+        <a href="/herds?herd_id={{ n.herd_id }}" class="pill gray" style="text-decoration:none">Herd: {{ n.herd_name }}</a>
+        {% endif %}
+      </div>
+
+      <div class="note-actions">
+        {% if n.check_total > 0 and not n.archived %}
+        <form method="post" action="/notes/{{ n.id }}/reset-checklist" class="inline-form"
+              id="note-reset-wrap-{{ n.id }}" {{ 'hidden' if n.check_done == 0 }}>
+          <button type="submit" class="btn sm">Reset checklist</button>
+        </form>
+        {% endif %}
+        {% if can_manage and not n.archived %}
+        <form method="post" action="/notes/{{ n.id }}/pin" class="inline-form">
+          <input type="hidden" name="pinned" value="{{ 0 if n.pinned else 1 }}">
+          <button type="submit" class="btn sm">{{ 'Unpin' if n.pinned else 'Pin' }}</button>
+        </form>
+        {% endif %}
+        {% if can_manage or n.created_by == actor_id %}
+        <button type="button" class="btn sm" onclick='openEditNoteModal({{ n|tojson }})'>Edit</button>
+        <form method="post" action="/notes/{{ n.id }}/archive" class="inline-form">
+          <input type="hidden" name="archived" value="{{ 0 if n.archived else 1 }}">
+          <button type="submit" class="btn sm">{{ 'Restore' if n.archived else 'Archive' }}</button>
+        </form>
+        <form method="post" action="/notes/{{ n.id }}/delete" class="inline-form"
+              onsubmit="return confirm('Delete this note and its replies?')">
+          <button type="submit" class="btn sm danger">Delete</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <h2 class="note-title">{{ n.title }}</h2>
+    <div class="note-meta">
+      Posted by <b>{{ n.author_name }}</b> · {{ n.created_at_short }}
+      <span id="note-edited-{{ n.id }}">{% if n.was_edited %} · Last edited by <b>{{ n.updated_by_name }}</b> ({{ n.updated_at_short }}){% endif %}</span>
+      {% if n.attachment_url %} · <a href="{{ n.attachment_url }}" target="_blank" rel="noopener">Attachment ↗</a>{% endif %}
+    </div>
+
+    {% if n.blocks %}
+    <div class="note-body">
+      {{ render_blocks(n.id, n.blocks, n.archived) }}
+    </div>
+    {% endif %}
+
+    <details class="note-comments"{{ ' open' if n.comments }}>
+      <summary>Replies ({{ n.comments|length }})</summary>
+      {% if n.comments %}
+      <div class="note-comment-list">
+        {% for c in n.comments %}
+        <div class="note-comment-row">
+          <div>
+            <b>{{ c.author_name }}</b> <small class="inline muted">· {{ c.created_at_short }}</small>
+            <div>{{ c.body }}</div>
+          </div>
+          {% if can_manage or c.author_id == actor_id %}
+          <form method="post" action="/notes/{{ n.id }}/comments/{{ c.id }}/delete" class="inline-form"
+                onsubmit="return confirm('Remove this reply?')">
+            <button type="submit" class="link text-red" style="padding:0">Remove</button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <form method="post" action="/notes/{{ n.id }}/comments/add" class="note-comment-form">
+        <input type="text" name="body" placeholder="Add a handoff update or reply…" required maxlength="2000">
+        {% if ntfy_configured %}
+        <label class="check-row" style="font-size:12px">
+          <input type="checkbox" name="notify_team" value="1">
+          <span>Notify ntfy</span>
+        </label>
+        {% endif %}
+        <button type="submit" class="btn sm primary">Reply</button>
+      </form>
+    </details>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">
+  No shared notes match this view yet. Click <b>+ New Note / SOP</b> to post a barn handoff, chore checklist, or living farm guide.
+</div>
+{% endif %}
+
+<dialog id="dlg-note">
+  <div class="modal-head">
+    <h2 id="nm-title">New Team Note</h2>
+    <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button>
+  </div>
+  <form method="post" action="/notes/save" enctype="multipart/form-data" class="fgrid">
+    <input type="hidden" name="note_id" id="nm-id">
+    <label class="full">Title
+      <input name="title" id="nm-title-in" placeholder="e.g. Morning Coop &amp; Brooder Routine" required maxlength="140">
+    </label>
+    <label>Category
+      <select name="category" id="nm-category">
+        {% for ckey, clbl, _ in note_categories %}
+        <option value="{{ ckey }}">{{ clbl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Link to Batch (optional)
+      <select name="batch_id" id="nm-batch">
+        <option value="">— None —</option>
+        {% for b in active_batches %}
+        <option value="{{ b.id }}">{{ b.name }} ({{ b.species|species_name }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="full">Link to Perennial Herd (optional)
+      <select name="herd_id" id="nm-herd">
+        <option value="">— None —</option>
+        {% for h in active_herds %}
+        <option value="{{ h.id }}">{{ h.name }} ({{ h.species_label }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="full">
+      <div class="note-toolbar">
+        <span style="font-size:13px">Note Content / Checklist</span>
+        <button type="button" class="btn sm" onclick="appendChecklistLine()">+ Add checklist item</button>
+      </div>
+      <textarea name="body" id="nm-body" rows="7" placeholder="## Barn Chores&#10;- [ ] Refresh brooder waterers&#10;- [ ] Check heat lamp height&#10;&#10;**Note:** Keep feed barrels latched." style="width:100%;box-sizing:border-box"></textarea>
+      <small class="muted mt-sm">Supports <code># Heading</code>, <code>**bold**</code>, <code>*italic*</code>, <code>`code`</code>, <code>- bullet</code>, links, and tappable <code>- [ ] checklist item</code>.</small>
+    </div>
+    <div class="full" id="nm-att-existing" hidden>
+      <small class="muted">Current attachment: <a id="nm-att-link" href="#" target="_blank" rel="noopener">View ↗</a></small>
+      <label class="check-row mt-sm" style="font-size:13px">
+        <input type="checkbox" name="clear_attachment" id="nm-clear-att" value="1">
+        <span>Remove existing attachment</span>
+      </label>
+    </div>
+    <label>{% if gdrive_connected %}Photo / PDF (→ Drive){% else %}Attachment Photo / PDF{% endif %}
+      <input type="file" name="attachment_file" id="nm-att-file" accept="image/*,.pdf">
+    </label>
+    <label>Or Attachment URL
+      <input type="url" name="attachment_url" id="nm-att-url" placeholder="https://...">
+    </label>
+    {% if can_manage %}
+    <label class="full check-row">
+      <input type="checkbox" name="pinned" id="nm-pinned" value="1">
+      <span>Pin to top &amp; show on Today Radar</span>
+    </label>
+    {% endif %}
+    {% if ntfy_configured %}
+    <label class="full check-row" id="nm-notify-wrap">
+      <input type="checkbox" name="notify_team" id="nm-notify" value="1">
+      <span>Notify team via ntfy</span>
+    </label>
+    {% endif %}
+    <div class="row full mt-sm" style="justify-content:flex-end">
+      <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn primary" id="nm-submit">Post note</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+function openNewNoteModal() {
+  document.getElementById('nm-title').textContent = 'New Team Note';
+  document.getElementById('nm-id').value = '';
+  document.getElementById('nm-title-in').value = '';
+  document.getElementById('nm-category').value = 'general';
+  document.getElementById('nm-batch').value = '';
+  document.getElementById('nm-herd').value = '';
+  document.getElementById('nm-body').value = '';
+  document.getElementById('nm-att-url').value = '';
+  document.getElementById('nm-att-file').value = '';
+  document.getElementById('nm-att-existing').hidden = true;
+  document.getElementById('nm-clear-att').checked = false;
+  const pinCb = document.getElementById('nm-pinned');
+  if (pinCb) pinCb.checked = false;
+  const ntfyWrap = document.getElementById('nm-notify-wrap');
+  const ntfyCb = document.getElementById('nm-notify');
+  if (ntfyWrap) ntfyWrap.hidden = false;
+  if (ntfyCb) ntfyCb.checked = false;
+  document.getElementById('nm-submit').textContent = 'Post note';
+  document.getElementById('dlg-note').showModal();
+  document.getElementById('nm-title-in').focus();
+}
+
+function openEditNoteModal(n) {
+  document.getElementById('nm-title').textContent = 'Edit Team Note';
+  document.getElementById('nm-id').value = n.id;
+  document.getElementById('nm-title-in').value = n.title || '';
+  document.getElementById('nm-category').value = n.category || 'general';
+  document.getElementById('nm-batch').value = n.batch_id ? String(n.batch_id) : '';
+  document.getElementById('nm-herd').value = n.herd_id ? String(n.herd_id) : '';
+  document.getElementById('nm-body').value = n.body || '';
+  document.getElementById('nm-att-url').value = '';
+  document.getElementById('nm-att-file').value = '';
+  document.getElementById('nm-clear-att').checked = false;
+  const attWrap = document.getElementById('nm-att-existing');
+  const attLink = document.getElementById('nm-att-link');
+  let safeAttHref = '';
+  if (n.attachment_url) {
+    try {
+      const parsed = new URL(String(n.attachment_url));
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        safeAttHref = parsed.href;
+      }
+    } catch (_) {}
+  }
+  if (safeAttHref) {
+    attLink.setAttribute('href', safeAttHref);
+    attWrap.hidden = false;
+  } else {
+    attLink.setAttribute('href', '#');
+    attWrap.hidden = true;
+  }
+  const pinCb = document.getElementById('nm-pinned');
+  if (pinCb) pinCb.checked = Boolean(n.pinned);
+  const ntfyWrap = document.getElementById('nm-notify-wrap');
+  if (ntfyWrap) ntfyWrap.hidden = true;
+  document.getElementById('nm-submit').textContent = 'Save changes';
+  document.getElementById('dlg-note').showModal();
+  document.getElementById('nm-title-in').focus();
+}
+
+function appendChecklistLine() {
+  const ta = document.getElementById('nm-body');
+  if (!ta) return;
+  const cur = ta.value;
+  const prefix = cur && !cur.endsWith('\n') ? '\n' : '';
+  ta.value = cur + prefix + '- [ ] ';
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+async function toggleNoteCheck(cb) {
+  const noteId = cb.dataset.noteId;
+  const idx = cb.dataset.itemIdx;
+  if (!noteId || idx === undefined) return;
+  const prev = !cb.checked;
+  cb.disabled = true;
+  try {
+    const resp = await fetch(`/api/notes/${noteId}/checklist/${idx}/toggle`, { method: 'POST' });
+    if (!resp.ok) throw new Error('Failed to update checklist.');
+    const data = await resp.json();
+    const row = cb.closest('.note-check-item');
+    if (row) row.classList.toggle('done', Boolean(data.checked));
+    const prog = document.getElementById(`note-prog-${noteId}`);
+    if (prog) {
+      prog.textContent = `${data.done}/${data.total} done`;
+      prog.classList.toggle('green', data.done === data.total && data.total > 0);
+      prog.classList.toggle('gray', !(data.done === data.total && data.total > 0));
+    }
+    const resetWrap = document.getElementById(`note-reset-wrap-${noteId}`);
+    if (resetWrap) resetWrap.hidden = data.done === 0;
+    const edited = document.getElementById(`note-edited-${noteId}`);
+    if (edited && data.updated_by_name) {
+      edited.textContent = ` · Last edited by ${data.updated_by_name} (${data.updated_at_short})`;
+    }
+  } catch (err) {
+    cb.checked = prev;
+  } finally {
+    cb.disabled = false;
+  }
+}
+</script>
+{% endblock %}

@@ -10,6 +10,7 @@ from homestead.calendar_export import generate_ics_calendar
 from homestead.db.batches import acknowledge_milestone, list_acknowledged_milestones
 from homestead.db.core import get_bag_weight, get_species_catalog
 from homestead.db.eggs import compute_egg_dashboard
+from homestead.db.notes import list_farm_notes
 from homestead.scheduling import compute_upcoming_milestones
 from homestead.web import (
     _get_owned_batch,
@@ -82,6 +83,9 @@ def radar_page(request: Request, msg: str = "", user: dict | None = Depends(opti
         bag_weight=get_bag_weight(user_id=user["id"]),
         egg_dash=compute_egg_dashboard(user["id"], bag_weight=get_bag_weight(user_id=user["id"])),
         species_catalog=get_species_catalog(user_id=user["id"]),
+        pinned_notes=list_farm_notes(
+            user["id"], pinned_only=True, include_archived=False, include_comments=False
+        ),
         msg=msg,
     )
 
