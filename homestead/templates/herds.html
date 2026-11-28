@@ -24,6 +24,42 @@
   </div>
 </div>
 {% endmacro %}
+{% macro fleece_factor_chips(factors, cb_class, label_text, include_submitted=False) %}
+<div>
+  {% if include_submitted %}<input type="hidden" name="fleece_factors_submitted" value="1">{% endif %}
+  <div class="fleece-factors-head">
+    <span class="fleece-field-label">{{ label_text }}</span>
+    <small class="inline muted">Hover a trait for quick rule</small>
+  </div>
+  <div class="fleece-factors-wrap">
+    {% for fkey, flbl, fhint in factors %}
+    <span class="trait-chip-wrap">
+      <label class="tag-chip">
+        <input type="checkbox" name="fleece_factors" class="{{ cb_class }}" value="{{ fkey }}">
+        <span>{{ flbl }}</span>
+      </label>
+      <span class="trait-tip" role="tooltip"><b>{{ flbl }}</b>{{ fhint }}</span>
+    </span>
+    {% endfor %}
+  </div>
+  <details class="trait-guide">
+    <summary>Trait guide</summary>
+    <div class="trait-guide-list">
+      {% for _, flbl, fhint in factors %}
+      <div><b>{{ flbl }}:</b> {{ fhint }}</div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endmacro %}
+{% macro trait_pill(lbl, hints) %}
+{% set tip = hints.get(lbl, '') %}
+{% if tip %}
+<span class="trait-chip-wrap" tabindex="0"><span class="pill gray trait-pill-trigger">{{ lbl }}</span><span class="trait-tip" role="tooltip"><b>{{ lbl }}</b>{{ tip }}</span></span>
+{% else %}
+<span class="pill gray">{{ lbl }}</span>
+{% endif %}
+{% endmacro %}
 <div class="eyebrow">BREEDING STOCK &amp; FIBER HERDS</div>
 <div class="pagehead">
   <div>
@@ -154,16 +190,7 @@
         {{ fleece_color_picker('sh', 'fleece_color', alpaca_colors) }}
       </div>
       <div class="full">
-        <input type="hidden" name="fleece_factors_submitted" value="1">
-        <span class="fleece-field-label">Markings &amp; Clip Factors</span>
-        <div class="fleece-factors-wrap">
-          {% for fkey, flbl, fhint in alpaca_shearing_factors %}
-          <label class="tag-chip" title="{{ fhint }}">
-            <input type="checkbox" name="fleece_factors" class="sh-factor-cb" value="{{ fkey }}">
-            <span>{{ flbl }}</span>
-          </label>
-          {% endfor %}
-        </div>
+        {{ fleece_factor_chips(alpaca_shearing_factors, 'sh-factor-cb', 'Markings & Clip Factors', include_submitted=True) }}
       </div>
       {% else %}
       <label>Fleece Color
@@ -216,7 +243,7 @@
           <div>
             <span class="fleece-pill"><span class="fleece-dot" data-swatch="{{ sh.color_code }}"></span>{{ sh.fleece_color or 'Unspecified' }}</span>
             {% if sh.fiber_grade_label %}<span class="pill blue">{{ sh.fiber_grade_label }}</span>{% endif %}
-            {% for flbl in sh.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
+            {% for flbl in sh.fleece_factor_labels %}{{ trait_pill(flbl, alpaca_factor_hints) }}{% endfor %}
             · Allocated to mill: {{ '%.2f'|format(sh.allocated_lbs) }} lb
             {% if sh.shearing_fee > 0 %} · Shearer fee: {{ sh.shearing_fee|money }}{% endif %}
             {% if sh.notes %}<br>{{ sh.notes }}{% endif %}
@@ -312,7 +339,7 @@
               <b>{{ sh.animal_name or 'Herd Clip' }}</b>
               {% if sh.fleece_color %}<span class="fleece-pill"><span class="fleece-dot" data-swatch="{{ sh.color_code }}"></span>{{ sh.fleece_color }}</span>{% endif %}
               {% if sh.fiber_grade_label %}<span class="pill blue">{{ sh.fiber_grade_label }}</span>{% endif %}
-              {% for flbl in sh.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
+              {% for flbl in sh.fleece_factor_labels %}{{ trait_pill(flbl, alpaca_factor_hints) }}{% endfor %}
               <small class="inline muted">· {{ sh.shear_date }} · {{ '%.2f'|format(sh.remaining_lbs) }} lb available</small>
             </span>
           </label>
@@ -633,15 +660,7 @@
         {{ fleece_color_picker('anm', 'color', alpaca_colors) }}
       </div>
       <div class="full">
-        <span class="fleece-field-label">Markings &amp; Fleece Factors</span>
-        <div class="fleece-factors-wrap">
-          {% for fkey, flbl, fhint in alpaca_animal_factors %}
-          <label class="tag-chip" title="{{ fhint }}">
-            <input type="checkbox" name="fleece_factors" class="anm-factor-cb" value="{{ fkey }}">
-            <span>{{ flbl }}</span>
-          </label>
-          {% endfor %}
-        </div>
+        {{ fleece_factor_chips(alpaca_animal_factors, 'anm-factor-cb', 'Markings & Fleece Factors') }}
       </div>
       {% else %}
       <label>Color / Markings<input name="color" id="anm-color" placeholder="Black &amp; White…"></label>
@@ -678,7 +697,7 @@
           <div>
             {% if a.fleece_factor_labels %}
             <div class="row mb-sm" style="gap:4px">
-              {% for flbl in a.fleece_factor_labels %}<span class="pill gray">{{ flbl }}</span>{% endfor %}
+              {% for flbl in a.fleece_factor_labels %}{{ trait_pill(flbl, alpaca_factor_hints) }}{% endfor %}
             </div>
             {% endif %}
             {% if a.notes %}{{ a.notes }}{% else %}<small class="muted">No notes yet.</small>{% endif %}
@@ -967,5 +986,13 @@ const mlColorEl = document.getElementById('ml-color-group');
 if (mlColorEl) {
   mlColorEl.addEventListener('input', () => { mlColorEl.dataset.manual = mlColorEl.value.trim() ? '1' : ''; });
 }
+document.querySelectorAll('.trait-chip-wrap').forEach(wrap => {
+  const alignTip = () => {
+    const rect = wrap.getBoundingClientRect();
+    wrap.classList.toggle('tip-right', rect.left + 264 > window.innerWidth - 12);
+  };
+  wrap.addEventListener('mouseenter', alignTip);
+  wrap.addEventListener('focusin', alignTip);
+});
 </script>
 {% endblock %}

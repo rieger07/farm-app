@@ -3724,6 +3724,15 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Grade 2 · Baby", alp_overview)
         self.assertIn("Tuxedoed", alp_overview)
         self.assertIn("Suri", alp_overview)
+        self.assertIn('role="tooltip"', alp_overview)
+        self.assertIn("trait-tip", alp_overview)
+        self.assertIn("Trait guide", alp_overview)
+        self.assertIn("white face, white legs/socks", alp_overview)
+        self.assertIn("Multi/Fancy covers 3+ colors", alp_overview)
+        self.assertIn("6 or more distinct spots", alp_overview)
+        self.assertIn("modern grey", alp_overview)
+        self.assertIn("dreadlocks", alp_overview)
+        self.assertIn("next-to-skin yarn", alp_overview)
 
         # Breeding Pigs Overview stays simple without alpaca color palette or grade dropdown
         pig_overview = self.c.get(f"/herds?herd_id={pig_id}").text
@@ -3785,6 +3794,10 @@ class FarmWebTest(unittest.TestCase):
         self.assertIn("Heavy VM", sh_page)
         self.assertIn("Tender / Break", sh_page)
         self.assertIn("Tuxedoed", sh_page)
+        self.assertIn('role="tooltip"', sh_page)
+        self.assertIn("Trait guide", sh_page)
+        self.assertIn("vegetable matter", sh_page)
+        self.assertIn("Weak spot along the staple", sh_page)
 
         # 5. Mill lot mixing Suri (inherited Clover) + non-Suri (Apollo) triggers mixed_suri_warning;
         #    single-type lot has mixed_suri_warning=False
@@ -3819,6 +3832,8 @@ class FarmWebTest(unittest.TestCase):
         mill_html = self.c.get(f"/herds?herd_id={alp_id}&tab=mill").text
         self.assertIn("Mixed Suri / Huacaya", mill_html)
         self.assertIn("Grade 2 · Baby", mill_html)
+        self.assertIn("trait-pill-trigger", mill_html)
+        self.assertIn('role="tooltip"', mill_html)
 
 
 if __name__ == "__main__":
